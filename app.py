@@ -3,10 +3,13 @@ Flask web application for the Crypto Statistical Arbitrage Trading System.
 """
 
 import os
+import sys
+import signal
 import asyncio
 import logging
+import atexit
 from threading import Thread
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from flask import Flask, render_template, jsonify, request, redirect, url_for
@@ -46,6 +49,8 @@ engine = TradingEngine(config)
 # Async event loop for trading engine
 loop: Optional[asyncio.AbstractEventLoop] = None
 engine_thread: Optional[Thread] = None
+ws_manager: Optional[OKXWebSocketManager] = None
+shutdown_in_progress = False
 
 
 def run_async_loop(loop: asyncio.AbstractEventLoop):
@@ -56,7 +61,7 @@ def run_async_loop(loop: asyncio.AbstractEventLoop):
 
 def start_engine_loop():
     """Start the trading engine in a background thread."""
-    global loop, engine_thread
+    global loop, engine_thread, ws_manager
 
     if loop is None:
         loop = asyncio.new_event_loop()
@@ -96,12 +101,44 @@ def start_engine_loop():
 
 
 def stop_engine_loop():
-    """Stop the trading engine."""
-    global loop
+    """Stop the trading engine gracefully."""
+    global loop, shutdown_in_progress
+
+    if shutdown_in_progress:
+        return
+    shutdown_in_progress = True
+
+    logger.info("Shutting down trading engine...")
 
     if loop:
-        asyncio.run_coroutine_threadsafe(engine.stop(), loop)
-        logger.info("Trading engine stopped")
+        try:
+            # Stop the engine (which stops WebSocket)
+            future = asyncio.run_coroutine_threadsafe(engine.stop(), loop)
+            future.result(timeout=5)  # Wait up to 5 seconds
+            logger.info("Trading engine stopped")
+        except Exception as e:
+            logger.warning("Error stopping engine: %s", e)
+
+        try:
+            # Stop the event loop
+            loop.call_soon_threadsafe(loop.stop)
+            logger.info("Event loop stopped")
+        except Exception as e:
+            logger.warning("Error stopping loop: %s", e)
+
+
+def graceful_shutdown(signum=None, frame=None):
+    """Handle graceful shutdown on SIGINT/SIGTERM."""
+    logger.info("Received shutdown signal, cleaning up...")
+    stop_engine_loop()
+    logger.info("Shutdown complete")
+    sys.exit(0)
+
+
+# Register shutdown handlers
+atexit.register(stop_engine_loop)
+signal.signal(signal.SIGINT, graceful_shutdown)
+signal.signal(signal.SIGTERM, graceful_shutdown)
 
 
 # Callback functions for engine events
@@ -110,7 +147,7 @@ def on_tick_callback(spot_tick: MarketTick, futures_tick: MarketTick):
     socketio.emit('tick', {
         'spot': spot_tick.to_dict(),
         'futures': futures_tick.to_dict(),
-        'timestamp': datetime.utcnow().isoformat(),
+        'timestamp': datetime.now(timezone.utc).isoformat(),
     })
 
     # Save spread to database for persistence/recovery
