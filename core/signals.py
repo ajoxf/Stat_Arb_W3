@@ -18,16 +18,16 @@ class SignalGenerator:
     """
     Generates trading signals based on spread Z-score with filters.
 
-    The spread is calculated as: Spot Price - Futures Price
+    The spread is calculated as: Futures Price - Spot Price
     Z-score = (spread - rolling_mean) / rolling_std
 
     Entry signals:
-    - LONG: z <= -entry_threshold (spread below mean, expect reversion up)
-    - SHORT: z >= +entry_threshold (spread above mean, expect reversion down)
+    - LONG: z >= +entry_threshold (spread above mean, futures premium high, expect reversion down)
+    - SHORT: z <= -entry_threshold (spread below mean, futures discount, expect reversion up)
 
     Exit signals (direction-aware):
-    - LONG position: exit when z >= -exit_threshold (spread reverted toward mean)
-    - SHORT position: exit when z <= +exit_threshold (spread reverted toward mean)
+    - LONG position: exit when z <= +exit_threshold (spread reverted toward mean)
+    - SHORT position: exit when z >= -exit_threshold (spread reverted toward mean)
 
     Filters (applied to ENTRY only):
     - Hurst exponent: H < 0.5 indicates mean-reverting regime
@@ -93,7 +93,7 @@ class SignalGenerator:
             logger.warning("Invalid tick prices: spot=%s, futures=%s", spot_price, futures_price)
             return
 
-        spread = spot_price - futures_price
+        spread = futures_price - spot_price
 
         self.spot_prices.append(spot_price)
         self.futures_prices.append(futures_price)
@@ -327,25 +327,25 @@ class SignalGenerator:
         if self.current_position == "NONE":
             # Entry signals - filters apply
             if hurst_ok and std_ok:
-                if self.current_zscore <= -self.config.entry_threshold:
-                    signal_type = "LONG"  # Spread below mean, expect reversion up
-                elif self.current_zscore >= self.config.entry_threshold:
-                    signal_type = "SHORT"  # Spread above mean, expect reversion down
+                if self.current_zscore >= self.config.entry_threshold:
+                    signal_type = "LONG"  # Spread above mean (high futures premium), expect reversion down
+                elif self.current_zscore <= -self.config.entry_threshold:
+                    signal_type = "SHORT"  # Spread below mean (futures discount), expect reversion up
 
         elif self.current_position == "LONG":
             # Exit signals for LONG position - filters do NOT apply
-            # Entered when z <= -entry, exit when z >= -exit (returns toward 0)
-            if self.current_zscore >= -self.config.exit_threshold:
-                signal_type = "EXIT"
-            elif self.current_zscore <= -self.config.stop_loss_threshold:
-                signal_type = "STOP_LOSS"
-
-        elif self.current_position == "SHORT":
-            # Exit signals for SHORT position - filters do NOT apply
             # Entered when z >= +entry, exit when z <= +exit (returns toward 0)
             if self.current_zscore <= self.config.exit_threshold:
                 signal_type = "EXIT"
             elif self.current_zscore >= self.config.stop_loss_threshold:
+                signal_type = "STOP_LOSS"
+
+        elif self.current_position == "SHORT":
+            # Exit signals for SHORT position - filters do NOT apply
+            # Entered when z <= -entry, exit when z >= -exit (returns toward 0)
+            if self.current_zscore >= -self.config.exit_threshold:
+                signal_type = "EXIT"
+            elif self.current_zscore <= -self.config.stop_loss_threshold:
                 signal_type = "STOP_LOSS"
 
         return Signal(

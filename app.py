@@ -160,7 +160,7 @@ def on_tick_callback(spot_tick: MarketTick, futures_tick: MarketTick):
         logger.error("Error emitting tick: %s", e)
 
     # Save spread to database for persistence/recovery
-    spread = spot_tick.mid - futures_tick.mid
+    spread = futures_tick.mid - spot_tick.mid
     db.save_spread(
         asset=config.asset,
         spot_price=spot_tick.mid,
@@ -542,7 +542,7 @@ def close_trade_manually(trade_id):
     if engine.spot_tick and engine.futures_tick:
         spot_price = engine.spot_tick.mid
         futures_price = engine.futures_tick.mid
-        spread = spot_price - futures_price
+        spread = futures_price - spot_price
         zscore = engine.signal_generator.current_zscore
 
         # Update the trade with exit details

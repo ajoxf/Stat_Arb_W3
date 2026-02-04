@@ -166,7 +166,7 @@
                 <!-- Spread with color -->
                 <div class="text-center mb-3 p-2" style="background: var(--bg-tertiary); border-radius: 6px; border: 1px solid var(--border-color);">
                     <div class="price-large" id="spread-value">0.00</div>
-                    <div class="metric-label">Current Spread (Spot - Futures)</div>
+                    <div class="metric-label">Current Spread (Futures - Spot)</div>
                 </div>
             </div>
         </div>
@@ -611,7 +611,7 @@
 
         // Update spread color based on direction (positive = green, negative = red)
         if (spot && futures) {
-            const spread = spot.last - futures.last;
+            const spread = futures.last - spot.last;
             const spreadEl = document.getElementById('spread-value');
             if (spreadEl) {
                 spreadEl.classList.remove('price-up', 'price-down', 'price-neutral');
