@@ -120,7 +120,12 @@
         <div class="card">
             <div class="card-header d-flex justify-content-between align-items-center">
                 <span><i class="bi bi-journal-text me-2"></i>Recent Trades</span>
-                <a href="/analysis" class="btn btn-sm btn-outline-secondary">View All</a>
+                <div>
+                    <button class="btn btn-sm btn-outline-danger me-1" onclick="clearTrades()" title="Clear Trade History">
+                        <i class="bi bi-trash"></i> Clear
+                    </button>
+                    <a href="/analysis" class="btn btn-sm btn-outline-secondary">View All</a>
+                </div>
             </div>
             <div class="card-body p-0">
                 <div class="table-responsive">
@@ -231,7 +236,7 @@
                     </div>
                     <div class="col-6">
                         <div class="metric-card" style="background: var(--bg-tertiary); border-radius: 4px; border: 1px solid var(--border-color);">
-                            <div class="metric-value" id="regime-status">-</div>
+                            <div class="metric-value" id="regime-display">-</div>
                             <div class="metric-label">Regime</div>
                         </div>
                     </div>
@@ -244,8 +249,11 @@
 
         <!-- Filters Status -->
         <div class="card mb-3">
-            <div class="card-header">
-                <i class="bi bi-funnel me-2"></i>Filter Status
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span><i class="bi bi-funnel me-2"></i>Filter Status</span>
+                <button class="btn btn-sm btn-outline-danger" onclick="clearSDTouches()" title="Reset SD Touch History">
+                    <i class="bi bi-arrow-counterclockwise"></i>
+                </button>
             </div>
             <div class="card-body">
                 <div class="d-flex justify-content-between align-items-center mb-2">
@@ -256,17 +264,24 @@
                     <span>STD Filter</span>
                     <span id="std-status" class="badge bg-secondary">-</span>
                 </div>
-                <div class="d-flex justify-content-between align-items-center">
+                <div class="d-flex justify-content-between align-items-center mb-2">
                     <span>Regime</span>
-                    <span id="regime-status" class="badge bg-secondary">-</span>
+                    <span id="regime-filter-status" class="badge bg-secondary">-</span>
+                </div>
+                <div class="d-flex justify-content-between align-items-center">
+                    <span>Data Ready</span>
+                    <span id="data-ready-status" class="badge bg-secondary">-</span>
                 </div>
             </div>
         </div>
 
         <!-- Position Card -->
         <div class="card mb-3">
-            <div class="card-header">
-                <i class="bi bi-wallet2 me-2"></i>Position
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span><i class="bi bi-wallet2 me-2"></i>Position</span>
+                <button class="btn btn-sm btn-outline-warning" id="close-position-btn" onclick="closePosition()" style="display: none;">
+                    <i class="bi bi-x-circle"></i> Close
+                </button>
             </div>
             <div class="card-body">
                 <div class="text-center mb-3">
@@ -282,6 +297,49 @@
                     <div class="d-flex justify-content-between mb-2">
                         <span class="text-secondary">Unrealized P&L:</span>
                         <span id="position-pnl">-</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Active Orders Card -->
+        <div class="card mb-3">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span><i class="bi bi-hourglass-split me-2"></i>Active Orders</span>
+                <span id="execution-mode-badge" class="badge bg-secondary">{{ config.order_execution_mode }}</span>
+            </div>
+            <div class="card-body p-2">
+                <div id="no-active-orders" class="text-center text-secondary py-2">
+                    <small>No active orders</small>
+                </div>
+                <div id="active-orders-content" style="display: none;">
+                    <div class="mb-2 p-2" style="background: var(--bg-tertiary); border-radius: 4px; font-size: 0.85rem;">
+                        <div class="d-flex justify-content-between mb-1">
+                            <span class="fw-bold">Spot Leg</span>
+                            <span id="spot-leg-status" class="badge bg-secondary">-</span>
+                        </div>
+                        <div class="d-flex justify-content-between">
+                            <span id="spot-leg-side" class="text-secondary">-</span>
+                            <span id="spot-leg-price">-</span>
+                        </div>
+                        <div class="d-flex justify-content-between">
+                            <small class="text-secondary">Qty:</small>
+                            <small id="spot-leg-qty">-</small>
+                        </div>
+                    </div>
+                    <div class="p-2" style="background: var(--bg-tertiary); border-radius: 4px; font-size: 0.85rem;">
+                        <div class="d-flex justify-content-between mb-1">
+                            <span class="fw-bold">Futures Leg</span>
+                            <span id="futures-leg-status" class="badge bg-secondary">-</span>
+                        </div>
+                        <div class="d-flex justify-content-between">
+                            <span id="futures-leg-side" class="text-secondary">-</span>
+                            <span id="futures-leg-price">-</span>
+                        </div>
+                        <div class="d-flex justify-content-between">
+                            <small class="text-secondary">Qty:</small>
+                            <small id="futures-leg-qty">-</small>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -313,7 +371,7 @@
         </div>
 
         <!-- Trading Mode -->
-        <div class="card">
+        <div class="card mb-3">
             <div class="card-header">
                 <i class="bi bi-gear me-2"></i>Trading Mode
             </div>
@@ -332,6 +390,26 @@
                     <span>Position Size</span>
                     <span>${{ config.position_size_usd }}</span>
                 </div>
+            </div>
+        </div>
+
+        <!-- Reset Controls -->
+        <div class="card">
+            <div class="card-header">
+                <i class="bi bi-arrow-counterclockwise me-2"></i>Reset Controls
+            </div>
+            <div class="card-body">
+                <div class="d-grid gap-2">
+                    <button class="btn btn-outline-warning btn-sm" onclick="resetSpreadHistory()">
+                        <i class="bi bi-graph-down me-1"></i>Reset Spread Data
+                    </button>
+                    <button class="btn btn-outline-danger btn-sm" onclick="resetAll()">
+                        <i class="bi bi-trash me-1"></i>Reset Everything
+                    </button>
+                </div>
+                <small class="text-secondary mt-2 d-block text-center">
+                    Resets trades, SD touches, and recollects data
+                </small>
             </div>
         </div>
     </div>
@@ -586,6 +664,25 @@
         hurstEl.classList.remove('price-up', 'price-down', 'price-neutral');
         hurstEl.classList.add(hurst < 0.5 ? 'price-up' : hurst > 0.5 ? 'price-down' : 'price-neutral');
 
+        // Regime display in the Hurst card
+        const regimeDisplayEl = document.getElementById('regime-display');
+        if (regimeDisplayEl) {
+            const regime = data.regime || 'UNKNOWN';
+            if (regime === 'COLLECTING') {
+                regimeDisplayEl.textContent = 'Collecting...';
+                regimeDisplayEl.className = 'metric-value text-warning';
+            } else if (regime === 'MEAN_REVERTING') {
+                regimeDisplayEl.textContent = 'Mean Reverting';
+                regimeDisplayEl.className = 'metric-value price-up';
+            } else if (regime === 'TRENDING') {
+                regimeDisplayEl.textContent = 'Trending';
+                regimeDisplayEl.className = 'metric-value price-down';
+            } else {
+                regimeDisplayEl.textContent = regime;
+                regimeDisplayEl.className = 'metric-value';
+            }
+        }
+
         // Data points and collection progress
         const dataPoints = data.data_points || 0;
         const lookback = data.lookback || {{ config.lookback_period }};
@@ -619,12 +716,38 @@
         updateFilterStatus('std-status', data.std_filter_ok);
 
         // Regime with better display
-        const regimeEl = document.getElementById('regime-status');
-        if (regimeEl) {
-            const regime = data.regime || (hurst < 0.5 ? 'MEAN_REVERTING' : 'TRENDING');
-            regimeEl.textContent = regime === 'MEAN_REVERTING' ? 'Mean Reverting' : regime === 'TRENDING' ? 'Trending' : '-';
-            regimeEl.classList.remove('price-up', 'price-down', 'price-neutral');
-            regimeEl.classList.add(regime === 'MEAN_REVERTING' ? 'price-up' : 'price-down');
+        const regimeFilterEl = document.getElementById('regime-filter-status');
+        if (regimeFilterEl) {
+            const regime = data.regime || 'UNKNOWN';
+            if (regime === 'COLLECTING') {
+                regimeFilterEl.textContent = 'Collecting...';
+                regimeFilterEl.className = 'badge bg-warning';
+            } else if (regime === 'MEAN_REVERTING') {
+                regimeFilterEl.textContent = 'Mean Reverting';
+                regimeFilterEl.className = 'badge bg-success';
+            } else if (regime === 'TRENDING') {
+                regimeFilterEl.textContent = 'Trending';
+                regimeFilterEl.className = 'badge bg-danger';
+            } else {
+                regimeFilterEl.textContent = regime;
+                regimeFilterEl.className = 'badge bg-secondary';
+            }
+        }
+
+        // Data ready status
+        const dataReadyEl = document.getElementById('data-ready-status');
+        if (dataReadyEl) {
+            const dataReady = data.data_ready;
+            if (dataReady === true) {
+                dataReadyEl.textContent = 'READY';
+                dataReadyEl.className = 'badge bg-success';
+            } else if (dataReady === false) {
+                dataReadyEl.textContent = 'COLLECTING';
+                dataReadyEl.className = 'badge bg-warning';
+            } else {
+                dataReadyEl.textContent = '-';
+                dataReadyEl.className = 'badge bg-secondary';
+            }
         }
 
         // Position
@@ -645,6 +768,7 @@
     function updatePosition(position) {
         const badge = document.getElementById('position-badge');
         const details = document.getElementById('position-details');
+        const closeBtn = document.getElementById('close-position-btn');
 
         if (position === 'NONE' || !position) {
             badge.textContent = 'FLAT';
@@ -652,12 +776,14 @@
             badge.style.fontSize = '1.5rem';
             badge.style.padding = '0.5rem 1.5rem';
             details.style.display = 'none';
+            if (closeBtn) closeBtn.style.display = 'none';
         } else {
             badge.textContent = position;
             badge.className = 'badge ' + (position === 'LONG' ? 'badge-long' : 'badge-short');
             badge.style.fontSize = '1.5rem';
             badge.style.padding = '0.5rem 1.5rem';
             details.style.display = 'block';
+            if (closeBtn) closeBtn.style.display = 'inline-block';
         }
     }
 
@@ -781,5 +907,239 @@
     // Fetch account info on load and every 5 seconds
     updateAccountInfo();
     setInterval(updateAccountInfo, 5000);
+
+    // Fetch active orders on load and every second (for limit orders)
+    function updateActiveOrders() {
+        fetch('/api/active-orders')
+            .then(response => response.json())
+            .then(data => {
+                const noOrdersEl = document.getElementById('no-active-orders');
+                const ordersContentEl = document.getElementById('active-orders-content');
+                const modeBadge = document.getElementById('execution-mode-badge');
+
+                // Update execution mode badge
+                if (modeBadge) {
+                    modeBadge.textContent = data.execution_mode || 'MARKET';
+                    modeBadge.className = 'badge ' + (data.execution_mode === 'LIMIT' ? 'bg-warning' : 'bg-primary');
+                }
+
+                if (data.orders && data.orders.length > 0) {
+                    noOrdersEl.style.display = 'none';
+                    ordersContentEl.style.display = 'block';
+
+                    const order = data.orders[0];
+
+                    // Spot leg
+                    document.getElementById('spot-leg-side').textContent = order.spot_leg.side + ' ' + order.spot_leg.symbol;
+                    document.getElementById('spot-leg-price').textContent = '$' + (order.spot_leg.target_price || 0).toFixed(2);
+                    document.getElementById('spot-leg-qty').textContent = order.spot_leg.quantity.toFixed(6);
+                    updateLegStatus('spot-leg-status', order.spot_leg.status);
+
+                    // Futures leg
+                    document.getElementById('futures-leg-side').textContent = order.futures_leg.side + ' ' + order.futures_leg.symbol;
+                    document.getElementById('futures-leg-price').textContent = '$' + (order.futures_leg.target_price || 0).toFixed(2);
+                    document.getElementById('futures-leg-qty').textContent = order.futures_leg.quantity.toFixed(6);
+                    updateLegStatus('futures-leg-status', order.futures_leg.status);
+
+                } else {
+                    noOrdersEl.style.display = 'block';
+                    ordersContentEl.style.display = 'none';
+                }
+            })
+            .catch(err => console.log('Active orders error:', err));
+    }
+
+    function updateLegStatus(elementId, status) {
+        const el = document.getElementById(elementId);
+        if (!el) return;
+
+        el.textContent = status;
+        el.className = 'badge ';
+        switch (status) {
+            case 'PENDING': el.className += 'bg-secondary'; break;
+            case 'OPEN': el.className += 'bg-info'; break;
+            case 'PARTIAL': el.className += 'bg-warning'; break;
+            case 'FILLED': el.className += 'bg-success'; break;
+            case 'CANCELLED': el.className += 'bg-danger'; break;
+            case 'FAILED': el.className += 'bg-danger'; break;
+            default: el.className += 'bg-secondary';
+        }
+    }
+
+    updateActiveOrders();
+    setInterval(updateActiveOrders, 1000);  // Update every second for active limit orders
+
+    // ============== Reset/Clear Functions ==============
+
+    function closePosition() {
+        if (!confirm('Are you sure you want to close the current position manually?')) {
+            return;
+        }
+
+        fetch('/api/engine/close-position', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                showToast(data.message || 'Position closed successfully', 'success');
+                // Refresh status
+                fetch('/api/engine/status').then(r => r.json()).then(updateSignal);
+            } else {
+                showToast('Failed to close position: ' + (data.error || 'Unknown error'), 'error');
+            }
+        })
+        .catch(err => {
+            showToast('Error closing position: ' + err, 'error');
+        });
+    }
+
+    function clearTrades() {
+        if (!confirm('Are you sure you want to clear all trade history? This cannot be undone.')) {
+            return;
+        }
+
+        fetch('/api/trades/clear', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({})
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                showToast('Cleared ' + data.deleted + ' trades', 'success');
+                // Clear the trades table
+                const tbody = document.getElementById('trades-table');
+                tbody.innerHTML = '<tr><td colspan="6" class="text-center text-secondary">No trades yet</td></tr>';
+            } else {
+                showToast('Failed to clear trades', 'error');
+            }
+        })
+        .catch(err => {
+            showToast('Error clearing trades: ' + err, 'error');
+        });
+    }
+
+    function clearSDTouches() {
+        if (!confirm('Are you sure you want to reset SD touch history?')) {
+            return;
+        }
+
+        fetch('/api/sd-touches/clear', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({})
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                showToast('Cleared ' + data.deleted + ' SD touches', 'success');
+            } else {
+                showToast('Failed to clear SD touches', 'error');
+            }
+        })
+        .catch(err => {
+            showToast('Error clearing SD touches: ' + err, 'error');
+        });
+    }
+
+    function resetSpreadHistory() {
+        if (!confirm('Are you sure you want to reset spread data? The system will need to recollect data before trading.')) {
+            return;
+        }
+
+        fetch('/api/spread-history/clear', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({})
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                showToast('Spread data reset. Recollecting data...', 'success');
+                // Clear charts
+                zscoreHistory = [];
+                spreadHistory = [];
+                zscoreChart.data.datasets[0].data = [];
+                spreadChart.data.datasets[0].data = [];
+                zscoreChart.update();
+                spreadChart.update();
+            } else {
+                showToast('Failed to reset spread data', 'error');
+            }
+        })
+        .catch(err => {
+            showToast('Error resetting spread data: ' + err, 'error');
+        });
+    }
+
+    function resetAll() {
+        if (!confirm('WARNING: This will reset EVERYTHING - all trades, SD touches, spread data, and engine state. Are you sure?')) {
+            return;
+        }
+
+        fetch('/api/reset-all', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({})
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                const d = data.deleted;
+                showToast(`Reset complete. Deleted: ${d.trades} trades, ${d.sd_touches} SD touches, ${d.spread_history} spread records`, 'success');
+                // Clear UI
+                const tbody = document.getElementById('trades-table');
+                tbody.innerHTML = '<tr><td colspan="6" class="text-center text-secondary">No trades yet</td></tr>';
+                zscoreHistory = [];
+                spreadHistory = [];
+                zscoreChart.data.datasets[0].data = [];
+                spreadChart.data.datasets[0].data = [];
+                zscoreChart.update();
+                spreadChart.update();
+                // Refresh status
+                fetch('/api/engine/status').then(r => r.json()).then(updateSignal);
+            } else {
+                showToast('Failed to reset', 'error');
+            }
+        })
+        .catch(err => {
+            showToast('Error resetting: ' + err, 'error');
+        });
+    }
+
+    function deleteTrade(tradeId) {
+        if (!confirm('Delete this trade entry?')) {
+            return;
+        }
+
+        fetch('/api/trades/' + tradeId, {
+            method: 'DELETE'
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                showToast('Trade deleted', 'success');
+                // Reload trades
+                fetch('/api/trades?limit=10')
+                    .then(response => response.json())
+                    .then(trades => {
+                        const tbody = document.getElementById('trades-table');
+                        tbody.innerHTML = '';
+                        if (trades.length === 0) {
+                            tbody.innerHTML = '<tr><td colspan="6" class="text-center text-secondary">No trades yet</td></tr>';
+                        } else {
+                            trades.reverse().forEach(trade => addTradeToTable(trade));
+                        }
+                    });
+            } else {
+                showToast('Failed to delete trade', 'error');
+            }
+        })
+        .catch(err => {
+            showToast('Error deleting trade: ' + err, 'error');
+        });
+    }
 </script>
 {% endblock %}

@@ -270,9 +270,9 @@ class Signal:
     spread_mean: float = 0.0
     spread_std: float = 0.0
     hurst: float = 0.5
-    hurst_ok: bool = True
-    std_filter_ok: bool = True
-    regime: str = "UNKNOWN"  # MEAN_REVERTING, TRENDING, UNKNOWN
+    hurst_ok: Optional[bool] = True  # None when data is still being collected
+    std_filter_ok: Optional[bool] = True  # None when data is still being collected
+    regime: str = "UNKNOWN"  # MEAN_REVERTING, TRENDING, COLLECTING, UNKNOWN
     timestamp: Optional[datetime] = None
 
     # Current position context

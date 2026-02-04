@@ -423,19 +423,31 @@ def get_trades():
 @app.route('/api/account-info', methods=['GET'])
 def get_account_info():
     """Get account information from connected exchange."""
+    # Determine exchange type and demo mode from environment or adapter
+    is_demo = os.getenv('OKX_DEMO_MODE', 'true').lower() == 'true'
+    exchange_type = os.getenv('EXCHANGE_TYPE', 'OKX').upper()
+
     account_data = {
         'connected': False,
-        'exchange': 'Not Connected',
+        'exchange': exchange_type,
         'balance': 0,
         'available': 0,
         'margin_used': 0,
         'unrealized_pnl': 0,
         'daily_pnl': 0,
-        'is_demo': True,
+        'is_demo': is_demo,
     }
 
     # Check if we have adapters connected
     if engine.spot_adapter:
+        # Get demo mode from adapter if available
+        if hasattr(engine.spot_adapter, 'is_testnet'):
+            account_data['is_demo'] = engine.spot_adapter.is_testnet
+
+        # Get exchange type from adapter
+        adapter_type = type(engine.spot_adapter).__name__.replace('Adapter', '').upper()
+        account_data['exchange'] = adapter_type
+
         try:
             # Get account info from adapter
             async def fetch_account():
@@ -448,12 +460,12 @@ def get_account_info():
                 account = future.result(timeout=10)
                 if account:
                     account_data['connected'] = True
-                    account_data['exchange'] = account.exchange
+                    if account.exchange:
+                        account_data['exchange'] = account.exchange
                     account_data['balance'] = account.balance_usd
                     account_data['available'] = account.available_balance_usd
                     account_data['margin_used'] = account.margin_used
                     account_data['unrealized_pnl'] = account.unrealized_pnl
-                    account_data['is_demo'] = engine.spot_adapter.is_testnet if hasattr(engine.spot_adapter, 'is_testnet') else True
         except Exception as e:
             logger.warning("Error fetching account info: %s", e)
 
@@ -498,6 +510,246 @@ def get_sd_touches():
 
     touches = db.get_sd_touches(asset=asset, limit=limit)
     return jsonify([t.to_dict() for t in touches])
+
+
+# ============== Reset/Delete API Endpoints ==============
+
+@app.route('/api/trades/clear', methods=['POST'])
+def clear_trades():
+    """Clear all trades (or for specific asset)."""
+    data = request.json or {}
+    asset = data.get('asset')  # Optional - if provided, clear only for this asset
+
+    deleted = db.clear_trades(asset=asset)
+    return jsonify({'success': True, 'deleted': deleted})
+
+
+@app.route('/api/trades/<int:trade_id>', methods=['DELETE'])
+def delete_trade(trade_id):
+    """Delete a specific trade."""
+    success = db.delete_trade(trade_id)
+    if success:
+        return jsonify({'success': True})
+    return jsonify({'success': False, 'error': 'Trade not found'}), 404
+
+
+@app.route('/api/trades/<int:trade_id>/close', methods=['POST'])
+def close_trade_manually(trade_id):
+    """Manually close an open trade."""
+    # Get current prices for the close
+    if engine.spot_tick and engine.futures_tick:
+        spot_price = engine.spot_tick.mid
+        futures_price = engine.futures_tick.mid
+        spread = spot_price - futures_price
+        zscore = engine.signal_generator.current_zscore
+
+        # Update the trade with exit details
+        with db._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE trades SET
+                    exit_time = ?,
+                    exit_spot_price = ?,
+                    exit_futures_price = ?,
+                    exit_spread = ?,
+                    exit_zscore = ?,
+                    exit_reason = 'MANUAL',
+                    is_open = 0
+                WHERE id = ? AND is_open = 1
+            """, (
+                datetime.now(timezone.utc).isoformat(),
+                spot_price, futures_price, spread, zscore, trade_id
+            ))
+            if cursor.rowcount > 0:
+                # Reset engine position
+                engine.state.current_position = "NONE"
+                engine.signal_generator.set_position("NONE")
+                engine.open_trade = None
+                logger.info("Manually closed trade %d at spread=%.2f, zscore=%.4f", trade_id, spread, zscore)
+                return jsonify({'success': True})
+
+    # Fallback - just mark as closed without prices
+    success = db.close_trade(trade_id, exit_reason="MANUAL")
+    if success:
+        engine.state.current_position = "NONE"
+        engine.signal_generator.set_position("NONE")
+        engine.open_trade = None
+        return jsonify({'success': True})
+    return jsonify({'success': False, 'error': 'Trade not found or already closed'}), 404
+
+
+@app.route('/api/sd-touches/clear', methods=['POST'])
+def clear_sd_touches():
+    """Clear all SD touch events (or for specific asset)."""
+    data = request.json or {}
+    asset = data.get('asset')
+
+    deleted = db.clear_sd_touches(asset=asset)
+    # Also clear from signal generator memory
+    engine.signal_generator.sd_touch_events.clear()
+    engine.signal_generator.last_sd_level = 0.0
+
+    return jsonify({'success': True, 'deleted': deleted})
+
+
+@app.route('/api/spread-history/clear', methods=['POST'])
+def clear_spread_history():
+    """Clear spread history and reset signal generator."""
+    data = request.json or {}
+    asset = data.get('asset')
+
+    deleted = db.clear_spread_history(asset=asset)
+    # Reset signal generator
+    engine.signal_generator.reset()
+
+    return jsonify({'success': True, 'deleted': deleted})
+
+
+@app.route('/api/engine/close-position', methods=['POST'])
+def close_current_position():
+    """Close the current open position manually."""
+    if engine.state.current_position == "NONE" or not engine.open_trade:
+        return jsonify({'success': False, 'error': 'No open position'}), 400
+
+    # Create a manual exit signal
+    if engine.spot_tick and engine.futures_tick:
+        from models import Signal
+        manual_signal = Signal(
+            signal_type="EXIT",
+            zscore=engine.signal_generator.current_zscore,
+            spread=engine.signal_generator.current_spread,
+            spread_mean=engine.signal_generator.current_mean,
+            spread_std=engine.signal_generator.current_std,
+            hurst=engine.signal_generator.current_hurst,
+            regime="MANUAL_CLOSE",
+            current_position=engine.state.current_position,
+            timestamp=datetime.now(timezone.utc),
+        )
+
+        # Execute the close
+        async def close_position():
+            trade = engine.open_trade
+            spot_price = engine.spot_tick.mid
+            futures_price = engine.futures_tick.mid
+
+            # Calculate P&L
+            if trade.position_type == "LONG":
+                spread_change = manual_signal.spread - trade.entry_spread
+                pnl = spread_change * trade.quantity
+            else:
+                spread_change = trade.entry_spread - manual_signal.spread
+                pnl = spread_change * trade.quantity
+
+            pnl_percent = (pnl / trade.notional_usd) * 100 if trade.notional_usd > 0 else 0
+
+            # Update trade
+            trade.exit_time = datetime.now(timezone.utc)
+            trade.exit_spot_price = spot_price
+            trade.exit_futures_price = futures_price
+            trade.exit_spread = manual_signal.spread
+            trade.exit_zscore = manual_signal.zscore
+            trade.exit_reason = "MANUAL"
+            trade.pnl_usd = pnl
+            trade.pnl_percent = pnl_percent
+            trade.is_open = False
+
+            # Execute exit orders if not paper trading
+            if not engine.state.paper_trading and engine.order_executor:
+                await engine._execute_exit_orders(trade, manual_signal)
+
+            # Save to database
+            db.save_trade(trade)
+
+            # Reset engine state
+            engine.state.current_position = "NONE"
+            engine.signal_generator.set_position("NONE")
+            engine.open_trade = None
+
+            # Notify via socket
+            socketio.emit('trade', trade.to_dict(), namespace='/')
+
+            return trade
+
+        if loop:
+            future = asyncio.run_coroutine_threadsafe(close_position(), loop)
+            trade = future.result(timeout=30)
+            return jsonify({
+                'success': True,
+                'trade': trade.to_dict(),
+                'message': f"Position closed. P&L: ${trade.pnl_usd:.2f} ({trade.pnl_percent:.2f}%)"
+            })
+
+    return jsonify({'success': False, 'error': 'No price data available'}), 400
+
+
+@app.route('/api/active-orders', methods=['GET'])
+def get_active_orders():
+    """Get currently active/pending orders."""
+    orders = []
+
+    # Check if there's an active order in the order executor
+    if engine.order_executor and engine.order_executor.active_order:
+        spread_order = engine.order_executor.active_order
+        orders.append({
+            'type': 'ENTRY' if spread_order.is_entry else 'EXIT',
+            'position_type': spread_order.position_type,
+            'created_at': spread_order.created_at.isoformat() if spread_order.created_at else None,
+            'timeout_at': spread_order.timeout_at.isoformat() if spread_order.timeout_at else None,
+            'spot_leg': {
+                'symbol': spread_order.spot_leg.symbol,
+                'side': spread_order.spot_leg.side,
+                'quantity': spread_order.spot_leg.quantity,
+                'target_price': spread_order.spot_leg.target_price,
+                'order_id': spread_order.spot_leg.order_id,
+                'status': spread_order.spot_leg.status.value,
+                'filled_qty': spread_order.spot_leg.filled_qty,
+                'filled_price': spread_order.spot_leg.filled_price,
+            },
+            'futures_leg': {
+                'symbol': spread_order.futures_leg.symbol,
+                'side': spread_order.futures_leg.side,
+                'quantity': spread_order.futures_leg.quantity,
+                'target_price': spread_order.futures_leg.target_price,
+                'order_id': spread_order.futures_leg.order_id,
+                'status': spread_order.futures_leg.status.value,
+                'filled_qty': spread_order.futures_leg.filled_qty,
+                'filled_price': spread_order.futures_leg.filled_price,
+            },
+            'is_complete': spread_order.is_complete,
+            'has_partial_fill': spread_order.has_partial_fill,
+        })
+
+    return jsonify({
+        'orders': orders,
+        'execution_mode': config.order_execution_mode,
+        'is_executing': engine.order_executor._executing if engine.order_executor else False,
+    })
+
+
+@app.route('/api/reset-all', methods=['POST'])
+def reset_all():
+    """Reset everything - trades, SD touches, spread history, and engine state."""
+    data = request.json or {}
+    asset = data.get('asset')
+
+    # Clear database
+    trades_deleted = db.clear_trades(asset=asset)
+    sd_deleted = db.clear_sd_touches(asset=asset)
+    signals_deleted = db.clear_signal_log(asset=asset)
+    spread_deleted = db.clear_spread_history(asset=asset)
+
+    # Reset engine
+    engine.reset()
+
+    return jsonify({
+        'success': True,
+        'deleted': {
+            'trades': trades_deleted,
+            'sd_touches': sd_deleted,
+            'signals': signals_deleted,
+            'spread_history': spread_deleted,
+        }
+    })
 
 
 def create_adapter(exchange: Exchange, is_futures: bool = False):

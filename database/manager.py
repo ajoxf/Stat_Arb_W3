@@ -715,3 +715,86 @@ class DatabaseManager:
             deleted = cursor.rowcount
             if deleted > 0:
                 logger.info("Cleaned up %d old spread history entries for %s", deleted, asset)
+
+    # Reset/Clear Methods
+    def clear_trades(self, asset: Optional[str] = None) -> int:
+        """Clear all trades (or for a specific asset). Returns count deleted."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            if asset:
+                cursor.execute("DELETE FROM trades WHERE asset = ?", (asset,))
+            else:
+                cursor.execute("DELETE FROM trades")
+            deleted = cursor.rowcount
+            logger.info("Cleared %d trades%s", deleted, f" for {asset}" if asset else "")
+            return deleted
+
+    def clear_sd_touches(self, asset: Optional[str] = None) -> int:
+        """Clear all SD touch events (or for a specific asset). Returns count deleted."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            if asset:
+                cursor.execute("DELETE FROM sd_touch_log WHERE asset = ?", (asset,))
+            else:
+                cursor.execute("DELETE FROM sd_touch_log")
+            deleted = cursor.rowcount
+            logger.info("Cleared %d SD touches%s", deleted, f" for {asset}" if asset else "")
+            return deleted
+
+    def clear_signal_log(self, asset: Optional[str] = None) -> int:
+        """Clear signal log (or for a specific asset). Returns count deleted."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            if asset:
+                cursor.execute("DELETE FROM signal_log WHERE asset = ?", (asset,))
+            else:
+                cursor.execute("DELETE FROM signal_log")
+            deleted = cursor.rowcount
+            logger.info("Cleared %d signal log entries%s", deleted, f" for {asset}" if asset else "")
+            return deleted
+
+    def clear_spread_history(self, asset: Optional[str] = None) -> int:
+        """Clear spread history (or for a specific asset). Returns count deleted."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            if asset:
+                cursor.execute("DELETE FROM spread_history WHERE asset = ?", (asset,))
+            else:
+                cursor.execute("DELETE FROM spread_history")
+            deleted = cursor.rowcount
+            logger.info("Cleared %d spread history entries%s", deleted, f" for {asset}" if asset else "")
+            return deleted
+
+    def delete_trade(self, trade_id: int) -> bool:
+        """Delete a specific trade by ID. Returns True if deleted."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM trades WHERE id = ?", (trade_id,))
+            deleted = cursor.rowcount > 0
+            if deleted:
+                logger.info("Deleted trade ID %d", trade_id)
+            return deleted
+
+    def close_trade(self, trade_id: int, exit_reason: str = "MANUAL") -> bool:
+        """
+        Manually close an open trade.
+        Returns True if closed, False if not found or already closed.
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            # Check if trade exists and is open
+            cursor.execute("SELECT * FROM trades WHERE id = ? AND is_open = 1", (trade_id,))
+            row = cursor.fetchone()
+            if not row:
+                return False
+
+            # Update to closed
+            cursor.execute("""
+                UPDATE trades SET
+                    exit_time = ?,
+                    exit_reason = ?,
+                    is_open = 0
+                WHERE id = ?
+            """, (datetime.utcnow().isoformat(), exit_reason, trade_id))
+            logger.info("Manually closed trade ID %d", trade_id)
+            return True

@@ -280,8 +280,8 @@ class SignalGenerator:
         """
         timestamp = datetime.utcnow()
 
-        # Not enough data
-        if len(self.spread_history) < max(20, self.lookback // 2):
+        # Not enough data - must have FULL lookback period before trading
+        if len(self.spread_history) < self.lookback:
             return Signal(
                 signal_type="NONE",
                 zscore=self.current_zscore,
@@ -289,9 +289,9 @@ class SignalGenerator:
                 spread_mean=self.current_mean,
                 spread_std=self.current_std,
                 hurst=self.current_hurst,
-                hurst_ok=True,
-                std_filter_ok=True,
-                regime="UNKNOWN",
+                hurst_ok=None,  # Unknown until we have full data
+                std_filter_ok=None,  # Unknown until we have full data
+                regime="COLLECTING",
                 current_position=self.current_position,
                 timestamp=timestamp,
             )
@@ -387,15 +387,34 @@ class SignalGenerator:
         else:
             next_update_in = 0
 
+        # Calculate filter status (same logic as generate_signal)
+        hurst_ok = not self.config.hurst_enabled or self.current_hurst < self.config.hurst_threshold
+        std_ok, _ = self._check_std_filter()
+
+        # Check if we have enough data (must have full lookback period)
+        data_ready = len(self.spread_history) >= self.lookback
+
+        # Determine regime
+        if self.current_hurst < 0.4:
+            regime = "MEAN_REVERTING"
+        elif self.current_hurst > 0.6:
+            regime = "TRENDING"
+        else:
+            regime = "NEUTRAL"
+
         return {
             'zscore': round(self.current_zscore, 4),
             'spread': round(self.current_spread, 6),
             'spread_mean': round(self.current_mean, 6),
             'spread_std': round(self.current_std, 6),
             'hurst': round(self.current_hurst, 4),
+            'hurst_ok': hurst_ok if data_ready else None,
+            'std_filter_ok': std_ok if data_ready else None,
+            'regime': regime if data_ready else "COLLECTING",
             'data_points': len(self.spread_history),
             'lookback': self.lookback,
-            'position': self.current_position,
+            'data_ready': data_ready,
+            'current_position': self.current_position,
             'stats_update_interval': self.stats_update_interval,
             'last_stats_update': self.last_stats_update.isoformat() if self.last_stats_update else None,
             'next_stats_update_in': round(next_update_in),
