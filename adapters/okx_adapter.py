@@ -333,8 +333,8 @@ class OKXAdapter(ExchangeAdapter):
                     exchange="OKX",
                     balance_usd=total_eq,
                     available_balance_usd=usdt_balance,
-                    margin_used=float(data.get("imr", 0)),
-                    unrealized_pnl=float(data.get("upl", 0)),
+                    margin_used=float(data.get("imr") or 0),
+                    unrealized_pnl=float(data.get("upl") or 0),
                 )
 
         except Exception as e:
