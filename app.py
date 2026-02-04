@@ -784,14 +784,14 @@ def create_adapter(exchange: Exchange, is_futures: bool = False):
 @socketio.on('connect')
 def handle_connect():
     """Handle client connection."""
-    logger.info("Client connected")
+    logger.debug("Client connected")
     emit('status', engine.get_status())
 
 
 @socketio.on('disconnect')
 def handle_disconnect():
     """Handle client disconnection."""
-    logger.info("Client disconnected")
+    logger.debug("Client disconnected")
 
 
 @socketio.on('get_status')
