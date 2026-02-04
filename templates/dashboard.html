@@ -264,13 +264,18 @@
                     <span>STD Filter</span>
                     <span id="std-status" class="badge bg-secondary">-</span>
                 </div>
-                <div class="d-flex justify-content-between align-items-center mb-2 ps-3" style="font-size: 0.85rem;">
-                    <span class="text-secondary">STD Ratio</span>
-                    <span id="std-ratio-display">
-                        <span id="std-ratio-value">-</span>
-                        <span class="text-secondary"> / </span>
+                <div class="ps-3 mb-2" style="font-size: 0.8rem; background: var(--bg-tertiary); padding: 8px; border-radius: 4px;">
+                    <div class="d-flex justify-content-between mb-1">
+                        <span class="text-secondary">Volatility / Costs:</span>
+                        <span id="std-ratio-value" class="fw-bold">-</span>
+                    </div>
+                    <div class="d-flex justify-content-between mb-1">
+                        <span class="text-secondary">Required minimum:</span>
                         <span id="std-ratio-required">-</span>
-                    </span>
+                    </div>
+                    <div id="std-explanation" class="text-secondary mt-1 pt-1" style="border-top: 1px solid var(--border-color); font-size: 0.75rem;">
+                        Spread must move 1.1x trading costs to be profitable
+                    </div>
                 </div>
                 <div class="d-flex justify-content-between align-items-center mb-2">
                     <span>Regime</span>
@@ -723,21 +728,31 @@
         updateFilterStatus('hurst-status', data.hurst_ok, data.hurst);
         updateFilterStatus('std-status', data.std_filter_ok);
 
-        // STD Ratio display
+        // STD Ratio display with explanation
         const stdRatioValue = document.getElementById('std-ratio-value');
         const stdRatioRequired = document.getElementById('std-ratio-required');
+        const stdExplanation = document.getElementById('std-explanation');
         if (stdRatioValue && stdRatioRequired) {
             if (data.std_ratio !== null && data.std_ratio !== undefined) {
-                stdRatioValue.textContent = data.std_ratio.toFixed(2);
+                stdRatioValue.textContent = data.std_ratio.toFixed(2) + 'x';
                 stdRatioValue.className = data.std_filter_ok ? 'price-up fw-bold' : 'price-down fw-bold';
             } else {
                 stdRatioValue.textContent = '-';
-                stdRatioValue.className = '';
+                stdRatioValue.className = 'fw-bold';
             }
             if (data.std_ratio_required !== null && data.std_ratio_required !== undefined) {
-                stdRatioRequired.textContent = data.std_ratio_required.toFixed(1) + ' min';
+                stdRatioRequired.textContent = data.std_ratio_required.toFixed(1) + 'x';
             } else {
                 stdRatioRequired.textContent = '-';
+            }
+            // Dynamic explanation
+            if (stdExplanation && data.std_ratio !== null && data.std_ratio_required !== null) {
+                if (data.std_filter_ok) {
+                    stdExplanation.innerHTML = '<span class="price-up">Volatility covers costs ' + data.std_ratio.toFixed(1) + 'x (need ' + data.std_ratio_required.toFixed(1) + 'x)</span>';
+                } else {
+                    const shortfall = ((data.std_ratio_required - data.std_ratio) / data.std_ratio_required * 100).toFixed(0);
+                    stdExplanation.innerHTML = '<span class="price-down">Volatility too low - only covers ' + (data.std_ratio * 100 / data.std_ratio_required).toFixed(0) + '% of required</span>';
+                }
             }
         }
 
