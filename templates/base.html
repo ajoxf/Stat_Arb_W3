@@ -14,17 +14,17 @@
 
     <style>
         :root {
-            --bg-primary: #0d1117;
-            --bg-secondary: #161b22;
-            --bg-tertiary: #21262d;
-            --border-color: #30363d;
-            --text-primary: #c9d1d9;
-            --text-secondary: #8b949e;
-            --accent-green: #238636;
-            --accent-red: #da3633;
-            --accent-blue: #58a6ff;
-            --accent-yellow: #d29922;
-            --accent-purple: #a371f7;
+            --bg-primary: #ffffff;
+            --bg-secondary: #f8f9fa;
+            --bg-tertiary: #e9ecef;
+            --border-color: #dee2e6;
+            --text-primary: #212529;
+            --text-secondary: #6c757d;
+            --accent-green: #198754;
+            --accent-red: #dc3545;
+            --accent-blue: #0d6efd;
+            --accent-yellow: #ffc107;
+            --accent-purple: #6f42c1;
         }
 
         body {
@@ -62,19 +62,24 @@
             background-color: var(--bg-tertiary);
             border-bottom: 1px solid var(--border-color);
             font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .card-body {
+            color: var(--text-primary);
         }
 
         .form-control, .form-select {
-            background-color: var(--bg-tertiary);
+            background-color: var(--bg-primary);
             border: 1px solid var(--border-color);
             color: var(--text-primary);
         }
 
         .form-control:focus, .form-select:focus {
-            background-color: var(--bg-tertiary);
+            background-color: var(--bg-primary);
             border-color: var(--accent-blue);
             color: var(--text-primary);
-            box-shadow: 0 0 0 3px rgba(88, 166, 255, 0.3);
+            box-shadow: 0 0 0 3px rgba(13, 110, 253, 0.25);
         }
 
         .form-control::placeholder {
@@ -84,16 +89,18 @@
         .btn-primary {
             background-color: var(--accent-green);
             border-color: var(--accent-green);
+            color: #fff;
         }
 
         .btn-primary:hover {
-            background-color: #2ea043;
-            border-color: #2ea043;
+            background-color: #157347;
+            border-color: #146c43;
         }
 
         .btn-danger {
             background-color: var(--accent-red);
             border-color: var(--accent-red);
+            color: #fff;
         }
 
         .btn-outline-secondary {
@@ -113,27 +120,37 @@
 
         .table-dark {
             --bs-table-bg: var(--bg-secondary);
+            --bs-table-color: var(--text-primary);
             --bs-table-border-color: var(--border-color);
+        }
+
+        .table-dark th, .table-dark td {
+            color: var(--text-primary);
         }
 
         .table-striped > tbody > tr:nth-of-type(odd) > * {
             background-color: var(--bg-tertiary);
+            color: var(--text-primary);
         }
 
         .badge-long {
-            background-color: var(--accent-green);
+            background-color: var(--accent-green) !important;
+            color: #fff !important;
         }
 
         .badge-short {
-            background-color: var(--accent-red);
+            background-color: var(--accent-red) !important;
+            color: #fff !important;
         }
 
         .price-up {
-            color: var(--accent-green);
+            color: var(--accent-green) !important;
+            font-weight: 600;
         }
 
         .price-down {
-            color: var(--accent-red);
+            color: var(--accent-red) !important;
+            font-weight: 600;
         }
 
         .status-connected {
@@ -157,6 +174,7 @@
             font-size: 1.5rem;
             font-weight: 600;
             font-family: 'Monaco', 'Menlo', monospace;
+            color: var(--text-primary);
         }
 
         .metric-label {
@@ -167,11 +185,13 @@
         }
 
         .zscore-positive {
-            color: var(--accent-green);
+            color: var(--accent-green) !important;
+            font-weight: 700;
         }
 
         .zscore-negative {
-            color: var(--accent-red);
+            color: var(--accent-red) !important;
+            font-weight: 700;
         }
 
         .zscore-neutral {
@@ -189,6 +209,33 @@
         @keyframes flash {
             0%, 100% { opacity: 1; }
             50% { opacity: 0.5; }
+        }
+
+        /* Text colors */
+        .text-secondary {
+            color: var(--text-secondary) !important;
+        }
+
+        /* Badge overrides for light theme */
+        .bg-secondary {
+            background-color: #6c757d !important;
+        }
+
+        .bg-success {
+            background-color: var(--accent-green) !important;
+        }
+
+        .bg-danger {
+            background-color: var(--accent-red) !important;
+        }
+
+        .bg-warning {
+            background-color: var(--accent-yellow) !important;
+            color: #000 !important;
+        }
+
+        .bg-primary {
+            background-color: var(--accent-blue) !important;
         }
 
         /* Custom scrollbar */
@@ -214,7 +261,7 @@
     {% block head %}{% endblock %}
 </head>
 <body>
-    <nav class="navbar navbar-expand-lg navbar-dark">
+    <nav class="navbar navbar-expand-lg navbar-light">
         <div class="container-fluid">
             <a class="navbar-brand" href="/">
                 <i class="bi bi-graph-up-arrow me-2"></i>Crypto Stat Arb

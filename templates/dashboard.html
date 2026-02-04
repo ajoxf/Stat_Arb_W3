@@ -86,7 +86,7 @@
             </div>
             <div class="card-body p-0">
                 <div class="table-responsive">
-                    <table class="table table-dark table-striped table-hover mb-0">
+                    <table class="table table-striped table-hover mb-0">
                         <thead>
                             <tr>
                                 <th>Time</th>
@@ -122,31 +122,31 @@
                 </div>
                 <div class="row g-2">
                     <div class="col-6">
-                        <div class="metric-card" style="background: var(--bg-tertiary); border-radius: 4px;">
+                        <div class="metric-card" style="background: var(--bg-tertiary); border-radius: 4px; border: 1px solid var(--border-color);">
                             <div class="metric-value" id="spread-value">0.00</div>
                             <div class="metric-label">Spread</div>
                         </div>
                     </div>
                     <div class="col-6">
-                        <div class="metric-card" style="background: var(--bg-tertiary); border-radius: 4px;">
+                        <div class="metric-card" style="background: var(--bg-tertiary); border-radius: 4px; border: 1px solid var(--border-color);">
                             <div class="metric-value" id="spread-std">0.00</div>
                             <div class="metric-label">Std Dev</div>
                         </div>
                     </div>
                     <div class="col-6">
-                        <div class="metric-card" style="background: var(--bg-tertiary); border-radius: 4px;">
+                        <div class="metric-card" style="background: var(--bg-tertiary); border-radius: 4px; border: 1px solid var(--border-color);">
                             <div class="metric-value" id="hurst-value">0.50</div>
                             <div class="metric-label">Hurst</div>
                         </div>
                     </div>
                     <div class="col-6">
-                        <div class="metric-card" style="background: var(--bg-tertiary); border-radius: 4px;">
+                        <div class="metric-card" style="background: var(--bg-tertiary); border-radius: 4px; border: 1px solid var(--border-color);">
                             <div class="metric-value" id="data-points">0</div>
                             <div class="metric-label">Data Points</div>
                         </div>
                     </div>
                     <div class="col-12 mt-2">
-                        <div class="metric-card" style="background: var(--bg-tertiary); border-radius: 4px; padding: 0.5rem;">
+                        <div class="metric-card" style="background: var(--bg-tertiary); border-radius: 4px; padding: 0.5rem; border: 1px solid var(--border-color);">
                             <small class="text-secondary">
                                 <i class="bi bi-clock me-1"></i>Stats update in: <span id="stats-countdown">-</span>s
                             </small>
@@ -268,8 +268,8 @@
                 grid: { display: false }
             },
             y: {
-                grid: { color: 'rgba(48, 54, 61, 0.5)' },
-                ticks: { color: '#8b949e' }
+                grid: { color: 'rgba(0, 0, 0, 0.1)' },
+                ticks: { color: '#212529' }
             }
         }
     };
@@ -284,7 +284,7 @@
                 {
                     label: 'Z-Score',
                     data: [],
-                    borderColor: '#58a6ff',
+                    borderColor: '#0d6efd',
                     borderWidth: 2,
                     fill: false,
                     tension: 0.1,
@@ -293,8 +293,8 @@
                 {
                     label: '+Entry',
                     data: [],
-                    borderColor: '#238636',
-                    borderWidth: 1,
+                    borderColor: '#198754',
+                    borderWidth: 2,
                     borderDash: [5, 5],
                     fill: false,
                     pointRadius: 0
@@ -302,8 +302,8 @@
                 {
                     label: '-Entry',
                     data: [],
-                    borderColor: '#238636',
-                    borderWidth: 1,
+                    borderColor: '#198754',
+                    borderWidth: 2,
                     borderDash: [5, 5],
                     fill: false,
                     pointRadius: 0
@@ -311,7 +311,7 @@
                 {
                     label: '+Exit',
                     data: [],
-                    borderColor: '#d29922',
+                    borderColor: '#dc3545',
                     borderWidth: 1,
                     borderDash: [2, 2],
                     fill: false,
@@ -320,7 +320,7 @@
                 {
                     label: '-Exit',
                     data: [],
-                    borderColor: '#d29922',
+                    borderColor: '#dc3545',
                     borderWidth: 1,
                     borderDash: [2, 2],
                     fill: false,
@@ -350,7 +350,7 @@
             datasets: [{
                 label: 'Spread',
                 data: [],
-                borderColor: '#a371f7',
+                borderColor: '#6f42c1',
                 borderWidth: 2,
                 fill: false,
                 tension: 0.1,
