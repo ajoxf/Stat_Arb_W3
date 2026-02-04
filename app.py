@@ -85,7 +85,9 @@ def start_engine_loop():
         logger.info("Loaded %d spread values from database", len(spreads))
 
     # Cleanup old spread history to prevent database bloat
-    db.cleanup_old_spread_history(config.asset, keep_count=2000)
+    # Keep at least 2x lookback period to ensure sufficient data after restart
+    keep_count = max(config.lookback_period * 2, 2000)
+    db.cleanup_old_spread_history(config.asset, keep_count=keep_count)
 
     # Set up WebSocket streaming if enabled
     use_websocket = os.getenv('USE_WEBSOCKET', 'true').lower() == 'true'
