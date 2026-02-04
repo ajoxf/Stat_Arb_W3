@@ -138,7 +138,9 @@ def graceful_shutdown(signum=None, frame=None):
 # Register shutdown handlers
 atexit.register(stop_engine_loop)
 signal.signal(signal.SIGINT, graceful_shutdown)
-signal.signal(signal.SIGTERM, graceful_shutdown)
+# SIGTERM not available on Windows
+if hasattr(signal, 'SIGTERM'):
+    signal.signal(signal.SIGTERM, graceful_shutdown)
 
 
 # Callback functions for engine events
