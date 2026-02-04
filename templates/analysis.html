@@ -1,0 +1,296 @@
+{% extends "base.html" %}
+
+{% block title %}Analysis - Crypto Stat Arb{% endblock %}
+
+{% block content %}
+<div class="row g-3 mb-4">
+    <!-- Statistics Cards -->
+    <div class="col-md-2">
+        <div class="card">
+            <div class="card-body metric-card">
+                <div class="metric-value">{{ stats.total_trades }}</div>
+                <div class="metric-label">Total Trades</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-2">
+        <div class="card">
+            <div class="card-body metric-card">
+                <div class="metric-value price-up">{{ stats.winning_trades }}</div>
+                <div class="metric-label">Winning</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-2">
+        <div class="card">
+            <div class="card-body metric-card">
+                <div class="metric-value price-down">{{ stats.losing_trades }}</div>
+                <div class="metric-label">Losing</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-2">
+        <div class="card">
+            <div class="card-body metric-card">
+                <div class="metric-value">{{ stats.win_rate }}%</div>
+                <div class="metric-label">Win Rate</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-2">
+        <div class="card">
+            <div class="card-body metric-card">
+                <div class="metric-value {% if stats.total_pnl >= 0 %}price-up{% else %}price-down{% endif %}">
+                    ${{ stats.total_pnl }}
+                </div>
+                <div class="metric-label">Total P&L</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-2">
+        <div class="card">
+            <div class="card-body metric-card">
+                <div class="metric-value {% if stats.avg_pnl >= 0 %}price-up{% else %}price-down{% endif %}">
+                    ${{ stats.avg_pnl }}
+                </div>
+                <div class="metric-label">Avg P&L</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row g-3">
+    <!-- SD Touch Analysis -->
+    <div class="col-lg-6">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span><i class="bi bi-bar-chart me-2"></i>SD Touch Distribution</span>
+                <select class="form-select form-select-sm" style="width: auto;" id="asset-filter">
+                    <option value="">All Assets</option>
+                    {% for key in assets.keys() %}
+                    <option value="{{ key }}" {% if config.asset == key %}selected{% endif %}>{{ key }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="card-body">
+                <canvas id="sdTouchChart" height="300"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <!-- SD Touch Table -->
+    <div class="col-lg-6">
+        <div class="card">
+            <div class="card-header">
+                <i class="bi bi-list me-2"></i>Recent SD Touches
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive" style="max-height: 400px; overflow-y: auto;">
+                    <table class="table table-dark table-striped table-hover mb-0">
+                        <thead style="position: sticky; top: 0; background: var(--bg-tertiary);">
+                            <tr>
+                                <th>Time</th>
+                                <th>SD Level</th>
+                                <th>Direction</th>
+                                <th>Z-Score</th>
+                                <th>Spread</th>
+                            </tr>
+                        </thead>
+                        <tbody id="sd-touch-table">
+                            {% for touch in sd_touches[:50] %}
+                            <tr>
+                                <td>{{ touch.timestamp[:19] if touch.timestamp else '-' }}</td>
+                                <td>
+                                    <span class="badge {% if touch.sd_level > 0 %}bg-success{% else %}bg-danger{% endif %}">
+                                        {{ touch.sd_level }}
+                                    </span>
+                                </td>
+                                <td>
+                                    {% if touch.direction == 'UP' %}
+                                    <i class="bi bi-arrow-up text-success"></i>
+                                    {% else %}
+                                    <i class="bi bi-arrow-down text-danger"></i>
+                                    {% endif %}
+                                </td>
+                                <td>{{ "%.4f"|format(touch.zscore) }}</td>
+                                <td>{{ "%.6f"|format(touch.spread) }}</td>
+                            </tr>
+                            {% else %}
+                            <tr>
+                                <td colspan="5" class="text-center text-secondary">No SD touch events</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row g-3 mt-3">
+    <!-- Trade Journal -->
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <i class="bi bi-journal-text me-2"></i>Trade Journal
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-dark table-striped table-hover mb-0">
+                        <thead>
+                            <tr>
+                                <th>Entry Time</th>
+                                <th>Exit Time</th>
+                                <th>Asset</th>
+                                <th>Type</th>
+                                <th>Entry Z</th>
+                                <th>Exit Z</th>
+                                <th>Entry Spread</th>
+                                <th>Exit Spread</th>
+                                <th>Notional</th>
+                                <th>P&L</th>
+                                <th>P&L %</th>
+                                <th>Exit Reason</th>
+                            </tr>
+                        </thead>
+                        <tbody id="trade-journal-table">
+                            <tr>
+                                <td colspan="12" class="text-center text-secondary">Loading...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // SD Touch Distribution Chart
+    const sdTouchData = {{ sd_touches | tojson }};
+
+    // Count SD touches by level
+    const sdCounts = {};
+    sdTouchData.forEach(touch => {
+        const level = touch.sd_level;
+        sdCounts[level] = (sdCounts[level] || 0) + 1;
+    });
+
+    const levels = [-3, -2, -1, 1, 2, 3];
+    const counts = levels.map(l => sdCounts[l] || 0);
+    const colors = levels.map(l => l > 0 ? 'rgba(35, 134, 54, 0.8)' : 'rgba(218, 54, 51, 0.8)');
+
+    const sdTouchCtx = document.getElementById('sdTouchChart').getContext('2d');
+    const sdTouchChart = new Chart(sdTouchCtx, {
+        type: 'bar',
+        data: {
+            labels: levels.map(l => (l > 0 ? '+' : '') + l + ' SD'),
+            datasets: [{
+                label: 'Touch Count',
+                data: counts,
+                backgroundColor: colors,
+                borderColor: colors.map(c => c.replace('0.8', '1')),
+                borderWidth: 1
+            }]
+        },
+        options: {
+            responsive: true,
+            plugins: {
+                legend: { display: false }
+            },
+            scales: {
+                x: {
+                    grid: { display: false },
+                    ticks: { color: '#8b949e' }
+                },
+                y: {
+                    beginAtZero: true,
+                    grid: { color: 'rgba(48, 54, 61, 0.5)' },
+                    ticks: { color: '#8b949e' }
+                }
+            }
+        }
+    });
+
+    // Load trade journal
+    fetch('/api/trade-journal')
+        .then(response => response.json())
+        .then(data => {
+            const tbody = document.getElementById('trade-journal-table');
+            tbody.innerHTML = '';
+
+            if (data.trades.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="12" class="text-center text-secondary">No trades recorded</td></tr>';
+                return;
+            }
+
+            data.trades.forEach(trade => {
+                const pnlClass = trade.pnl_usd > 0 ? 'price-up' : trade.pnl_usd < 0 ? 'price-down' : '';
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td>${trade.entry_time ? new Date(trade.entry_time).toLocaleString() : '-'}</td>
+                    <td>${trade.exit_time ? new Date(trade.exit_time).toLocaleString() : '-'}</td>
+                    <td>${trade.asset}</td>
+                    <td><span class="badge ${trade.position_type === 'LONG' ? 'badge-long' : 'badge-short'}">${trade.position_type}</span></td>
+                    <td>${(trade.entry_zscore || 0).toFixed(4)}</td>
+                    <td>${trade.exit_zscore ? trade.exit_zscore.toFixed(4) : '-'}</td>
+                    <td>${(trade.entry_spread || 0).toFixed(6)}</td>
+                    <td>${trade.exit_spread ? trade.exit_spread.toFixed(6) : '-'}</td>
+                    <td>$${(trade.notional_usd || 0).toFixed(2)}</td>
+                    <td class="${pnlClass}">$${(trade.pnl_usd || 0).toFixed(2)}</td>
+                    <td class="${pnlClass}">${(trade.pnl_percent || 0).toFixed(2)}%</td>
+                    <td><span class="badge ${trade.is_open ? 'bg-warning' : 'bg-secondary'}">${trade.exit_reason || (trade.is_open ? 'OPEN' : '-')}</span></td>
+                `;
+                tbody.appendChild(row);
+            });
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            document.getElementById('trade-journal-table').innerHTML =
+                '<tr><td colspan="12" class="text-center text-danger">Error loading trades</td></tr>';
+        });
+
+    // Asset filter
+    document.getElementById('asset-filter').addEventListener('change', function() {
+        const asset = this.value;
+        fetch(`/api/sd-touches?asset=${asset}&limit=500`)
+            .then(response => response.json())
+            .then(touches => {
+                // Update chart
+                const sdCounts = {};
+                touches.forEach(touch => {
+                    const level = touch.sd_level;
+                    sdCounts[level] = (sdCounts[level] || 0) + 1;
+                });
+
+                const counts = levels.map(l => sdCounts[l] || 0);
+                sdTouchChart.data.datasets[0].data = counts;
+                sdTouchChart.update();
+
+                // Update table
+                const tbody = document.getElementById('sd-touch-table');
+                tbody.innerHTML = '';
+
+                if (touches.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="5" class="text-center text-secondary">No SD touch events</td></tr>';
+                    return;
+                }
+
+                touches.slice(0, 50).forEach(touch => {
+                    const row = document.createElement('tr');
+                    row.innerHTML = `
+                        <td>${touch.timestamp ? touch.timestamp.substring(0, 19) : '-'}</td>
+                        <td><span class="badge ${touch.sd_level > 0 ? 'bg-success' : 'bg-danger'}">${touch.sd_level}</span></td>
+                        <td><i class="bi bi-arrow-${touch.direction === 'UP' ? 'up text-success' : 'down text-danger'}"></i></td>
+                        <td>${(touch.zscore || 0).toFixed(4)}</td>
+                        <td>${(touch.spread || 0).toFixed(6)}</td>
+                    `;
+                    tbody.appendChild(row);
+                });
+            });
+    });
+</script>
+{% endblock %}

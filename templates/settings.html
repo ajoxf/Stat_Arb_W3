@@ -1,0 +1,239 @@
+{% extends "base.html" %}
+
+{% block title %}Settings - Crypto Stat Arb{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-lg-8">
+        <div class="card">
+            <div class="card-header">
+                <i class="bi bi-gear me-2"></i>Trading Configuration
+            </div>
+            <div class="card-body">
+                <form id="config-form">
+                    <!-- Asset Selection -->
+                    <div class="row mb-4">
+                        <div class="col-12">
+                            <h6 class="text-secondary mb-3">Asset Selection</h6>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">Asset</label>
+                            <select class="form-select" id="asset" name="asset">
+                                {% for key, asset in assets.items() %}
+                                <option value="{{ key }}" {% if config.asset == key %}selected{% endif %}>
+                                    {{ key }} - {{ asset.name }}
+                                </option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">Spot Symbol</label>
+                            <input type="text" class="form-control" id="spot_symbol" name="spot_symbol" value="{{ config.spot_symbol }}">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">Futures Symbol</label>
+                            <input type="text" class="form-control" id="futures_symbol" name="futures_symbol" value="{{ config.futures_symbol }}">
+                        </div>
+                    </div>
+
+                    <hr class="my-4" style="border-color: var(--border-color);">
+
+                    <!-- Z-Score Thresholds -->
+                    <div class="row mb-4">
+                        <div class="col-12">
+                            <h6 class="text-secondary mb-3">Z-Score Thresholds</h6>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">Entry Threshold</label>
+                            <input type="number" class="form-control" id="entry_threshold" name="entry_threshold" value="{{ config.entry_threshold }}" step="0.1" min="0.5" max="5">
+                            <small class="text-secondary">Entry at Z &ge; +/- this value</small>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">Exit Threshold</label>
+                            <input type="number" class="form-control" id="exit_threshold" name="exit_threshold" value="{{ config.exit_threshold }}" step="0.1" min="0" max="3">
+                            <small class="text-secondary">Exit when Z returns to +/- this value</small>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">Stop Loss Threshold</label>
+                            <input type="number" class="form-control" id="stop_loss_threshold" name="stop_loss_threshold" value="{{ config.stop_loss_threshold }}" step="0.1" min="2" max="10">
+                            <small class="text-secondary">Stop loss at Z &ge; +/- this value</small>
+                        </div>
+                    </div>
+
+                    <hr class="my-4" style="border-color: var(--border-color);">
+
+                    <!-- Rolling Window -->
+                    <div class="row mb-4">
+                        <div class="col-12">
+                            <h6 class="text-secondary mb-3">Rolling Window Settings</h6>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">Lookback Period</label>
+                            <input type="number" class="form-control" id="lookback_period" name="lookback_period" value="{{ config.lookback_period }}" min="20" max="500">
+                            <small class="text-secondary">Number of ticks for rolling mean/std calculation</small>
+                        </div>
+                    </div>
+
+                    <hr class="my-4" style="border-color: var(--border-color);">
+
+                    <!-- Filters -->
+                    <div class="row mb-4">
+                        <div class="col-12">
+                            <h6 class="text-secondary mb-3">Signal Filters</h6>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="form-check form-switch mb-3">
+                                <input class="form-check-input" type="checkbox" id="hurst_enabled" name="hurst_enabled" {% if config.hurst_enabled %}checked{% endif %}>
+                                <label class="form-check-label" for="hurst_enabled">Enable Hurst Filter</label>
+                            </div>
+                            <label class="form-label">Hurst Threshold</label>
+                            <input type="number" class="form-control" id="hurst_threshold" name="hurst_threshold" value="{{ config.hurst_threshold }}" step="0.05" min="0.3" max="0.7">
+                            <small class="text-secondary">Block entries when Hurst &ge; this value (trending)</small>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="form-check form-switch mb-3">
+                                <input class="form-check-input" type="checkbox" id="std_filter_enabled" name="std_filter_enabled" {% if config.std_filter_enabled %}checked{% endif %}>
+                                <label class="form-check-label" for="std_filter_enabled">Enable STD Filter</label>
+                            </div>
+                            <label class="form-label">Min STD Multiple</label>
+                            <input type="number" class="form-control" id="min_std_multiple" name="min_std_multiple" value="{{ config.min_std_multiple }}" step="0.1" min="1" max="5">
+                            <small class="text-secondary">STD must be &gt; costs * this multiple</small>
+                        </div>
+                    </div>
+
+                    <hr class="my-4" style="border-color: var(--border-color);">
+
+                    <!-- Position Sizing -->
+                    <div class="row mb-4">
+                        <div class="col-12">
+                            <h6 class="text-secondary mb-3">Position Sizing</h6>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">Position Size (USD)</label>
+                            <input type="number" class="form-control" id="position_size_usd" name="position_size_usd" value="{{ config.position_size_usd }}" step="100" min="100">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">Max Position Size (USD)</label>
+                            <input type="number" class="form-control" id="max_position_size_usd" name="max_position_size_usd" value="{{ config.max_position_size_usd }}" step="100" min="100">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">Est. Costs (bps)</label>
+                            <input type="number" class="form-control" id="estimated_costs_bps" name="estimated_costs_bps" value="{{ config.estimated_costs_bps }}" step="1" min="1" max="100">
+                            <small class="text-secondary">Estimated trading costs per side</small>
+                        </div>
+                    </div>
+
+                    <hr class="my-4" style="border-color: var(--border-color);">
+
+                    <!-- Trading Mode -->
+                    <div class="row mb-4">
+                        <div class="col-12">
+                            <h6 class="text-secondary mb-3">Trading Mode</h6>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="form-check form-switch">
+                                <input class="form-check-input" type="checkbox" id="paper_trading" name="paper_trading" {% if config.paper_trading %}checked{% endif %}>
+                                <label class="form-check-label" for="paper_trading">Paper Trading Mode</label>
+                            </div>
+                            <small class="text-secondary">Simulate trades without real orders</small>
+                        </div>
+                    </div>
+
+                    <div class="d-flex justify-content-end gap-2">
+                        <button type="button" class="btn btn-outline-secondary" onclick="resetForm()">Reset</button>
+                        <button type="submit" class="btn btn-primary">
+                            <i class="bi bi-check-lg me-1"></i>Save Configuration
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // Asset symbol mapping
+    const assetSymbols = {
+        {% for key, asset in assets.items() %}
+        '{{ key }}': {
+            spot: '{{ asset.okx_spot }}',
+            futures: '{{ asset.okx_futures }}'
+        },
+        {% endfor %}
+    };
+
+    // Update symbols when asset changes
+    document.getElementById('asset').addEventListener('change', function() {
+        const asset = this.value;
+        if (assetSymbols[asset]) {
+            document.getElementById('spot_symbol').value = assetSymbols[asset].spot;
+            document.getElementById('futures_symbol').value = assetSymbols[asset].futures;
+        }
+    });
+
+    // Form submission
+    document.getElementById('config-form').addEventListener('submit', function(e) {
+        e.preventDefault();
+
+        const formData = {
+            asset: document.getElementById('asset').value,
+            spot_symbol: document.getElementById('spot_symbol').value,
+            futures_symbol: document.getElementById('futures_symbol').value,
+            entry_threshold: parseFloat(document.getElementById('entry_threshold').value),
+            exit_threshold: parseFloat(document.getElementById('exit_threshold').value),
+            stop_loss_threshold: parseFloat(document.getElementById('stop_loss_threshold').value),
+            lookback_period: parseInt(document.getElementById('lookback_period').value),
+            hurst_enabled: document.getElementById('hurst_enabled').checked,
+            hurst_threshold: parseFloat(document.getElementById('hurst_threshold').value),
+            std_filter_enabled: document.getElementById('std_filter_enabled').checked,
+            min_std_multiple: parseFloat(document.getElementById('min_std_multiple').value),
+            position_size_usd: parseFloat(document.getElementById('position_size_usd').value),
+            max_position_size_usd: parseFloat(document.getElementById('max_position_size_usd').value),
+            estimated_costs_bps: parseFloat(document.getElementById('estimated_costs_bps').value),
+            paper_trading: document.getElementById('paper_trading').checked,
+        };
+
+        fetch('/api/config', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(formData)
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                showToast('Configuration saved successfully', 'success');
+            } else {
+                showToast('Error saving configuration', 'danger');
+            }
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            showToast('Error saving configuration', 'danger');
+        });
+    });
+
+    function resetForm() {
+        fetch('/api/config')
+            .then(response => response.json())
+            .then(config => {
+                document.getElementById('asset').value = config.asset;
+                document.getElementById('spot_symbol').value = config.spot_symbol;
+                document.getElementById('futures_symbol').value = config.futures_symbol;
+                document.getElementById('entry_threshold').value = config.entry_threshold;
+                document.getElementById('exit_threshold').value = config.exit_threshold;
+                document.getElementById('stop_loss_threshold').value = config.stop_loss_threshold;
+                document.getElementById('lookback_period').value = config.lookback_period;
+                document.getElementById('hurst_enabled').checked = config.hurst_enabled;
+                document.getElementById('hurst_threshold').value = config.hurst_threshold;
+                document.getElementById('std_filter_enabled').checked = config.std_filter_enabled;
+                document.getElementById('min_std_multiple').value = config.min_std_multiple;
+                document.getElementById('position_size_usd').value = config.position_size_usd;
+                document.getElementById('max_position_size_usd').value = config.max_position_size_usd;
+                document.getElementById('estimated_costs_bps').value = config.estimated_costs_bps;
+                document.getElementById('paper_trading').checked = config.paper_trading;
+            });
+    }
+</script>
+{% endblock %}

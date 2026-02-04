@@ -1,0 +1,543 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - Crypto Stat Arb{% endblock %}
+
+{% block content %}
+<div class="row g-3">
+    <!-- Left Column: Prices and Charts -->
+    <div class="col-lg-8">
+        <!-- Price Cards -->
+        <div class="row g-3 mb-3">
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <span><i class="bi bi-currency-exchange me-2"></i>Spot</span>
+                        <span class="badge bg-secondary" id="spot-symbol">{{ config.spot_symbol }}</span>
+                    </div>
+                    <div class="card-body">
+                        <div class="row">
+                            <div class="col-4 metric-card">
+                                <div class="metric-value" id="spot-bid">-</div>
+                                <div class="metric-label">Bid</div>
+                            </div>
+                            <div class="col-4 metric-card">
+                                <div class="metric-value" id="spot-last">-</div>
+                                <div class="metric-label">Last</div>
+                            </div>
+                            <div class="col-4 metric-card">
+                                <div class="metric-value" id="spot-ask">-</div>
+                                <div class="metric-label">Ask</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <span><i class="bi bi-bar-chart me-2"></i>Futures</span>
+                        <span class="badge bg-secondary" id="futures-symbol">{{ config.futures_symbol }}</span>
+                    </div>
+                    <div class="card-body">
+                        <div class="row">
+                            <div class="col-4 metric-card">
+                                <div class="metric-value" id="futures-bid">-</div>
+                                <div class="metric-label">Bid</div>
+                            </div>
+                            <div class="col-4 metric-card">
+                                <div class="metric-value" id="futures-last">-</div>
+                                <div class="metric-label">Last</div>
+                            </div>
+                            <div class="col-4 metric-card">
+                                <div class="metric-value" id="futures-ask">-</div>
+                                <div class="metric-label">Ask</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Z-Score Chart -->
+        <div class="card mb-3">
+            <div class="card-header">
+                <i class="bi bi-activity me-2"></i>Z-Score History
+            </div>
+            <div class="card-body">
+                <canvas id="zscoreChart" height="200"></canvas>
+            </div>
+        </div>
+
+        <!-- Spread Chart -->
+        <div class="card mb-3">
+            <div class="card-header">
+                <i class="bi bi-graph-up me-2"></i>Spread History
+            </div>
+            <div class="card-body">
+                <canvas id="spreadChart" height="150"></canvas>
+            </div>
+        </div>
+
+        <!-- Trade Journal -->
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span><i class="bi bi-journal-text me-2"></i>Recent Trades</span>
+                <a href="/analysis" class="btn btn-sm btn-outline-secondary">View All</a>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-dark table-striped table-hover mb-0">
+                        <thead>
+                            <tr>
+                                <th>Time</th>
+                                <th>Type</th>
+                                <th>Entry Z</th>
+                                <th>Exit Z</th>
+                                <th>P&L</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody id="trades-table">
+                            <tr>
+                                <td colspan="6" class="text-center text-secondary">No trades yet</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Right Column: Signal Info and Controls -->
+    <div class="col-lg-4">
+        <!-- Signal Card -->
+        <div class="card mb-3">
+            <div class="card-header">
+                <i class="bi bi-lightning me-2"></i>Current Signal
+            </div>
+            <div class="card-body">
+                <div class="text-center mb-3">
+                    <div class="metric-value" style="font-size: 3rem;" id="current-zscore">0.00</div>
+                    <div class="metric-label">Z-Score</div>
+                </div>
+                <div class="row g-2">
+                    <div class="col-6">
+                        <div class="metric-card" style="background: var(--bg-tertiary); border-radius: 4px;">
+                            <div class="metric-value" id="spread-value">0.00</div>
+                            <div class="metric-label">Spread</div>
+                        </div>
+                    </div>
+                    <div class="col-6">
+                        <div class="metric-card" style="background: var(--bg-tertiary); border-radius: 4px;">
+                            <div class="metric-value" id="spread-std">0.00</div>
+                            <div class="metric-label">Std Dev</div>
+                        </div>
+                    </div>
+                    <div class="col-6">
+                        <div class="metric-card" style="background: var(--bg-tertiary); border-radius: 4px;">
+                            <div class="metric-value" id="hurst-value">0.50</div>
+                            <div class="metric-label">Hurst</div>
+                        </div>
+                    </div>
+                    <div class="col-6">
+                        <div class="metric-card" style="background: var(--bg-tertiary); border-radius: 4px;">
+                            <div class="metric-value" id="data-points">0</div>
+                            <div class="metric-label">Data Points</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Filters Status -->
+        <div class="card mb-3">
+            <div class="card-header">
+                <i class="bi bi-funnel me-2"></i>Filter Status
+            </div>
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <span>Hurst Filter</span>
+                    <span id="hurst-status" class="badge bg-secondary">-</span>
+                </div>
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <span>STD Filter</span>
+                    <span id="std-status" class="badge bg-secondary">-</span>
+                </div>
+                <div class="d-flex justify-content-between align-items-center">
+                    <span>Regime</span>
+                    <span id="regime-status" class="badge bg-secondary">-</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Position Card -->
+        <div class="card mb-3">
+            <div class="card-header">
+                <i class="bi bi-wallet2 me-2"></i>Position
+            </div>
+            <div class="card-body">
+                <div class="text-center mb-3">
+                    <div id="position-badge" class="badge bg-secondary" style="font-size: 1.5rem; padding: 0.5rem 1.5rem;">
+                        FLAT
+                    </div>
+                </div>
+                <div id="position-details" style="display: none;">
+                    <div class="d-flex justify-content-between mb-2">
+                        <span class="text-secondary">Entry Z-Score:</span>
+                        <span id="position-entry-z">-</span>
+                    </div>
+                    <div class="d-flex justify-content-between mb-2">
+                        <span class="text-secondary">Unrealized P&L:</span>
+                        <span id="position-pnl">-</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Thresholds Card -->
+        <div class="card mb-3">
+            <div class="card-header">
+                <i class="bi bi-sliders me-2"></i>Thresholds
+            </div>
+            <div class="card-body">
+                <div class="d-flex justify-content-between mb-2">
+                    <span class="text-secondary">Entry:</span>
+                    <span>&plusmn;{{ config.entry_threshold }}</span>
+                </div>
+                <div class="d-flex justify-content-between mb-2">
+                    <span class="text-secondary">Exit:</span>
+                    <span>&plusmn;{{ config.exit_threshold }}</span>
+                </div>
+                <div class="d-flex justify-content-between mb-2">
+                    <span class="text-secondary">Stop Loss:</span>
+                    <span>&plusmn;{{ config.stop_loss_threshold }}</span>
+                </div>
+                <div class="d-flex justify-content-between">
+                    <span class="text-secondary">Lookback:</span>
+                    <span>{{ config.lookback_period }}</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Trading Mode -->
+        <div class="card">
+            <div class="card-header">
+                <i class="bi bi-gear me-2"></i>Trading Mode
+            </div>
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <span>Paper Trading</span>
+                    <span id="paper-mode" class="badge {% if config.paper_trading %}bg-warning{% else %}bg-success{% endif %}">
+                        {% if config.paper_trading %}ON{% else %}OFF{% endif %}
+                    </span>
+                </div>
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <span>Asset</span>
+                    <span class="badge bg-primary">{{ config.asset }}</span>
+                </div>
+                <div class="d-flex justify-content-between align-items-center">
+                    <span>Position Size</span>
+                    <span>${{ config.position_size_usd }}</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // Chart configurations
+    const chartOptions = {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        plugins: {
+            legend: { display: false }
+        },
+        scales: {
+            x: {
+                display: false,
+                grid: { display: false }
+            },
+            y: {
+                grid: { color: 'rgba(48, 54, 61, 0.5)' },
+                ticks: { color: '#8b949e' }
+            }
+        }
+    };
+
+    // Z-Score Chart
+    const zscoreCtx = document.getElementById('zscoreChart').getContext('2d');
+    const zscoreChart = new Chart(zscoreCtx, {
+        type: 'line',
+        data: {
+            labels: [],
+            datasets: [
+                {
+                    label: 'Z-Score',
+                    data: [],
+                    borderColor: '#58a6ff',
+                    borderWidth: 2,
+                    fill: false,
+                    tension: 0.1,
+                    pointRadius: 0
+                },
+                {
+                    label: '+Entry',
+                    data: [],
+                    borderColor: '#238636',
+                    borderWidth: 1,
+                    borderDash: [5, 5],
+                    fill: false,
+                    pointRadius: 0
+                },
+                {
+                    label: '-Entry',
+                    data: [],
+                    borderColor: '#238636',
+                    borderWidth: 1,
+                    borderDash: [5, 5],
+                    fill: false,
+                    pointRadius: 0
+                },
+                {
+                    label: '+Exit',
+                    data: [],
+                    borderColor: '#d29922',
+                    borderWidth: 1,
+                    borderDash: [2, 2],
+                    fill: false,
+                    pointRadius: 0
+                },
+                {
+                    label: '-Exit',
+                    data: [],
+                    borderColor: '#d29922',
+                    borderWidth: 1,
+                    borderDash: [2, 2],
+                    fill: false,
+                    pointRadius: 0
+                }
+            ]
+        },
+        options: {
+            ...chartOptions,
+            scales: {
+                ...chartOptions.scales,
+                y: {
+                    ...chartOptions.scales.y,
+                    min: -5,
+                    max: 5
+                }
+            }
+        }
+    });
+
+    // Spread Chart
+    const spreadCtx = document.getElementById('spreadChart').getContext('2d');
+    const spreadChart = new Chart(spreadCtx, {
+        type: 'line',
+        data: {
+            labels: [],
+            datasets: [{
+                label: 'Spread',
+                data: [],
+                borderColor: '#a371f7',
+                borderWidth: 2,
+                fill: false,
+                tension: 0.1,
+                pointRadius: 0
+            }]
+        },
+        options: chartOptions
+    });
+
+    // Configuration values
+    const entryThreshold = {{ config.entry_threshold }};
+    const exitThreshold = {{ config.exit_threshold }};
+
+    // Data storage
+    let zscoreHistory = [];
+    let spreadHistory = [];
+    const maxDataPoints = 100;
+
+    // Socket event handlers
+    socket.on('tick', function(data) {
+        updatePrices(data.spot, data.futures);
+    });
+
+    socket.on('signal', function(data) {
+        updateSignal(data);
+        updateCharts(data);
+    });
+
+    socket.on('trade', function(data) {
+        addTradeToTable(data);
+        showToast(`Trade ${data.is_open ? 'opened' : 'closed'}: ${data.position_type}`, 'info');
+    });
+
+    function updatePrices(spot, futures) {
+        if (spot) {
+            updatePrice('spot-bid', spot.bid);
+            updatePrice('spot-last', spot.last);
+            updatePrice('spot-ask', spot.ask);
+        }
+        if (futures) {
+            updatePrice('futures-bid', futures.bid);
+            updatePrice('futures-last', futures.last);
+            updatePrice('futures-ask', futures.ask);
+        }
+    }
+
+    function updatePrice(elementId, value) {
+        const el = document.getElementById(elementId);
+        if (el && value) {
+            const newValue = formatPrice(value, getDecimals(value));
+            if (el.textContent !== newValue) {
+                el.textContent = newValue;
+                el.classList.add('flash');
+                setTimeout(() => el.classList.remove('flash'), 300);
+            }
+        }
+    }
+
+    function getDecimals(value) {
+        if (value >= 1000) return 2;
+        if (value >= 1) return 4;
+        return 6;
+    }
+
+    function updateSignal(data) {
+        // Z-Score
+        const zscore = data.zscore || 0;
+        const zscoreEl = document.getElementById('current-zscore');
+        zscoreEl.textContent = zscore.toFixed(4);
+        zscoreEl.className = 'metric-value ' + (zscore > 0.5 ? 'zscore-positive' : zscore < -0.5 ? 'zscore-negative' : 'zscore-neutral');
+
+        // Other metrics
+        document.getElementById('spread-value').textContent = (data.spread || 0).toFixed(6);
+        document.getElementById('spread-std').textContent = (data.spread_std || 0).toFixed(6);
+        document.getElementById('hurst-value').textContent = (data.hurst || 0.5).toFixed(4);
+        document.getElementById('data-points').textContent = data.data_points || 0;
+
+        // Filter status
+        updateFilterStatus('hurst-status', data.hurst_ok, data.hurst);
+        updateFilterStatus('std-status', data.std_filter_ok);
+
+        // Regime
+        const regimeEl = document.getElementById('regime-status');
+        regimeEl.textContent = data.regime || '-';
+        regimeEl.className = 'badge ' + (data.regime === 'MEAN_REVERTING' ? 'bg-success' : data.regime === 'TRENDING' ? 'bg-danger' : 'bg-secondary');
+
+        // Position
+        updatePosition(data.current_position);
+    }
+
+    function updateFilterStatus(elementId, passed, value) {
+        const el = document.getElementById(elementId);
+        if (passed === undefined) {
+            el.textContent = '-';
+            el.className = 'badge bg-secondary';
+        } else {
+            el.textContent = passed ? 'PASS' : 'BLOCK';
+            el.className = 'badge ' + (passed ? 'bg-success' : 'bg-danger');
+        }
+    }
+
+    function updatePosition(position) {
+        const badge = document.getElementById('position-badge');
+        const details = document.getElementById('position-details');
+
+        if (position === 'NONE' || !position) {
+            badge.textContent = 'FLAT';
+            badge.className = 'badge bg-secondary';
+            badge.style.fontSize = '1.5rem';
+            badge.style.padding = '0.5rem 1.5rem';
+            details.style.display = 'none';
+        } else {
+            badge.textContent = position;
+            badge.className = 'badge ' + (position === 'LONG' ? 'badge-long' : 'badge-short');
+            badge.style.fontSize = '1.5rem';
+            badge.style.padding = '0.5rem 1.5rem';
+            details.style.display = 'block';
+        }
+    }
+
+    function updateCharts(data) {
+        const zscore = data.zscore || 0;
+        const spread = data.spread || 0;
+
+        // Add to history
+        zscoreHistory.push(zscore);
+        spreadHistory.push(spread);
+
+        // Limit data points
+        if (zscoreHistory.length > maxDataPoints) {
+            zscoreHistory.shift();
+            spreadHistory.shift();
+        }
+
+        // Update Z-Score chart
+        const labels = Array.from({length: zscoreHistory.length}, (_, i) => i);
+        zscoreChart.data.labels = labels;
+        zscoreChart.data.datasets[0].data = zscoreHistory;
+        zscoreChart.data.datasets[1].data = Array(labels.length).fill(entryThreshold);
+        zscoreChart.data.datasets[2].data = Array(labels.length).fill(-entryThreshold);
+        zscoreChart.data.datasets[3].data = Array(labels.length).fill(exitThreshold);
+        zscoreChart.data.datasets[4].data = Array(labels.length).fill(-exitThreshold);
+        zscoreChart.update('none');
+
+        // Update Spread chart
+        spreadChart.data.labels = labels;
+        spreadChart.data.datasets[0].data = spreadHistory;
+        spreadChart.update('none');
+    }
+
+    function addTradeToTable(trade) {
+        const tbody = document.getElementById('trades-table');
+        const emptyRow = tbody.querySelector('td[colspan]');
+        if (emptyRow) {
+            emptyRow.parentElement.remove();
+        }
+
+        const row = document.createElement('tr');
+        const pnlClass = trade.pnl_usd > 0 ? 'price-up' : trade.pnl_usd < 0 ? 'price-down' : '';
+
+        row.innerHTML = `
+            <td>${trade.entry_time ? new Date(trade.entry_time).toLocaleTimeString() : '-'}</td>
+            <td><span class="badge ${trade.position_type === 'LONG' ? 'badge-long' : 'badge-short'}">${trade.position_type}</span></td>
+            <td>${(trade.entry_zscore || 0).toFixed(2)}</td>
+            <td>${trade.exit_zscore ? trade.exit_zscore.toFixed(2) : '-'}</td>
+            <td class="${pnlClass}">${trade.is_open ? '-' : '$' + (trade.pnl_usd || 0).toFixed(2)}</td>
+            <td><span class="badge ${trade.is_open ? 'bg-warning' : 'bg-success'}">${trade.is_open ? 'OPEN' : 'CLOSED'}</span></td>
+        `;
+
+        tbody.insertBefore(row, tbody.firstChild);
+
+        // Limit rows
+        while (tbody.children.length > 10) {
+            tbody.removeChild(tbody.lastChild);
+        }
+    }
+
+    // Load initial trades
+    fetch('/api/trades?limit=10')
+        .then(response => response.json())
+        .then(trades => {
+            trades.reverse().forEach(trade => addTradeToTable(trade));
+        });
+
+    // Load initial chart data
+    fetch('/api/spread-history?n=100')
+        .then(response => response.json())
+        .then(data => {
+            if (data.zscores) {
+                zscoreHistory = data.zscores;
+            }
+            if (data.spreads) {
+                spreadHistory = data.spreads;
+            }
+        });
+</script>
+{% endblock %}
