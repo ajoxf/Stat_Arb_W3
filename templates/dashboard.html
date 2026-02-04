@@ -264,6 +264,14 @@
                     <span>STD Filter</span>
                     <span id="std-status" class="badge bg-secondary">-</span>
                 </div>
+                <div class="d-flex justify-content-between align-items-center mb-2 ps-3" style="font-size: 0.85rem;">
+                    <span class="text-secondary">STD Ratio</span>
+                    <span id="std-ratio-display">
+                        <span id="std-ratio-value">-</span>
+                        <span class="text-secondary"> / </span>
+                        <span id="std-ratio-required">-</span>
+                    </span>
+                </div>
                 <div class="d-flex justify-content-between align-items-center mb-2">
                     <span>Regime</span>
                     <span id="regime-filter-status" class="badge bg-secondary">-</span>
@@ -714,6 +722,24 @@
         // Filter status
         updateFilterStatus('hurst-status', data.hurst_ok, data.hurst);
         updateFilterStatus('std-status', data.std_filter_ok);
+
+        // STD Ratio display
+        const stdRatioValue = document.getElementById('std-ratio-value');
+        const stdRatioRequired = document.getElementById('std-ratio-required');
+        if (stdRatioValue && stdRatioRequired) {
+            if (data.std_ratio !== null && data.std_ratio !== undefined) {
+                stdRatioValue.textContent = data.std_ratio.toFixed(2);
+                stdRatioValue.className = data.std_filter_ok ? 'price-up fw-bold' : 'price-down fw-bold';
+            } else {
+                stdRatioValue.textContent = '-';
+                stdRatioValue.className = '';
+            }
+            if (data.std_ratio_required !== null && data.std_ratio_required !== undefined) {
+                stdRatioRequired.textContent = data.std_ratio_required.toFixed(1) + ' min';
+            } else {
+                stdRatioRequired.textContent = '-';
+            }
+        }
 
         // Regime with better display
         const regimeFilterEl = document.getElementById('regime-filter-status');

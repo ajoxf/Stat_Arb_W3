@@ -389,7 +389,7 @@ class SignalGenerator:
 
         # Calculate filter status (same logic as generate_signal)
         hurst_ok = not self.config.hurst_enabled or self.current_hurst < self.config.hurst_threshold
-        std_ok, _ = self._check_std_filter()
+        std_ok, std_ratio = self._check_std_filter()
 
         # Check if we have enough data (must have full lookback period)
         data_ready = len(self.spread_history) >= self.lookback
@@ -410,6 +410,9 @@ class SignalGenerator:
             'hurst': round(self.current_hurst, 4),
             'hurst_ok': hurst_ok if data_ready else None,
             'std_filter_ok': std_ok if data_ready else None,
+            'std_ratio': round(std_ratio, 2) if std_ratio != float('inf') else None,
+            'std_ratio_required': self.config.min_std_multiple,
+            'std_filter_enabled': self.config.std_filter_enabled,
             'regime': regime if data_ready else "COLLECTING",
             'data_points': len(self.spread_history),
             'lookback': self.lookback,
