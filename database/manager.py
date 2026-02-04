@@ -168,6 +168,24 @@ class DatabaseManager:
                 )
             """)
 
+            # Spread history for persistence/recovery
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS spread_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
+                    asset TEXT NOT NULL,
+                    spot_price REAL,
+                    futures_price REAL,
+                    spread REAL
+                )
+            """)
+
+            # Create index for faster queries
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_spread_history_asset_time
+                ON spread_history (asset, timestamp DESC)
+            """)
+
             # Insert default config if not exists
             cursor.execute("SELECT COUNT(*) FROM trading_config")
             if cursor.fetchone()[0] == 0:
@@ -619,3 +637,65 @@ class DatabaseManager:
                 "total_pnl": round(total_pnl, 2),
                 "avg_pnl": round(avg_pnl, 2),
             }
+
+    # Spread History Methods (for persistence/recovery)
+    def save_spread(
+        self,
+        asset: str,
+        spot_price: float,
+        futures_price: float,
+        spread: float,
+    ) -> None:
+        """Save a spread data point."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO spread_history (asset, spot_price, futures_price, spread)
+                VALUES (?, ?, ?, ?)
+            """, (asset, spot_price, futures_price, spread))
+
+    def get_spread_history(self, asset: str, limit: int = 500) -> List[Dict[str, Any]]:
+        """
+        Get spread history for an asset (for recovery after reconnection).
+
+        Returns list of dicts with timestamp, spot_price, futures_price, spread.
+        Results are ordered oldest first for correct loading order.
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT timestamp, spot_price, futures_price, spread
+                FROM spread_history
+                WHERE asset = ?
+                ORDER BY timestamp DESC
+                LIMIT ?
+            """, (asset, limit))
+            rows = cursor.fetchall()
+
+            # Reverse to get oldest first (for correct loading order)
+            return [
+                {
+                    'timestamp': row['timestamp'],
+                    'spot_price': row['spot_price'],
+                    'futures_price': row['futures_price'],
+                    'spread': row['spread'],
+                }
+                for row in reversed(rows)
+            ]
+
+    def cleanup_old_spread_history(self, asset: str, keep_count: int = 1000) -> None:
+        """Remove old spread history entries, keeping only the most recent."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                DELETE FROM spread_history
+                WHERE asset = ? AND id NOT IN (
+                    SELECT id FROM spread_history
+                    WHERE asset = ?
+                    ORDER BY timestamp DESC
+                    LIMIT ?
+                )
+            """, (asset, asset, keep_count))
+            deleted = cursor.rowcount
+            if deleted > 0:
+                logger.info("Cleaned up %d old spread history entries for %s", deleted, asset)

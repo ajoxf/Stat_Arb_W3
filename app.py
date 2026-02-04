@@ -69,6 +69,19 @@ def start_engine_loop():
     engine.on_trade = on_trade_callback
     engine.on_error = on_error_callback
 
+    # Set up SD touch callback on signal generator
+    engine.signal_generator.on_sd_touch = on_sd_touch_callback
+
+    # Load spread history from database for recovery
+    spread_history = db.get_spread_history(config.asset, limit=config.lookback_period)
+    if spread_history:
+        spreads = [h['spread'] for h in spread_history]
+        engine.signal_generator.load_spread_history(spreads)
+        logger.info("Loaded %d spread values from database", len(spreads))
+
+    # Cleanup old spread history to prevent database bloat
+    db.cleanup_old_spread_history(config.asset, keep_count=2000)
+
     # Start engine
     asyncio.run_coroutine_threadsafe(engine.start(), loop)
     logger.info("Trading engine started")
@@ -91,6 +104,15 @@ def on_tick_callback(spot_tick: MarketTick, futures_tick: MarketTick):
         'futures': futures_tick.to_dict(),
         'timestamp': datetime.utcnow().isoformat(),
     })
+
+    # Save spread to database for persistence/recovery
+    spread = spot_tick.mid - futures_tick.mid
+    db.save_spread(
+        asset=config.asset,
+        spot_price=spot_tick.mid,
+        futures_price=futures_tick.mid,
+        spread=spread,
+    )
 
 
 def on_signal_callback(signal: Signal):
@@ -116,6 +138,13 @@ def on_trade_callback(trade: Trade):
 def on_error_callback(error: str):
     """Handle error updates."""
     socketio.emit('error', {'message': error})
+
+
+def on_sd_touch_callback(event):
+    """Handle SD touch events - log to database."""
+    db.log_sd_touch(event)
+    logger.info("SD touch: level=%s, direction=%s, zscore=%.4f",
+                event.sd_level, event.direction, event.zscore)
 
 
 # Routes

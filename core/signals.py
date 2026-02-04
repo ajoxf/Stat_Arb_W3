@@ -6,7 +6,7 @@ Implements Z-score calculation, Hurst exponent, and STD filter.
 import numpy as np
 from collections import deque
 from datetime import datetime
-from typing import Optional, Tuple, List, Dict, Any
+from typing import Optional, Tuple, List, Dict, Any, Callable
 import logging
 
 from models import Signal, TradingConfig, MarketTick, SDTouchEvent
@@ -53,6 +53,9 @@ class SignalGenerator:
         # SD touch tracking
         self.last_sd_level: float = 0.0
         self.sd_touch_events: List[SDTouchEvent] = []
+
+        # Callback for SD touch events (for database logging)
+        self.on_sd_touch: Optional[Callable[[SDTouchEvent], None]] = None
 
         # Track current position for exit signals
         self.current_position: str = "NONE"
@@ -227,6 +230,11 @@ class SignalGenerator:
 
             self.sd_touch_events.append(event)
             self.last_sd_level = current_sd_level
+
+            # Call callback for database logging
+            if self.on_sd_touch:
+                self.on_sd_touch(event)
+
             return event
 
         self.last_sd_level = current_sd_level
@@ -350,6 +358,20 @@ class SignalGenerator:
             'lookback': self.lookback,
             'position': self.current_position,
         }
+
+    def load_spread_history(self, spreads: List[float]) -> None:
+        """
+        Load spread history from external source (e.g., database).
+        Used for recovery after reconnection.
+        """
+        self.spread_history.clear()
+        for spread in spreads[-self.lookback:]:
+            self.spread_history.append(spread)
+
+        if len(self.spread_history) >= 2:
+            self._update_statistics()
+
+        logger.info("Loaded %d spread values from history", len(self.spread_history))
 
     def reset(self) -> None:
         """Reset all state."""
