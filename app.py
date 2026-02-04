@@ -821,10 +821,16 @@ if __name__ == '__main__':
     # Start the trading engine
     start_engine_loop()
 
+    # Log the server address
+    port = 5000
+    logger.info("=" * 50)
+    logger.info("Dashboard available at: http://localhost:%d", port)
+    logger.info("=" * 50)
+
     # Run Flask app with SocketIO
     socketio.run(
         app,
         host='0.0.0.0',
-        port=5000,
+        port=port,
         debug=os.getenv('FLASK_DEBUG', 'false').lower() == 'true'
     )
