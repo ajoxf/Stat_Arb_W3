@@ -17,7 +17,7 @@ from models import TradingConfig, Exchange, Trade, MarketTick, Signal, CRYPTO_AS
 from core.signals import SignalGenerator
 from core.trading_engine import TradingEngine
 from database.manager import DatabaseManager
-from adapters import OKXAdapter, BinanceAdapter, BybitAdapter
+from adapters import OKXAdapter, BinanceAdapter, BybitAdapter, OKXWebSocketManager
 
 # Load environment variables
 load_dotenv()
@@ -81,6 +81,14 @@ def start_engine_loop():
 
     # Cleanup old spread history to prevent database bloat
     db.cleanup_old_spread_history(config.asset, keep_count=2000)
+
+    # Set up WebSocket streaming if enabled
+    use_websocket = os.getenv('USE_WEBSOCKET', 'true').lower() == 'true'
+    if use_websocket:
+        is_demo = os.getenv('OKX_DEMO_MODE', 'true').lower() == 'true'
+        ws_manager = OKXWebSocketManager(is_demo=is_demo)
+        engine.set_websocket_manager(ws_manager)
+        logger.info("WebSocket streaming enabled (demo=%s)", is_demo)
 
     # Start engine
     asyncio.run_coroutine_threadsafe(engine.start(), loop)

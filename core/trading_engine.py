@@ -15,6 +15,7 @@ from models import (
 )
 from core.signals import SignalGenerator
 from adapters.base import ExchangeAdapter
+from adapters.okx_websocket import OKXWebSocketManager
 
 logger = logging.getLogger(__name__)
 
@@ -43,9 +44,13 @@ class TradingEngine:
         self.signal_generator = SignalGenerator(config)
         self.state = EngineState(paper_trading=config.paper_trading)
 
-        # Exchange adapters
+        # Exchange adapters (REST)
         self.spot_adapter: Optional[ExchangeAdapter] = None
         self.futures_adapter: Optional[ExchangeAdapter] = None
+
+        # WebSocket manager (optional, for real-time streaming)
+        self.ws_manager: Optional[OKXWebSocketManager] = None
+        self._use_websocket: bool = False
 
         # Current market data
         self.spot_tick: Optional[MarketTick] = None
@@ -78,12 +83,36 @@ class TradingEngine:
                     config.asset, config.paper_trading, config.algo_enabled)
 
     def set_adapters(self, spot: Optional[ExchangeAdapter], futures: Optional[ExchangeAdapter]) -> None:
-        """Set exchange adapters."""
+        """Set exchange adapters (REST mode)."""
         self.spot_adapter = spot
         self.futures_adapter = futures
-        logger.info("Adapters set: spot=%s, futures=%s",
+        self._use_websocket = False
+        logger.info("Adapters set (REST mode): spot=%s, futures=%s",
                     type(spot).__name__ if spot else None,
                     type(futures).__name__ if futures else None)
+
+    def set_websocket_manager(self, ws_manager: OKXWebSocketManager) -> None:
+        """Set WebSocket manager for real-time streaming."""
+        self.ws_manager = ws_manager
+        self._use_websocket = True
+
+        # Set up tick callback
+        ws_manager.add_tick_callback(self._on_websocket_tick)
+
+        logger.info("WebSocket manager set (streaming mode)")
+
+    def _on_websocket_tick(self, symbol: str, tick: MarketTick) -> None:
+        """Handle incoming WebSocket tick."""
+        # Update the appropriate tick based on symbol
+        if symbol == self.config.spot_symbol:
+            self.spot_tick = tick
+        elif symbol == self.config.futures_symbol:
+            self.futures_tick = tick
+
+        # Process tick if we have both
+        if self.spot_tick and self.futures_tick:
+            # Use create_task to avoid blocking the WebSocket callback
+            asyncio.create_task(self._process_tick_pair())
 
     def toggle_algo(self, enabled: bool) -> None:
         """Enable or disable algorithmic trading."""
@@ -101,14 +130,34 @@ class TradingEngine:
         self.state.is_running = True
         self.state.error = ""
 
-        logger.info("Starting trading engine for %s", self.config.asset)
+        logger.info("Starting trading engine for %s (websocket=%s)",
+                    self.config.asset, self._use_websocket)
 
-        self._task = asyncio.create_task(self._main_loop())
+        # Start WebSocket if configured
+        if self._use_websocket and self.ws_manager:
+            success = await self.ws_manager.start(
+                self.config.spot_symbol,
+                self.config.futures_symbol
+            )
+            if success:
+                logger.info("WebSocket streaming started for %s, %s",
+                            self.config.spot_symbol, self.config.futures_symbol)
+            else:
+                logger.warning("WebSocket start failed, falling back to REST polling")
+                self._use_websocket = False
+
+        # Start main loop (for REST polling or as a fallback)
+        if not self._use_websocket:
+            self._task = asyncio.create_task(self._main_loop())
 
     async def stop(self) -> None:
         """Stop the trading engine."""
         self._running = False
         self.state.is_running = False
+
+        # Stop WebSocket if running
+        if self.ws_manager:
+            await self.ws_manager.stop()
 
         if self._task:
             self._task.cancel()
@@ -141,7 +190,7 @@ class TradingEngine:
         logger.info("Main loop ended")
 
     async def _tick(self) -> None:
-        """Process one tick."""
+        """Process one tick (REST polling mode)."""
         # Fetch current prices
         spot_tick = await self._get_spot_tick()
         futures_tick = await self._get_futures_tick()
@@ -151,17 +200,25 @@ class TradingEngine:
 
         self.spot_tick = spot_tick
         self.futures_tick = futures_tick
+
+        await self._process_tick_pair()
+
+    async def _process_tick_pair(self) -> None:
+        """Process a pair of spot/futures ticks (shared by REST and WebSocket modes)."""
+        if not self.spot_tick or not self.futures_tick:
+            return
+
         self.state.last_tick_time = datetime.utcnow()
 
         # Update signal generator with position
         self.signal_generator.set_position(self.state.current_position)
 
         # Add tick to signal generator
-        self.signal_generator.add_tick(spot_tick, futures_tick)
+        self.signal_generator.add_tick(self.spot_tick, self.futures_tick)
 
         # Notify tick callback
         if self.on_tick:
-            self.on_tick(spot_tick, futures_tick)
+            self.on_tick(self.spot_tick, self.futures_tick)
 
         # Generate signal
         signal = self.signal_generator.generate_signal()

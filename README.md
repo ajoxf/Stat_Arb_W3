@@ -43,7 +43,8 @@ Stat_Arb_W3/
 ├── adapters/
 │   ├── __init__.py
 │   ├── base.py             # Abstract exchange interface
-│   ├── okx_adapter.py      # OKX implementation
+│   ├── okx_adapter.py      # OKX REST implementation
+│   ├── okx_websocket.py    # OKX WebSocket streaming
 │   ├── binance_adapter.py  # Binance implementation
 │   └── bybit_adapter.py    # Bybit implementation
 ├── core/
@@ -97,6 +98,9 @@ cp .env.example .env
 FLASK_SECRET_KEY=your-secret-key
 FLASK_DEBUG=true
 
+# WebSocket Streaming (real-time ~100ms updates)
+USE_WEBSOCKET=true
+
 # OKX
 OKX_API_KEY=your-api-key
 OKX_SECRET_KEY=your-secret-key
@@ -113,6 +117,21 @@ BYBIT_API_KEY=your-api-key
 BYBIT_SECRET_KEY=your-secret-key
 BYBIT_TESTNET=true
 ```
+
+### Data Feed Modes
+
+The system supports two modes for receiving price data:
+
+| Mode | Latency | Setting |
+|------|---------|---------|
+| **WebSocket Streaming** | ~100ms | `USE_WEBSOCKET=true` (default) |
+| **REST Polling** | 500ms | `USE_WEBSOCKET=false` |
+
+**WebSocket Streaming** (recommended):
+- Connects to OKX public WebSocket: `wss://ws.okx.com:8443/ws/v5/public`
+- Receives ticker updates every 100ms on price change
+- Automatic reconnection with exponential backoff
+- Heartbeat ping/pong to maintain connection
 
 ### Trading Parameters
 
