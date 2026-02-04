@@ -82,6 +82,12 @@ class TradingConfig:
     paper_trading: bool = True
     algo_enabled: bool = False
 
+    # Order execution mode: "MARKET" or "LIMIT"
+    order_execution_mode: str = "MARKET"
+    # Limit order settings
+    limit_order_timeout_sec: int = 30  # Max time to wait for fill
+    limit_order_price_offset_bps: float = 1.0  # Offset from best bid/ask in basis points
+
     # Estimated costs (for STD filter)
     estimated_costs_bps: float = 10.0  # 10 basis points
 
@@ -104,6 +110,9 @@ class TradingConfig:
             'max_position_size_usd': self.max_position_size_usd,
             'paper_trading': self.paper_trading,
             'algo_enabled': self.algo_enabled,
+            'order_execution_mode': self.order_execution_mode,
+            'limit_order_timeout_sec': self.limit_order_timeout_sec,
+            'limit_order_price_offset_bps': self.limit_order_price_offset_bps,
             'estimated_costs_bps': self.estimated_costs_bps,
         }
 

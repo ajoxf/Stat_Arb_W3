@@ -71,6 +71,9 @@ class DatabaseManager:
                     max_position_size_usd REAL DEFAULT 10000.0,
                     paper_trading INTEGER DEFAULT 1,
                     algo_enabled INTEGER DEFAULT 0,
+                    order_execution_mode TEXT DEFAULT 'MARKET',
+                    limit_order_timeout_sec INTEGER DEFAULT 30,
+                    limit_order_price_offset_bps REAL DEFAULT 1.0,
                     estimated_costs_bps REAL DEFAULT 10.0,
                     CHECK (id = 1)
                 )
@@ -221,6 +224,9 @@ class DatabaseManager:
                     max_position_size_usd=row["max_position_size_usd"],
                     paper_trading=bool(row["paper_trading"]),
                     algo_enabled=bool(row["algo_enabled"]),
+                    order_execution_mode=row["order_execution_mode"] if "order_execution_mode" in row.keys() else "MARKET",
+                    limit_order_timeout_sec=row["limit_order_timeout_sec"] if "limit_order_timeout_sec" in row.keys() else 30,
+                    limit_order_price_offset_bps=row["limit_order_price_offset_bps"] if "limit_order_price_offset_bps" in row.keys() else 1.0,
                     estimated_costs_bps=row["estimated_costs_bps"],
                 )
 
@@ -248,6 +254,9 @@ class DatabaseManager:
                     max_position_size_usd = ?,
                     paper_trading = ?,
                     algo_enabled = ?,
+                    order_execution_mode = ?,
+                    limit_order_timeout_sec = ?,
+                    limit_order_price_offset_bps = ?,
                     estimated_costs_bps = ?
                 WHERE id = 1
             """, (
@@ -267,6 +276,9 @@ class DatabaseManager:
                 config.max_position_size_usd,
                 int(config.paper_trading),
                 int(config.algo_enabled),
+                config.order_execution_mode,
+                config.limit_order_timeout_sec,
+                config.limit_order_price_offset_bps,
                 config.estimated_costs_bps,
             ))
             logger.info("Config saved")

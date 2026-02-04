@@ -14,6 +14,7 @@ from models import (
     OrderResult, CRYPTO_ASSETS, get_symbols_for_asset
 )
 from core.signals import SignalGenerator
+from core.order_executor import OrderExecutor
 from adapters.base import ExchangeAdapter
 from adapters.okx_websocket import OKXWebSocketManager
 
@@ -48,6 +49,9 @@ class TradingEngine:
         self.spot_adapter: Optional[ExchangeAdapter] = None
         self.futures_adapter: Optional[ExchangeAdapter] = None
 
+        # Order executor for spread trades
+        self.order_executor: Optional[OrderExecutor] = None
+
         # WebSocket manager (optional, for real-time streaming)
         self.ws_manager: Optional[OKXWebSocketManager] = None
         self._use_websocket: bool = False
@@ -79,14 +83,23 @@ class TradingEngine:
         self.signal_generator.update_config(config)
         self.state.paper_trading = config.paper_trading
         self.state.algo_enabled = config.algo_enabled
-        logger.info("Trading config updated: asset=%s, paper=%s, algo=%s",
-                    config.asset, config.paper_trading, config.algo_enabled)
+        if self.order_executor:
+            self.order_executor.update_config(config)
+        logger.info("Trading config updated: asset=%s, paper=%s, algo=%s, exec_mode=%s",
+                    config.asset, config.paper_trading, config.algo_enabled,
+                    config.order_execution_mode)
 
     def set_adapters(self, spot: Optional[ExchangeAdapter], futures: Optional[ExchangeAdapter]) -> None:
         """Set exchange adapters (REST mode)."""
         self.spot_adapter = spot
         self.futures_adapter = futures
         self._use_websocket = False
+
+        # Initialize order executor if we have both adapters
+        if spot and futures:
+            self.order_executor = OrderExecutor(self.config, spot, futures)
+            logger.info("Order executor initialized (mode=%s)", self.config.order_execution_mode)
+
         logger.info("Adapters set (REST mode): spot=%s, futures=%s",
                     type(spot).__name__ if spot else None,
                     type(futures).__name__ if futures else None)
@@ -413,47 +426,37 @@ class TradingEngine:
             self.on_trade(trade)
 
     async def _execute_entry_orders(self, trade: Trade, signal: Signal) -> bool:
-        """Execute entry orders on exchanges."""
-        if not self.spot_adapter or not self.futures_adapter:
-            logger.error("Adapters not configured for live trading")
+        """Execute entry orders on exchanges using the order executor."""
+        if not self.order_executor:
+            logger.error("Order executor not configured for live trading")
+            return False
+
+        if not self.spot_tick or not self.futures_tick:
+            logger.error("No tick data available for order execution")
             return False
 
         try:
-            if signal.signal_type == "LONG":
-                # Long spread: buy spot, sell futures
-                spot_result = await self.spot_adapter.place_order(
-                    symbol=self.config.spot_symbol,
-                    side="BUY",
-                    order_type="MARKET",
-                    quantity=trade.quantity,
-                )
-                futures_result = await self.futures_adapter.place_order(
-                    symbol=self.config.futures_symbol,
-                    side="SELL",
-                    order_type="MARKET",
-                    quantity=trade.quantity,
-                )
-            else:
-                # Short spread: sell spot, buy futures
-                spot_result = await self.spot_adapter.place_order(
-                    symbol=self.config.spot_symbol,
-                    side="SELL",
-                    order_type="MARKET",
-                    quantity=trade.quantity,
-                )
-                futures_result = await self.futures_adapter.place_order(
-                    symbol=self.config.futures_symbol,
-                    side="BUY",
-                    order_type="MARKET",
-                    quantity=trade.quantity,
-                )
+            spread_order = await self.order_executor.execute_entry(
+                position_type=signal.signal_type,
+                spot_tick=self.spot_tick,
+                futures_tick=self.futures_tick,
+                quantity=trade.quantity,
+            )
 
-            if spot_result.success and futures_result.success:
-                trade.spot_order_id = spot_result.order_id
-                trade.futures_order_id = futures_result.order_id
+            if spread_order and spread_order.is_complete:
+                trade.spot_order_id = spread_order.spot_leg.order_id
+                trade.futures_order_id = spread_order.futures_leg.order_id
+                # Update actual fill prices
+                trade.entry_spot_price = spread_order.spot_leg.filled_price
+                trade.entry_futures_price = spread_order.futures_leg.filled_price
+                logger.info("Entry orders executed: mode=%s, spot_id=%s, futures_id=%s",
+                            self.config.order_execution_mode,
+                            trade.spot_order_id, trade.futures_order_id)
                 return True
             else:
-                error = f"Order failed: spot={spot_result.error}, futures={futures_result.error}"
+                error = "Spread order failed or incomplete"
+                if spread_order and spread_order.has_partial_fill:
+                    error = "Spread order had partial fill - leg risk handled"
                 logger.error(error)
                 self.state.error = error
                 return False
@@ -465,46 +468,36 @@ class TradingEngine:
             return False
 
     async def _execute_exit_orders(self, trade: Trade, signal: Signal) -> bool:
-        """Execute exit orders on exchanges."""
-        if not self.spot_adapter or not self.futures_adapter:
-            logger.error("Adapters not configured for live trading")
+        """Execute exit orders on exchanges using the order executor."""
+        if not self.order_executor:
+            logger.error("Order executor not configured for live trading")
+            return False
+
+        if not self.spot_tick or not self.futures_tick:
+            logger.error("No tick data available for order execution")
             return False
 
         try:
-            if trade.position_type == "LONG":
-                # Close long spread: sell spot, buy futures
-                spot_result = await self.spot_adapter.place_order(
-                    symbol=self.config.spot_symbol,
-                    side="SELL",
-                    order_type="MARKET",
-                    quantity=trade.quantity,
-                )
-                futures_result = await self.futures_adapter.place_order(
-                    symbol=self.config.futures_symbol,
-                    side="BUY",
-                    order_type="MARKET",
-                    quantity=trade.quantity,
-                )
+            spread_order = await self.order_executor.execute_exit(
+                position_type=trade.position_type,
+                spot_tick=self.spot_tick,
+                futures_tick=self.futures_tick,
+                quantity=trade.quantity,
+            )
+
+            if spread_order and spread_order.is_complete:
+                # Update actual exit prices from fills
+                trade.exit_spot_price = spread_order.spot_leg.filled_price
+                trade.exit_futures_price = spread_order.futures_leg.filled_price
+                logger.info("Exit orders executed: mode=%s", self.config.order_execution_mode)
+                return True
             else:
-                # Close short spread: buy spot, sell futures
-                spot_result = await self.spot_adapter.place_order(
-                    symbol=self.config.spot_symbol,
-                    side="BUY",
-                    order_type="MARKET",
-                    quantity=trade.quantity,
-                )
-                futures_result = await self.futures_adapter.place_order(
-                    symbol=self.config.futures_symbol,
-                    side="SELL",
-                    order_type="MARKET",
-                    quantity=trade.quantity,
-                )
-
-            if not spot_result.success or not futures_result.success:
-                error = f"Exit order failed: spot={spot_result.error}, futures={futures_result.error}"
+                error = "Exit spread order failed or incomplete"
+                if spread_order and spread_order.has_partial_fill:
+                    error = "Exit order had partial fill - leg risk handled"
                 logger.error(error)
-
-            return True
+                # Still return True since leg risk is handled
+                return True
 
         except Exception as e:
             logger.exception("Error executing exit orders: %s", e)
