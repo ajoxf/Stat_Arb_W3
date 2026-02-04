@@ -37,6 +37,7 @@ class SignalGenerator:
     def __init__(self, config: TradingConfig):
         self.config = config
         self.lookback = config.lookback_period
+        self.stats_update_interval = config.stats_update_interval  # Seconds
 
         # Rolling data storage
         self.spread_history: deque = deque(maxlen=self.lookback)
@@ -49,6 +50,10 @@ class SignalGenerator:
         self.current_mean: float = 0.0
         self.current_std: float = 0.0
         self.current_hurst: float = 0.5
+
+        # Stats update timing
+        self.last_stats_update: Optional[datetime] = None
+        self._stats_initialized: bool = False
 
         # SD touch tracking
         self.last_sd_level: float = 0.0
@@ -63,6 +68,8 @@ class SignalGenerator:
     def update_config(self, config: TradingConfig) -> None:
         """Update configuration."""
         self.config = config
+        self.stats_update_interval = config.stats_update_interval
+
         if config.lookback_period != self.lookback:
             self.lookback = config.lookback_period
             # Resize deques
@@ -96,22 +103,47 @@ class SignalGenerator:
         self._update_statistics()
 
     def _update_statistics(self) -> None:
-        """Update rolling statistics."""
+        """
+        Update rolling statistics.
+
+        Mean and STD are only recalculated at the configured interval
+        (stats_update_interval seconds). Z-score is always calculated
+        using the current spread and the (potentially stale) mean/std.
+
+        This provides stable bands for easier entry/exit tracking.
+        """
         if len(self.spread_history) < 2:
             return
 
-        spreads = np.array(self.spread_history)
-        self.current_mean = float(np.mean(spreads))
-        self.current_std = float(np.std(spreads, ddof=1))
+        now = datetime.utcnow()
 
+        # Check if we need to recalculate mean/std
+        should_update_stats = (
+            not self._stats_initialized or
+            self.last_stats_update is None or
+            (now - self.last_stats_update).total_seconds() >= self.stats_update_interval
+        )
+
+        if should_update_stats:
+            spreads = np.array(self.spread_history)
+            self.current_mean = float(np.mean(spreads))
+            self.current_std = float(np.std(spreads, ddof=1))
+
+            # Update Hurst if we have enough data
+            if len(self.spread_history) >= 20:
+                self.current_hurst = self._calculate_hurst(spreads)
+
+            self.last_stats_update = now
+            self._stats_initialized = True
+
+            logger.debug("Stats updated: mean=%.6f, std=%.6f, hurst=%.4f",
+                        self.current_mean, self.current_std, self.current_hurst)
+
+        # Always update z-score with current spread
         if self.current_std > 0:
             self.current_zscore = (self.current_spread - self.current_mean) / self.current_std
         else:
             self.current_zscore = 0.0
-
-        # Update Hurst if we have enough data
-        if len(self.spread_history) >= 20:
-            self.current_hurst = self._calculate_hurst(spreads)
 
     def _calculate_hurst(self, series: np.ndarray) -> float:
         """
@@ -348,6 +380,13 @@ class SignalGenerator:
 
     def get_state(self) -> Dict[str, Any]:
         """Get current state for dashboard."""
+        # Calculate seconds until next stats update
+        if self.last_stats_update:
+            elapsed = (datetime.utcnow() - self.last_stats_update).total_seconds()
+            next_update_in = max(0, self.stats_update_interval - elapsed)
+        else:
+            next_update_in = 0
+
         return {
             'zscore': round(self.current_zscore, 4),
             'spread': round(self.current_spread, 6),
@@ -357,6 +396,9 @@ class SignalGenerator:
             'data_points': len(self.spread_history),
             'lookback': self.lookback,
             'position': self.current_position,
+            'stats_update_interval': self.stats_update_interval,
+            'last_stats_update': self.last_stats_update.isoformat() if self.last_stats_update else None,
+            'next_stats_update_in': round(next_update_in),
         }
 
     def load_spread_history(self, spreads: List[float]) -> None:
@@ -386,3 +428,5 @@ class SignalGenerator:
         self.last_sd_level = 0.0
         self.sd_touch_events.clear()
         self.current_position = "NONE"
+        self.last_stats_update = None
+        self._stats_initialized = False

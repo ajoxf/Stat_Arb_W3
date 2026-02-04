@@ -70,7 +70,20 @@
                         <div class="col-md-6">
                             <label class="form-label">Lookback Period</label>
                             <input type="number" class="form-control" id="lookback_period" name="lookback_period" value="{{ config.lookback_period }}" min="20" max="500">
-                            <small class="text-secondary">Number of ticks for rolling mean/std calculation</small>
+                            <small class="text-secondary">Number of data points for rolling mean/std</small>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">Stats Update Interval (seconds)</label>
+                            <select class="form-select" id="stats_update_interval" name="stats_update_interval">
+                                <option value="0" {% if config.stats_update_interval == 0 %}selected{% endif %}>Every tick (real-time)</option>
+                                <option value="60" {% if config.stats_update_interval == 60 %}selected{% endif %}>1 minute</option>
+                                <option value="300" {% if config.stats_update_interval == 300 %}selected{% endif %}>5 minutes</option>
+                                <option value="600" {% if config.stats_update_interval == 600 %}selected{% endif %}>10 minutes</option>
+                                <option value="900" {% if config.stats_update_interval == 900 %}selected{% endif %}>15 minutes</option>
+                                <option value="1800" {% if config.stats_update_interval == 1800 %}selected{% endif %}>30 minutes</option>
+                                <option value="3600" {% if config.stats_update_interval == 3600 %}selected{% endif %}>1 hour</option>
+                            </select>
+                            <small class="text-secondary">How often to recalculate mean/std (bands stay stable)</small>
                         </div>
                     </div>
 

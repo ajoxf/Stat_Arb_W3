@@ -66,6 +66,7 @@ class TradingConfig:
 
     # Rolling window settings
     lookback_period: int = 100
+    stats_update_interval: int = 300  # Seconds between mean/std recalculation (default 5 min)
 
     # Filters
     hurst_enabled: bool = True
@@ -94,6 +95,7 @@ class TradingConfig:
             'exit_threshold': self.exit_threshold,
             'stop_loss_threshold': self.stop_loss_threshold,
             'lookback_period': self.lookback_period,
+            'stats_update_interval': self.stats_update_interval,
             'hurst_enabled': self.hurst_enabled,
             'hurst_threshold': self.hurst_threshold,
             'std_filter_enabled': self.std_filter_enabled,

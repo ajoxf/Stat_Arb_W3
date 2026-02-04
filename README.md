@@ -141,8 +141,19 @@ The system supports two modes for receiving price data:
 | Exit Threshold | 0.5 | Z-score level for exit signals |
 | Stop Loss Threshold | 4.0 | Z-score level for stop loss |
 | Lookback Period | 100 | Rolling window size for mean/std |
+| Stats Update Interval | 300s | How often to recalculate mean/std (0 = every tick) |
 | Hurst Threshold | 0.5 | Max Hurst exponent for entries |
 | Min STD Multiple | 1.5 | Minimum profitability ratio |
+
+### Stats Update Interval
+
+The **Stats Update Interval** controls how often the rolling mean and standard deviation are recalculated:
+
+- **0 (Every tick)**: Mean/std recalculated on every price update (~100ms). Bands shift constantly.
+- **300 (5 minutes)**: Mean/std recalculated every 5 minutes. Bands stay stable, making entries/exits easier to track.
+- **Higher values**: More stable bands, but slower adaptation to market changes.
+
+The Z-score is always calculated in real-time using the current spread against the (potentially older) mean/std.
 
 ## Usage
 

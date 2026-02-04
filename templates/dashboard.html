@@ -145,6 +145,13 @@
                             <div class="metric-label">Data Points</div>
                         </div>
                     </div>
+                    <div class="col-12 mt-2">
+                        <div class="metric-card" style="background: var(--bg-tertiary); border-radius: 4px; padding: 0.5rem;">
+                            <small class="text-secondary">
+                                <i class="bi bi-clock me-1"></i>Stats update in: <span id="stats-countdown">-</span>s
+                            </small>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -420,6 +427,17 @@
         document.getElementById('spread-std').textContent = (data.spread_std || 0).toFixed(6);
         document.getElementById('hurst-value').textContent = (data.hurst || 0.5).toFixed(4);
         document.getElementById('data-points').textContent = data.data_points || 0;
+
+        // Stats update countdown
+        const countdown = data.next_stats_update_in;
+        const countdownEl = document.getElementById('stats-countdown');
+        if (countdown !== undefined && countdown > 0) {
+            countdownEl.textContent = countdown;
+        } else if (data.stats_update_interval === 0) {
+            countdownEl.textContent = 'real-time';
+        } else {
+            countdownEl.textContent = 'now';
+        }
 
         // Filter status
         updateFilterStatus('hurst-status', data.hurst_ok, data.hurst);
