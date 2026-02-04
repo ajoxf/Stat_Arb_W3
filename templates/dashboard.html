@@ -273,6 +273,10 @@
                         <span class="text-secondary">Required minimum:</span>
                         <span id="std-ratio-required">-</span>
                     </div>
+                    <div class="d-flex justify-content-between mb-1">
+                        <span class="text-secondary">Using fee:</span>
+                        <span id="fee-type-used">-</span>
+                    </div>
                     <div id="std-explanation" class="text-secondary mt-1 pt-1" style="border-top: 1px solid var(--border-color); font-size: 0.75rem;">
                         Spread must move 1.1x trading costs to be profitable
                     </div>
@@ -763,6 +767,13 @@
                     const coverage = (data.std_ratio * 100 / data.std_ratio_required).toFixed(0);
                     stdExplanation.innerHTML = '<span class="price-down">&#10007; Volatility too low (' + coverage + '% of min required)</span>';
                 }
+            }
+
+            // Show which fee type is being used
+            const feeTypeEl = document.getElementById('fee-type-used');
+            if (feeTypeEl && data.order_mode && data.fee_bps_used !== undefined) {
+                const feeType = data.order_mode === 'LIMIT' ? 'Maker' : 'Taker';
+                feeTypeEl.textContent = feeType + ' (' + data.fee_bps_used + ' bps)';
             }
         }
 

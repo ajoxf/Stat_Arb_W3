@@ -216,13 +216,21 @@ class SignalGenerator:
         if self.current_std <= 0:
             return False, 0.0
 
+        # Use appropriate fee based on order execution mode
+        # Market orders = taker fee, Limit orders = maker fee
+        if self.config.order_execution_mode == "LIMIT":
+            fee_bps = self.config.maker_fee_bps
+        else:
+            fee_bps = self.config.taker_fee_bps
+
         # Estimated round-trip cost in price terms
-        # costs_bps is per side, so round-trip is 2x
+        # fee_bps is per side, so round-trip is 2x (entry + exit)
+        # Also multiply by 2 for both legs (spot + futures)
         spot_price = self.spot_prices[-1] if self.spot_prices else 0
         if spot_price <= 0:
             return False, 0.0
 
-        costs_price = (self.config.estimated_costs_bps / 10000) * spot_price * 2
+        costs_price = (fee_bps / 10000) * spot_price * 4  # 2 sides * 2 legs
 
         # Profitability ratio: how many times STD covers the costs
         profitability_ratio = self.current_std / costs_price if costs_price > 0 else float('inf')
@@ -413,6 +421,8 @@ class SignalGenerator:
             'std_ratio': round(std_ratio, 2) if std_ratio != float('inf') else None,
             'std_ratio_required': self.config.min_std_multiple,
             'std_filter_enabled': self.config.std_filter_enabled,
+            'order_mode': self.config.order_execution_mode,
+            'fee_bps_used': self.config.maker_fee_bps if self.config.order_execution_mode == "LIMIT" else self.config.taker_fee_bps,
             'regime': regime if data_ready else "COLLECTING",
             'data_points': len(self.spread_history),
             'lookback': self.lookback,

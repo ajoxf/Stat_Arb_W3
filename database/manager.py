@@ -74,6 +74,8 @@ class DatabaseManager:
                     order_execution_mode TEXT DEFAULT 'MARKET',
                     limit_order_timeout_sec INTEGER DEFAULT 30,
                     limit_order_price_offset_bps REAL DEFAULT 1.0,
+                    taker_fee_bps REAL DEFAULT 5.0,
+                    maker_fee_bps REAL DEFAULT 2.0,
                     estimated_costs_bps REAL DEFAULT 10.0,
                     CHECK (id = 1)
                 )
@@ -195,6 +197,15 @@ class DatabaseManager:
             if cursor.fetchone()[0] == 0:
                 cursor.execute("INSERT INTO trading_config (id) VALUES (1)")
 
+            # Migrations: Add new columns if they don't exist
+            cursor.execute("PRAGMA table_info(trading_config)")
+            existing_columns = {row[1] for row in cursor.fetchall()}
+
+            if 'taker_fee_bps' not in existing_columns:
+                cursor.execute("ALTER TABLE trading_config ADD COLUMN taker_fee_bps REAL DEFAULT 5.0")
+            if 'maker_fee_bps' not in existing_columns:
+                cursor.execute("ALTER TABLE trading_config ADD COLUMN maker_fee_bps REAL DEFAULT 2.0")
+
             logger.info("Database initialized: %s", self.db_path)
 
     # Trading Config Methods
@@ -227,6 +238,8 @@ class DatabaseManager:
                     order_execution_mode=row["order_execution_mode"] if "order_execution_mode" in row.keys() else "MARKET",
                     limit_order_timeout_sec=row["limit_order_timeout_sec"] if "limit_order_timeout_sec" in row.keys() else 30,
                     limit_order_price_offset_bps=row["limit_order_price_offset_bps"] if "limit_order_price_offset_bps" in row.keys() else 1.0,
+                    taker_fee_bps=row["taker_fee_bps"] if "taker_fee_bps" in row.keys() else 5.0,
+                    maker_fee_bps=row["maker_fee_bps"] if "maker_fee_bps" in row.keys() else 2.0,
                     estimated_costs_bps=row["estimated_costs_bps"],
                 )
 
@@ -257,6 +270,8 @@ class DatabaseManager:
                     order_execution_mode = ?,
                     limit_order_timeout_sec = ?,
                     limit_order_price_offset_bps = ?,
+                    taker_fee_bps = ?,
+                    maker_fee_bps = ?,
                     estimated_costs_bps = ?
                 WHERE id = 1
             """, (
@@ -279,6 +294,8 @@ class DatabaseManager:
                 config.order_execution_mode,
                 config.limit_order_timeout_sec,
                 config.limit_order_price_offset_bps,
+                config.taker_fee_bps,
+                config.maker_fee_bps,
                 config.estimated_costs_bps,
             ))
             logger.info("Config saved")

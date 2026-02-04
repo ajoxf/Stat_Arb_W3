@@ -121,18 +121,30 @@
                         <div class="col-12">
                             <h6 class="text-secondary mb-3">Position Sizing</h6>
                         </div>
-                        <div class="col-md-4">
+                        <div class="col-md-6">
                             <label class="form-label">Position Size (USD)</label>
                             <input type="number" class="form-control" id="position_size_usd" name="position_size_usd" value="{{ config.position_size_usd }}" step="100" min="100">
                         </div>
-                        <div class="col-md-4">
+                        <div class="col-md-6">
                             <label class="form-label">Max Position Size (USD)</label>
                             <input type="number" class="form-control" id="max_position_size_usd" name="max_position_size_usd" value="{{ config.max_position_size_usd }}" step="100" min="100">
                         </div>
-                        <div class="col-md-4">
-                            <label class="form-label">Est. Costs (bps)</label>
-                            <input type="number" class="form-control" id="estimated_costs_bps" name="estimated_costs_bps" value="{{ config.estimated_costs_bps }}" step="1" min="1" max="100">
-                            <small class="text-secondary">Estimated trading costs per side</small>
+                    </div>
+
+                    <div class="row mb-4">
+                        <div class="col-12">
+                            <h6 class="text-secondary mb-3">Fee Estimates (for STD Filter)</h6>
+                            <small class="text-secondary d-block mb-3">STD Filter uses the appropriate fee based on your Order Execution Mode</small>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">Taker Fee (bps) - Market Orders</label>
+                            <input type="number" class="form-control" id="taker_fee_bps" name="taker_fee_bps" value="{{ config.taker_fee_bps }}" step="0.5" min="0" max="50">
+                            <small class="text-secondary">Typical: 5 bps (0.05%)</small>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">Maker Fee (bps) - Limit Orders</label>
+                            <input type="number" class="form-control" id="maker_fee_bps" name="maker_fee_bps" value="{{ config.maker_fee_bps }}" step="0.5" min="0" max="50">
+                            <small class="text-secondary">Typical: 2 bps (0.02%) or rebate</small>
                         </div>
                     </div>
 
@@ -253,7 +265,8 @@
             min_std_multiple: parseFloat(document.getElementById('min_std_multiple').value),
             position_size_usd: parseFloat(document.getElementById('position_size_usd').value),
             max_position_size_usd: parseFloat(document.getElementById('max_position_size_usd').value),
-            estimated_costs_bps: parseFloat(document.getElementById('estimated_costs_bps').value),
+            taker_fee_bps: parseFloat(document.getElementById('taker_fee_bps').value),
+            maker_fee_bps: parseFloat(document.getElementById('maker_fee_bps').value),
             paper_trading: document.getElementById('paper_trading').checked,
             order_execution_mode: document.getElementById('order_execution_mode').value,
             limit_order_timeout_sec: parseInt(document.getElementById('limit_order_timeout_sec').value),
@@ -297,7 +310,8 @@
                 document.getElementById('min_std_multiple').value = config.min_std_multiple;
                 document.getElementById('position_size_usd').value = config.position_size_usd;
                 document.getElementById('max_position_size_usd').value = config.max_position_size_usd;
-                document.getElementById('estimated_costs_bps').value = config.estimated_costs_bps;
+                document.getElementById('taker_fee_bps').value = config.taker_fee_bps || 5.0;
+                document.getElementById('maker_fee_bps').value = config.maker_fee_bps || 2.0;
                 document.getElementById('paper_trading').checked = config.paper_trading;
                 document.getElementById('order_execution_mode').value = config.order_execution_mode;
                 document.getElementById('limit_order_timeout_sec').value = config.limit_order_timeout_sec;

@@ -88,8 +88,12 @@ class TradingConfig:
     limit_order_timeout_sec: int = 30  # Max time to wait for fill
     limit_order_price_offset_bps: float = 1.0  # Offset from best bid/ask in basis points
 
-    # Estimated costs (for STD filter)
-    estimated_costs_bps: float = 10.0  # 10 basis points
+    # Fee estimates for STD filter (per side, in basis points)
+    taker_fee_bps: float = 5.0   # Market orders - typically 0.05%
+    maker_fee_bps: float = 2.0   # Limit orders - typically 0.02% (or rebate)
+
+    # Legacy field - now computed from taker/maker fees based on order mode
+    estimated_costs_bps: float = 10.0  # Kept for backward compatibility
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -113,6 +117,8 @@ class TradingConfig:
             'order_execution_mode': self.order_execution_mode,
             'limit_order_timeout_sec': self.limit_order_timeout_sec,
             'limit_order_price_offset_bps': self.limit_order_price_offset_bps,
+            'taker_fee_bps': self.taker_fee_bps,
+            'maker_fee_bps': self.maker_fee_bps,
             'estimated_costs_bps': self.estimated_costs_bps,
         }
 
