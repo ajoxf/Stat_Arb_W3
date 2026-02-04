@@ -69,8 +69,8 @@
                         </div>
                         <div class="col-md-6">
                             <label class="form-label">Lookback Period</label>
-                            <input type="number" class="form-control" id="lookback_period" name="lookback_period" value="{{ config.lookback_period }}" min="20" max="500">
-                            <small class="text-secondary">Number of data points for rolling mean/std</small>
+                            <input type="number" class="form-control" id="lookback_period" name="lookback_period" value="{{ config.lookback_period }}" min="20" max="100000">
+                            <small class="text-secondary">Number of data points for rolling mean/std (e.g., 18000 = ~90 min at 3 ticks/sec)</small>
                         </div>
                         <div class="col-md-6">
                             <label class="form-label">Stats Update Interval (seconds)</label>
