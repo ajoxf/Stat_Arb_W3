@@ -146,11 +146,16 @@ if hasattr(signal, 'SIGTERM'):
 # Callback functions for engine events
 def on_tick_callback(spot_tick: MarketTick, futures_tick: MarketTick):
     """Handle tick updates."""
-    socketio.emit('tick', {
-        'spot': spot_tick.to_dict(),
-        'futures': futures_tick.to_dict(),
-        'timestamp': datetime.now(timezone.utc).isoformat(),
-    })
+    try:
+        tick_data = {
+            'spot': spot_tick.to_dict(),
+            'futures': futures_tick.to_dict(),
+            'timestamp': datetime.now(timezone.utc).isoformat(),
+        }
+        # Use socketio.emit with explicit namespace for background thread
+        socketio.emit('tick', tick_data, namespace='/')
+    except Exception as e:
+        logger.error("Error emitting tick: %s", e)
 
     # Save spread to database for persistence/recovery
     spread = spot_tick.mid - futures_tick.mid
@@ -164,10 +169,12 @@ def on_tick_callback(spot_tick: MarketTick, futures_tick: MarketTick):
 
 def on_signal_callback(signal: Signal):
     """Handle signal updates."""
-    signal_data = signal.to_dict()
-    signal_data['asset'] = config.asset
-
-    socketio.emit('signal', signal_data)
+    try:
+        signal_data = signal.to_dict()
+        signal_data['asset'] = config.asset
+        socketio.emit('signal', signal_data, namespace='/')
+    except Exception as e:
+        logger.error("Error emitting signal: %s", e)
 
     # Log significant signals
     if signal.signal_type != "NONE":
@@ -176,15 +183,20 @@ def on_signal_callback(signal: Signal):
 
 def on_trade_callback(trade: Trade):
     """Handle trade updates."""
-    # Save to database
-    trade.id = db.save_trade(trade)
-
-    socketio.emit('trade', trade.to_dict())
+    try:
+        # Save to database
+        trade.id = db.save_trade(trade)
+        socketio.emit('trade', trade.to_dict(), namespace='/')
+    except Exception as e:
+        logger.error("Error emitting trade: %s", e)
 
 
 def on_error_callback(error: str):
     """Handle error updates."""
-    socketio.emit('error', {'message': error})
+    try:
+        socketio.emit('error', {'message': error}, namespace='/')
+    except Exception as e:
+        logger.error("Error emitting error event: %s", e)
 
 
 def on_sd_touch_callback(event):
