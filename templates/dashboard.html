@@ -733,25 +733,35 @@
         const stdRatioRequired = document.getElementById('std-ratio-required');
         const stdExplanation = document.getElementById('std-explanation');
         if (stdRatioValue && stdRatioRequired) {
-            if (data.std_ratio !== null && data.std_ratio !== undefined) {
+            const hasRatio = data.std_ratio !== null && data.std_ratio !== undefined;
+            const hasRequired = data.std_ratio_required !== null && data.std_ratio_required !== undefined;
+
+            if (hasRatio) {
                 stdRatioValue.textContent = data.std_ratio.toFixed(2) + 'x';
-                stdRatioValue.className = data.std_filter_ok ? 'price-up fw-bold' : 'price-down fw-bold';
+                // Color based on actual ratio comparison, not std_filter_ok (which can be null)
+                const meetsRequirement = hasRequired && data.std_ratio >= data.std_ratio_required;
+                stdRatioValue.className = meetsRequirement ? 'price-up fw-bold' : 'price-down fw-bold';
             } else {
                 stdRatioValue.textContent = '-';
                 stdRatioValue.className = 'fw-bold';
             }
-            if (data.std_ratio_required !== null && data.std_ratio_required !== undefined) {
+
+            if (hasRequired) {
                 stdRatioRequired.textContent = data.std_ratio_required.toFixed(1) + 'x';
             } else {
                 stdRatioRequired.textContent = '-';
             }
-            // Dynamic explanation
-            if (stdExplanation && data.std_ratio !== null && data.std_ratio_required !== null) {
-                if (data.std_filter_ok) {
-                    stdExplanation.innerHTML = '<span class="price-up">Volatility covers costs ' + data.std_ratio.toFixed(1) + 'x (need ' + data.std_ratio_required.toFixed(1) + 'x)</span>';
+
+            // Dynamic explanation based on actual values
+            if (stdExplanation) {
+                if (!hasRatio || !hasRequired) {
+                    stdExplanation.innerHTML = '<span class="text-secondary">Collecting data...</span>';
+                } else if (data.std_ratio >= data.std_ratio_required) {
+                    const coverage = (data.std_ratio * 100 / data.std_ratio_required).toFixed(0);
+                    stdExplanation.innerHTML = '<span class="price-up">&#10003; Sufficient volatility (' + coverage + '% of min required)</span>';
                 } else {
-                    const shortfall = ((data.std_ratio_required - data.std_ratio) / data.std_ratio_required * 100).toFixed(0);
-                    stdExplanation.innerHTML = '<span class="price-down">Volatility too low - only covers ' + (data.std_ratio * 100 / data.std_ratio_required).toFixed(0) + '% of required</span>';
+                    const coverage = (data.std_ratio * 100 / data.std_ratio_required).toFixed(0);
+                    stdExplanation.innerHTML = '<span class="price-down">&#10007; Volatility too low (' + coverage + '% of min required)</span>';
                 }
             }
         }
