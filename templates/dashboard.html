@@ -369,20 +369,46 @@
     let spreadHistory = [];
     const maxDataPoints = 100;
 
+    // Track last update time for fallback polling
+    let lastUpdateTime = Date.now();
+    const UPDATE_INTERVAL = 300; // 300ms update interval
+
     // Socket event handlers
     socket.on('tick', function(data) {
         updatePrices(data.spot, data.futures);
+        lastUpdateTime = Date.now();
     });
 
     socket.on('signal', function(data) {
         updateSignal(data);
         updateCharts(data);
+        lastUpdateTime = Date.now();
     });
 
     socket.on('trade', function(data) {
         addTradeToTable(data);
         showToast(`Trade ${data.is_open ? 'opened' : 'closed'}: ${data.position_type}`, 'info');
     });
+
+    // Fallback polling every 300ms if WebSocket updates stop
+    setInterval(function() {
+        // If no update in last 500ms, poll the API
+        if (Date.now() - lastUpdateTime > 500) {
+            fetch('/api/engine/status')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.spot_tick) {
+                        updatePrices(data.spot_tick, data.futures_tick);
+                    }
+                    if (data.signal) {
+                        updateSignal(data.signal);
+                        updateCharts(data.signal);
+                    }
+                    lastUpdateTime = Date.now();
+                })
+                .catch(err => console.log('Polling error:', err));
+        }
+    }, UPDATE_INTERVAL);
 
     function updatePrices(spot, futures) {
         if (spot) {
