@@ -420,6 +420,51 @@ def get_trades():
     return jsonify([t.to_dict() for t in trades])
 
 
+@app.route('/api/account-info', methods=['GET'])
+def get_account_info():
+    """Get account information from connected exchange."""
+    account_data = {
+        'connected': False,
+        'exchange': 'Not Connected',
+        'balance': 0,
+        'available': 0,
+        'margin_used': 0,
+        'unrealized_pnl': 0,
+        'daily_pnl': 0,
+        'is_demo': True,
+    }
+
+    # Check if we have adapters connected
+    if engine.spot_adapter:
+        try:
+            # Get account info from adapter
+            async def fetch_account():
+                if hasattr(engine.spot_adapter, 'get_account_info'):
+                    return await engine.spot_adapter.get_account_info()
+                return None
+
+            if loop:
+                future = asyncio.run_coroutine_threadsafe(fetch_account(), loop)
+                account = future.result(timeout=10)
+                if account:
+                    account_data['connected'] = True
+                    account_data['exchange'] = account.exchange
+                    account_data['balance'] = account.balance_usd
+                    account_data['available'] = account.available_balance_usd
+                    account_data['margin_used'] = account.margin_used
+                    account_data['unrealized_pnl'] = account.unrealized_pnl
+                    account_data['is_demo'] = engine.spot_adapter.is_testnet if hasattr(engine.spot_adapter, 'is_testnet') else True
+        except Exception as e:
+            logger.warning("Error fetching account info: %s", e)
+
+    # Calculate daily P&L from trades
+    stats = db.get_trade_statistics()
+    if stats:
+        account_data['daily_pnl'] = stats.get('daily_pnl', 0)
+
+    return jsonify(account_data)
+
+
 @app.route('/api/trade-journal', methods=['GET'])
 def get_trade_journal():
     """Get trade journal with statistics."""
