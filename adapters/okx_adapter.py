@@ -314,31 +314,95 @@ class OKXAdapter(ExchangeAdapter):
             return OrderResult(success=False, error=str(e))
 
     async def get_account_info(self) -> Optional[AccountInfo]:
-        """Get account information."""
+        """Get detailed account information including margin requirements."""
         try:
             result = await self._request("GET", "/api/v5/account/balance")
 
             if result and result.get("code") == "0" and result.get("data"):
                 data = result["data"][0]
                 total_eq = float(data.get("totalEq", 0))
+                imr = float(data.get("imr") or 0)  # Initial margin requirement
+                mmr = float(data.get("mmr") or 0)  # Maintenance margin requirement
+                upl = float(data.get("upl") or 0)  # Unrealized P&L
 
                 # Get USDT balance specifically
                 usdt_balance = 0
+                usdt_frozen = 0
                 for detail in data.get("details", []):
                     if detail.get("ccy") == "USDT":
                         usdt_balance = float(detail.get("availBal", 0))
+                        usdt_frozen = float(detail.get("frozenBal", 0))
                         break
+
+                # Calculate margin ratio (lower is riskier)
+                margin_ratio = 0.0
+                if mmr > 0:
+                    margin_ratio = (total_eq / mmr) * 100  # As percentage
 
                 return AccountInfo(
                     exchange="OKX",
                     balance_usd=total_eq,
                     available_balance_usd=usdt_balance,
-                    margin_used=float(data.get("imr") or 0),
-                    unrealized_pnl=float(data.get("upl") or 0),
+                    margin_used=imr,
+                    unrealized_pnl=upl,
+                    total_equity=total_eq,
+                    initial_margin=imr,
+                    maintenance_margin=mmr,
+                    margin_ratio=margin_ratio,
+                    available_margin=usdt_balance,
+                    leverage_used=imr / total_eq if total_eq > 0 else 0,
                 )
 
         except Exception as e:
             logger.exception("Error fetching OKX account info")
+
+        return None
+
+    async def get_position_margin_info(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """Get detailed margin info for a specific position."""
+        try:
+            positions = await self.get_positions(symbol)
+            if not positions:
+                return None
+
+            pos = positions[0]
+
+            # Get mark price
+            mark_result = await self._request(
+                "GET",
+                "/api/v5/public/mark-price",
+                params={"instId": symbol},
+            )
+            mark_price = None
+            if mark_result and mark_result.get("code") == "0" and mark_result.get("data"):
+                mark_price = float(mark_result["data"][0].get("markPx", 0))
+
+            # Get position details with margin info
+            pos_result = await self._request(
+                "GET",
+                "/api/v5/account/positions",
+                params={"instId": symbol},
+            )
+
+            if pos_result and pos_result.get("code") == "0" and pos_result.get("data"):
+                p = pos_result["data"][0]
+                return {
+                    "symbol": symbol,
+                    "side": pos.side,
+                    "quantity": pos.quantity,
+                    "entry_price": pos.entry_price,
+                    "mark_price": mark_price,
+                    "liquidation_price": float(p.get("liqPx", 0)) if p.get("liqPx") else None,
+                    "margin": float(p.get("margin", 0)),
+                    "margin_ratio": float(p.get("mgnRatio", 0)) * 100,  # Convert to percentage
+                    "unrealized_pnl": pos.unrealized_pnl,
+                    "leverage": pos.leverage,
+                    "imr": float(p.get("imr", 0)),  # Initial margin for this position
+                    "mmr": float(p.get("mmr", 0)),  # Maintenance margin for this position
+                }
+
+        except Exception as e:
+            logger.error("Error fetching position margin info: %s", e)
 
         return None
 

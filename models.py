@@ -350,12 +350,30 @@ class Position:
 
 @dataclass
 class AccountInfo:
-    """Account information."""
+    """Account information with margin details."""
     exchange: str = ""
     balance_usd: float = 0.0
     available_balance_usd: float = 0.0
     margin_used: float = 0.0
     unrealized_pnl: float = 0.0
+
+    # Enhanced margin details
+    total_equity: float = 0.0           # Total account equity
+    initial_margin: float = 0.0         # Initial margin requirement (IMR)
+    maintenance_margin: float = 0.0     # Maintenance margin requirement (MMR)
+    margin_ratio: float = 0.0           # Current margin ratio (%)
+    available_margin: float = 0.0       # Available margin for new positions
+
+    # Position-level details
+    spot_margin_used: float = 0.0       # Margin used for spot positions
+    futures_margin_used: float = 0.0    # Margin used for futures positions
+    spot_unrealized_pnl: float = 0.0    # Unrealized P&L from spot
+    futures_unrealized_pnl: float = 0.0 # Unrealized P&L from futures
+
+    # Risk metrics
+    liquidation_price: Optional[float] = None  # Estimated liquidation price
+    mark_price: Optional[float] = None         # Current mark price
+    leverage_used: float = 1.0                 # Effective leverage
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -364,6 +382,18 @@ class AccountInfo:
             'available_balance_usd': self.available_balance_usd,
             'margin_used': self.margin_used,
             'unrealized_pnl': self.unrealized_pnl,
+            'total_equity': self.total_equity,
+            'initial_margin': self.initial_margin,
+            'maintenance_margin': self.maintenance_margin,
+            'margin_ratio': self.margin_ratio,
+            'available_margin': self.available_margin,
+            'spot_margin_used': self.spot_margin_used,
+            'futures_margin_used': self.futures_margin_used,
+            'spot_unrealized_pnl': self.spot_unrealized_pnl,
+            'futures_unrealized_pnl': self.futures_unrealized_pnl,
+            'liquidation_price': self.liquidation_price,
+            'mark_price': self.mark_price,
+            'leverage_used': self.leverage_used,
         }
 
 

@@ -410,6 +410,78 @@
             </div>
         </div>
 
+        <!-- Account & Margin Details -->
+        <div class="card mb-3">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span><i class="bi bi-bank me-2"></i>Account & Margin</span>
+                <span id="margin-health-badge" class="badge bg-secondary">N/A</span>
+            </div>
+            <div class="card-body" style="font-size: 0.85rem;">
+                <!-- Account Summary -->
+                <div class="mb-3 pb-2" style="border-bottom: 1px solid var(--border-color);">
+                    <div class="d-flex justify-content-between mb-1">
+                        <span class="text-secondary">Total Equity</span>
+                        <span id="account-equity" class="fw-bold">$0.00</span>
+                    </div>
+                    <div class="d-flex justify-content-between mb-1">
+                        <span class="text-secondary">Available Balance</span>
+                        <span id="account-available">$0.00</span>
+                    </div>
+                    <div class="d-flex justify-content-between">
+                        <span class="text-secondary">Unrealized P&L</span>
+                        <span id="account-upnl">$0.00</span>
+                    </div>
+                </div>
+
+                <!-- Margin Requirements -->
+                <div class="mb-3 pb-2" style="border-bottom: 1px solid var(--border-color);">
+                    <small class="text-secondary d-block mb-2">Margin Requirements</small>
+                    <div class="d-flex justify-content-between mb-1">
+                        <span class="text-secondary">Initial Margin (IMR)</span>
+                        <span id="margin-imr">$0.00</span>
+                    </div>
+                    <div class="d-flex justify-content-between mb-1">
+                        <span class="text-secondary">Maintenance (MMR)</span>
+                        <span id="margin-mmr">$0.00</span>
+                    </div>
+                    <div class="d-flex justify-content-between">
+                        <span class="text-secondary">Margin Ratio</span>
+                        <span id="margin-ratio">0%</span>
+                    </div>
+                </div>
+
+                <!-- Position Details -->
+                <div class="mb-3 pb-2" style="border-bottom: 1px solid var(--border-color);">
+                    <small class="text-secondary d-block mb-2">Futures Position</small>
+                    <div class="d-flex justify-content-between mb-1">
+                        <span class="text-secondary">Margin Used</span>
+                        <span id="futures-margin">$0.00</span>
+                    </div>
+                    <div class="d-flex justify-content-between mb-1">
+                        <span class="text-secondary">Mark Price</span>
+                        <span id="mark-price">-</span>
+                    </div>
+                    <div class="d-flex justify-content-between">
+                        <span class="text-secondary">Liq. Price</span>
+                        <span id="liq-price" class="text-danger">-</span>
+                    </div>
+                </div>
+
+                <!-- Leverage Info -->
+                <div>
+                    <small class="text-secondary d-block mb-2">Leverage</small>
+                    <div class="d-flex justify-content-between mb-1">
+                        <span class="text-secondary">Spot Leverage</span>
+                        <span id="spot-leverage">{{ config.spot_leverage }}x</span>
+                    </div>
+                    <div class="d-flex justify-content-between">
+                        <span class="text-secondary">Futures Leverage</span>
+                        <span id="futures-leverage">{{ config.futures_leverage }}x</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- Reset Controls -->
         <div class="card">
             <div class="card-header">
@@ -962,8 +1034,68 @@
                     accountCard.classList.remove('account-connected', 'account-disconnected');
                     accountCard.classList.add(data.connected ? 'account-connected' : 'account-disconnected');
                 }
+
+                // Update Account & Margin panel
+                updateElement('account-equity', '$' + (data.total_equity || data.balance || 0).toFixed(2));
+                updateElement('account-available', '$' + (data.available || 0).toFixed(2));
+
+                // Unrealized P&L with color
+                const upnl = data.unrealized_pnl || 0;
+                const upnlEl = document.getElementById('account-upnl');
+                if (upnlEl) {
+                    upnlEl.textContent = (upnl >= 0 ? '+' : '') + '$' + upnl.toFixed(2);
+                    upnlEl.classList.remove('price-up', 'price-down');
+                    upnlEl.classList.add(upnl >= 0 ? 'price-up' : 'price-down');
+                }
+
+                // Margin requirements
+                updateElement('margin-imr', '$' + (data.initial_margin || 0).toFixed(2));
+                updateElement('margin-mmr', '$' + (data.maintenance_margin || 0).toFixed(2));
+
+                // Margin ratio with color coding
+                const marginRatio = data.margin_ratio || 0;
+                const marginRatioEl = document.getElementById('margin-ratio');
+                if (marginRatioEl) {
+                    marginRatioEl.textContent = marginRatio > 0 ? marginRatio.toFixed(1) + '%' : 'N/A';
+                    marginRatioEl.classList.remove('price-up', 'price-down', 'text-warning');
+                    if (marginRatio > 500) {
+                        marginRatioEl.classList.add('price-up');
+                    } else if (marginRatio > 150) {
+                        marginRatioEl.classList.add('text-warning');
+                    } else if (marginRatio > 0) {
+                        marginRatioEl.classList.add('price-down');
+                    }
+                }
+
+                // Margin health badge
+                const healthBadge = document.getElementById('margin-health-badge');
+                if (healthBadge) {
+                    const health = data.margin_health || 'N/A';
+                    healthBadge.textContent = health;
+                    healthBadge.classList.remove('bg-success', 'bg-warning', 'bg-danger', 'bg-secondary');
+                    if (health === 'SAFE') {
+                        healthBadge.classList.add('bg-success');
+                    } else if (health === 'WARNING') {
+                        healthBadge.classList.add('bg-warning');
+                    } else if (health === 'DANGER') {
+                        healthBadge.classList.add('bg-danger');
+                    } else {
+                        healthBadge.classList.add('bg-secondary');
+                    }
+                }
+
+                // Futures position details
+                updateElement('futures-margin', '$' + (data.futures_margin_used || 0).toFixed(2));
+                updateElement('mark-price', data.mark_price ? '$' + data.mark_price.toFixed(2) : '-');
+                updateElement('liq-price', data.liquidation_price ? '$' + data.liquidation_price.toFixed(2) : '-');
             })
             .catch(err => console.log('Account info error:', err));
+    }
+
+    // Helper function to update element text
+    function updateElement(id, text) {
+        const el = document.getElementById(id);
+        if (el) el.textContent = text;
     }
 
     // Fetch account info on load and every 5 seconds

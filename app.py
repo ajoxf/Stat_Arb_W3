@@ -452,7 +452,7 @@ def get_trades():
 
 @app.route('/api/account-info', methods=['GET'])
 def get_account_info():
-    """Get account information from connected exchange."""
+    """Get detailed account information including margin requirements."""
     # Determine exchange type and demo mode from environment or adapter
     is_demo = os.getenv('OKX_DEMO_MODE', 'true').lower() == 'true'
     exchange_type = os.getenv('EXCHANGE_TYPE', 'OKX').upper()
@@ -466,28 +466,53 @@ def get_account_info():
         'unrealized_pnl': 0,
         'daily_pnl': 0,
         'is_demo': is_demo,
+        # Enhanced margin details
+        'total_equity': 0,
+        'initial_margin': 0,
+        'maintenance_margin': 0,
+        'margin_ratio': 0,
+        'available_margin': 0,
+        'leverage_used': 0,
+        # Position margin breakdown
+        'spot_margin_used': 0,
+        'futures_margin_used': 0,
+        'spot_unrealized_pnl': 0,
+        'futures_unrealized_pnl': 0,
+        # Risk metrics
+        'liquidation_price': None,
+        'mark_price': None,
+        'margin_health': 'N/A',  # SAFE, WARNING, DANGER
     }
 
     # Check if we have adapters connected
-    if engine.spot_adapter:
+    if engine.spot_adapter or engine.futures_adapter:
+        adapter = engine.spot_adapter or engine.futures_adapter
+
         # Get demo mode from adapter if available
-        if hasattr(engine.spot_adapter, 'is_testnet'):
-            account_data['is_demo'] = engine.spot_adapter.is_testnet
+        if hasattr(adapter, 'is_testnet'):
+            account_data['is_demo'] = adapter.is_testnet
 
         # Get exchange type from adapter
-        adapter_type = type(engine.spot_adapter).__name__.replace('Adapter', '').upper()
+        adapter_type = type(adapter).__name__.replace('Adapter', '').upper()
         account_data['exchange'] = adapter_type
 
         try:
             # Get account info from adapter
             async def fetch_account():
-                if hasattr(engine.spot_adapter, 'get_account_info'):
-                    return await engine.spot_adapter.get_account_info()
+                if hasattr(adapter, 'get_account_info'):
+                    return await adapter.get_account_info()
+                return None
+
+            async def fetch_position_margin():
+                if hasattr(adapter, 'get_position_margin_info'):
+                    return await adapter.get_position_margin_info(config.futures_symbol)
                 return None
 
             if loop:
+                # Fetch account info
                 future = asyncio.run_coroutine_threadsafe(fetch_account(), loop)
                 account = future.result(timeout=10)
+
                 if account:
                     account_data['connected'] = True
                     if account.exchange:
@@ -496,6 +521,31 @@ def get_account_info():
                     account_data['available'] = account.available_balance_usd
                     account_data['margin_used'] = account.margin_used
                     account_data['unrealized_pnl'] = account.unrealized_pnl
+                    account_data['total_equity'] = account.total_equity
+                    account_data['initial_margin'] = account.initial_margin
+                    account_data['maintenance_margin'] = account.maintenance_margin
+                    account_data['margin_ratio'] = account.margin_ratio
+                    account_data['available_margin'] = account.available_margin
+                    account_data['leverage_used'] = account.leverage_used
+
+                    # Determine margin health
+                    if account.margin_ratio > 500:
+                        account_data['margin_health'] = 'SAFE'
+                    elif account.margin_ratio > 150:
+                        account_data['margin_health'] = 'WARNING'
+                    elif account.margin_ratio > 0:
+                        account_data['margin_health'] = 'DANGER'
+
+                # Fetch position margin info
+                pos_future = asyncio.run_coroutine_threadsafe(fetch_position_margin(), loop)
+                pos_margin = pos_future.result(timeout=10)
+
+                if pos_margin:
+                    account_data['liquidation_price'] = pos_margin.get('liquidation_price')
+                    account_data['mark_price'] = pos_margin.get('mark_price')
+                    account_data['futures_margin_used'] = pos_margin.get('imr', 0)
+                    account_data['futures_unrealized_pnl'] = pos_margin.get('unrealized_pnl', 0)
+
         except Exception as e:
             logger.warning("Error fetching account info: %s", e)
 
