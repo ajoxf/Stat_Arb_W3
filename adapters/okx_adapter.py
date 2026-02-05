@@ -388,3 +388,69 @@ class OKXAdapter(ExchangeAdapter):
             logger.error("Error fetching OKX symbol info: %s", e)
 
         return None
+
+    async def set_leverage(self, symbol: str, leverage: int, margin_mode: str = "cross") -> bool:
+        """
+        Set leverage for a symbol.
+
+        Args:
+            symbol: Instrument ID (e.g., BTC-USDT-SWAP)
+            leverage: Leverage value (1-125 depending on instrument)
+            margin_mode: 'cross' or 'isolated'
+
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # Leverage setting is only for derivatives (SWAP/FUTURES), not spot
+            if "-SWAP" not in symbol and "-FUTURES" not in symbol:
+                logger.debug("Leverage not applicable for spot symbol: %s", symbol)
+                return True
+
+            data = {
+                "instId": symbol,
+                "lever": str(leverage),
+                "mgnMode": margin_mode,
+            }
+
+            result = await self._request("POST", "/api/v5/account/set-leverage", data=data)
+
+            if result and result.get("code") == "0":
+                logger.info("Leverage set to %dx for %s (mode=%s)", leverage, symbol, margin_mode)
+                return True
+            else:
+                error = result.get("msg", "Unknown error") if result else "No response"
+                logger.error("Failed to set leverage for %s: %s", symbol, error)
+                return False
+
+        except Exception as e:
+            logger.exception("Error setting leverage for %s", symbol)
+            return False
+
+    async def get_leverage(self, symbol: str) -> Optional[int]:
+        """
+        Get current leverage setting for a symbol.
+
+        Args:
+            symbol: Instrument ID (e.g., BTC-USDT-SWAP)
+
+        Returns:
+            Current leverage value or None if error
+        """
+        try:
+            if "-SWAP" not in symbol and "-FUTURES" not in symbol:
+                return 1  # Spot doesn't have leverage
+
+            result = await self._request(
+                "GET",
+                "/api/v5/account/leverage-info",
+                params={"instId": symbol, "mgnMode": "cross"},
+            )
+
+            if result and result.get("code") == "0" and result.get("data"):
+                return int(float(result["data"][0].get("lever", 1)))
+
+        except Exception as e:
+            logger.error("Error getting leverage for %s: %s", symbol, e)
+
+        return None

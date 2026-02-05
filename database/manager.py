@@ -69,6 +69,8 @@ class DatabaseManager:
                     min_std_multiple REAL DEFAULT 1.5,
                     position_size_usd REAL DEFAULT 1000.0,
                     max_position_size_usd REAL DEFAULT 10000.0,
+                    spot_leverage INTEGER DEFAULT 1,
+                    futures_leverage INTEGER DEFAULT 1,
                     paper_trading INTEGER DEFAULT 1,
                     algo_enabled INTEGER DEFAULT 0,
                     order_execution_mode TEXT DEFAULT 'MARKET',
@@ -205,6 +207,10 @@ class DatabaseManager:
                 cursor.execute("ALTER TABLE trading_config ADD COLUMN taker_fee_bps REAL DEFAULT 5.0")
             if 'maker_fee_bps' not in existing_columns:
                 cursor.execute("ALTER TABLE trading_config ADD COLUMN maker_fee_bps REAL DEFAULT 2.0")
+            if 'spot_leverage' not in existing_columns:
+                cursor.execute("ALTER TABLE trading_config ADD COLUMN spot_leverage INTEGER DEFAULT 1")
+            if 'futures_leverage' not in existing_columns:
+                cursor.execute("ALTER TABLE trading_config ADD COLUMN futures_leverage INTEGER DEFAULT 1")
 
             logger.info("Database initialized: %s", self.db_path)
 
@@ -233,6 +239,8 @@ class DatabaseManager:
                     min_std_multiple=row["min_std_multiple"],
                     position_size_usd=row["position_size_usd"],
                     max_position_size_usd=row["max_position_size_usd"],
+                    spot_leverage=row["spot_leverage"] if "spot_leverage" in row.keys() else 1,
+                    futures_leverage=row["futures_leverage"] if "futures_leverage" in row.keys() else 1,
                     paper_trading=bool(row["paper_trading"]),
                     algo_enabled=bool(row["algo_enabled"]),
                     order_execution_mode=row["order_execution_mode"] if "order_execution_mode" in row.keys() else "MARKET",
@@ -265,6 +273,8 @@ class DatabaseManager:
                     min_std_multiple = ?,
                     position_size_usd = ?,
                     max_position_size_usd = ?,
+                    spot_leverage = ?,
+                    futures_leverage = ?,
                     paper_trading = ?,
                     algo_enabled = ?,
                     order_execution_mode = ?,
@@ -289,6 +299,8 @@ class DatabaseManager:
                 config.min_std_multiple,
                 config.position_size_usd,
                 config.max_position_size_usd,
+                config.spot_leverage,
+                config.futures_leverage,
                 int(config.paper_trading),
                 int(config.algo_enabled),
                 config.order_execution_mode,

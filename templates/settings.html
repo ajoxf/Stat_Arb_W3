@@ -133,6 +133,38 @@
 
                     <div class="row mb-4">
                         <div class="col-12">
+                            <h6 class="text-secondary mb-3">Leverage Settings</h6>
+                            <small class="text-secondary d-block mb-3">Leverage multiplies both potential gains and losses. Use with caution.</small>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">Spot Leverage</label>
+                            <select class="form-select" id="spot_leverage" name="spot_leverage">
+                                <option value="1" {% if config.spot_leverage == 1 %}selected{% endif %}>1x (No Margin)</option>
+                                <option value="2" {% if config.spot_leverage == 2 %}selected{% endif %}>2x</option>
+                                <option value="3" {% if config.spot_leverage == 3 %}selected{% endif %}>3x</option>
+                                <option value="5" {% if config.spot_leverage == 5 %}selected{% endif %}>5x</option>
+                                <option value="10" {% if config.spot_leverage == 10 %}selected{% endif %}>10x</option>
+                            </select>
+                            <small class="text-secondary">Margin trading for spot positions</small>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">Futures Leverage</label>
+                            <select class="form-select" id="futures_leverage" name="futures_leverage">
+                                <option value="1" {% if config.futures_leverage == 1 %}selected{% endif %}>1x</option>
+                                <option value="2" {% if config.futures_leverage == 2 %}selected{% endif %}>2x</option>
+                                <option value="3" {% if config.futures_leverage == 3 %}selected{% endif %}>3x</option>
+                                <option value="5" {% if config.futures_leverage == 5 %}selected{% endif %}>5x</option>
+                                <option value="10" {% if config.futures_leverage == 10 %}selected{% endif %}>10x</option>
+                                <option value="20" {% if config.futures_leverage == 20 %}selected{% endif %}>20x</option>
+                                <option value="50" {% if config.futures_leverage == 50 %}selected{% endif %}>50x</option>
+                                <option value="100" {% if config.futures_leverage == 100 %}selected{% endif %}>100x</option>
+                            </select>
+                            <small class="text-secondary">Leverage for perpetual futures</small>
+                        </div>
+                    </div>
+
+                    <div class="row mb-4">
+                        <div class="col-12">
                             <h6 class="text-secondary mb-3">Fee Estimates (for STD Filter)</h6>
                             <small class="text-secondary d-block mb-3">STD Filter uses the appropriate fee based on your Order Execution Mode</small>
                         </div>
@@ -265,6 +297,8 @@
             min_std_multiple: parseFloat(document.getElementById('min_std_multiple').value),
             position_size_usd: parseFloat(document.getElementById('position_size_usd').value),
             max_position_size_usd: parseFloat(document.getElementById('max_position_size_usd').value),
+            spot_leverage: parseInt(document.getElementById('spot_leverage').value),
+            futures_leverage: parseInt(document.getElementById('futures_leverage').value),
             taker_fee_bps: parseFloat(document.getElementById('taker_fee_bps').value),
             maker_fee_bps: parseFloat(document.getElementById('maker_fee_bps').value),
             paper_trading: document.getElementById('paper_trading').checked,
@@ -310,6 +344,8 @@
                 document.getElementById('min_std_multiple').value = config.min_std_multiple;
                 document.getElementById('position_size_usd').value = config.position_size_usd;
                 document.getElementById('max_position_size_usd').value = config.max_position_size_usd;
+                document.getElementById('spot_leverage').value = config.spot_leverage || 1;
+                document.getElementById('futures_leverage').value = config.futures_leverage || 1;
                 document.getElementById('taker_fee_bps').value = config.taker_fee_bps || 5.0;
                 document.getElementById('maker_fee_bps').value = config.maker_fee_bps || 2.0;
                 document.getElementById('paper_trading').checked = config.paper_trading;

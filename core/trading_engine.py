@@ -85,9 +85,34 @@ class TradingEngine:
         self.state.algo_enabled = config.algo_enabled
         if self.order_executor:
             self.order_executor.update_config(config)
+
+        # Apply leverage settings if adapters are configured
+        if self.futures_adapter and not config.paper_trading:
+            asyncio.create_task(self._apply_leverage_settings())
+
         logger.info("Trading config updated: asset=%s, paper=%s, algo=%s, exec_mode=%s",
                     config.asset, config.paper_trading, config.algo_enabled,
                     config.order_execution_mode)
+
+    async def _apply_leverage_settings(self) -> None:
+        """Apply leverage settings to exchange."""
+        try:
+            # Set futures leverage
+            if self.futures_adapter and hasattr(self.futures_adapter, 'set_leverage'):
+                success = await self.futures_adapter.set_leverage(
+                    self.config.futures_symbol,
+                    self.config.futures_leverage,
+                )
+                if success:
+                    logger.info("Futures leverage set to %dx", self.config.futures_leverage)
+                else:
+                    logger.warning("Failed to set futures leverage")
+
+            # Note: Spot margin leverage may require different API calls
+            # depending on exchange implementation
+
+        except Exception as e:
+            logger.error("Error applying leverage settings: %s", e)
 
     def set_adapters(self, spot: Optional[ExchangeAdapter], futures: Optional[ExchangeAdapter]) -> None:
         """Set exchange adapters (REST mode)."""
@@ -99,6 +124,9 @@ class TradingEngine:
         if spot and futures:
             self.order_executor = OrderExecutor(self.config, spot, futures)
             logger.info("Order executor initialized (mode=%s)", self.config.order_execution_mode)
+
+            # Apply leverage settings
+            asyncio.create_task(self._apply_leverage_settings())
 
         logger.info("Adapters set (REST mode): spot=%s, futures=%s",
                     type(spot).__name__ if spot else None,

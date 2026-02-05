@@ -78,6 +78,10 @@ class TradingConfig:
     position_size_usd: float = 1000.0
     max_position_size_usd: float = 10000.0
 
+    # Leverage settings
+    spot_leverage: int = 1      # 1 = no margin, 2-10 for spot margin trading
+    futures_leverage: int = 1   # 1-125 for futures (depends on exchange limits)
+
     # Trading mode
     paper_trading: bool = True
     algo_enabled: bool = False
@@ -112,6 +116,8 @@ class TradingConfig:
             'min_std_multiple': self.min_std_multiple,
             'position_size_usd': self.position_size_usd,
             'max_position_size_usd': self.max_position_size_usd,
+            'spot_leverage': self.spot_leverage,
+            'futures_leverage': self.futures_leverage,
             'paper_trading': self.paper_trading,
             'algo_enabled': self.algo_enabled,
             'order_execution_mode': self.order_execution_mode,
