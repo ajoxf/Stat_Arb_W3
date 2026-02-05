@@ -97,6 +97,34 @@ def start_engine_loop():
         engine.set_websocket_manager(ws_manager)
         logger.info("WebSocket streaming enabled (demo=%s)", is_demo)
 
+    # Initialize REST adapters for order execution (separate from WebSocket price streaming)
+    # This allows us to use WebSocket for fast price updates and REST for order placement
+    api_key = os.getenv('OKX_API_KEY', '')
+    secret_key = os.getenv('OKX_SECRET_KEY', '')
+    passphrase = os.getenv('OKX_PASSPHRASE', '')
+    is_demo = os.getenv('OKX_DEMO_MODE', 'true').lower() == 'true'
+
+    if api_key and secret_key and passphrase and not config.paper_trading:
+        # Create separate adapter instances for spot and futures order execution
+        spot_adapter = OKXAdapter(
+            api_key=api_key,
+            secret_key=secret_key,
+            passphrase=passphrase,
+            is_testnet=is_demo,
+        )
+        futures_adapter = OKXAdapter(
+            api_key=api_key,
+            secret_key=secret_key,
+            passphrase=passphrase,
+            is_testnet=is_demo,
+        )
+        engine.set_adapters(spot_adapter, futures_adapter)
+        logger.info("REST adapters initialized for order execution (demo=%s)", is_demo)
+    elif config.paper_trading:
+        logger.info("Paper trading mode - order execution disabled")
+    else:
+        logger.warning("API keys not configured - order execution disabled")
+
     # Start engine
     asyncio.run_coroutine_threadsafe(engine.start(), loop)
     logger.info("Trading engine started")
