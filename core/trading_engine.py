@@ -91,9 +91,9 @@ class TradingEngine:
         if self.futures_adapter and not config.paper_trading:
             asyncio.create_task(self._apply_leverage_settings())
 
-        logger.info("Trading config updated: asset=%s, paper=%s, algo=%s, exec_mode=%s",
-                    config.asset, config.paper_trading, config.algo_enabled,
-                    config.order_execution_mode)
+        logger.debug("Trading config updated: asset=%s, paper=%s, algo=%s, exec_mode=%s",
+                     config.asset, config.paper_trading, config.algo_enabled,
+                     config.order_execution_mode)
 
     async def _apply_leverage_settings(self) -> None:
         """Apply leverage settings to exchange."""
@@ -124,14 +124,14 @@ class TradingEngine:
         # Initialize order executor if we have both adapters
         if spot and futures:
             self.order_executor = OrderExecutor(self.config, spot, futures)
-            logger.info("Order executor initialized (mode=%s)", self.config.order_execution_mode)
+            logger.debug("Order executor initialized (mode=%s)", self.config.order_execution_mode)
 
             # Mark that we need to apply leverage settings when engine starts
             self._pending_leverage_setup = True
 
-        logger.info("Adapters set (REST mode): spot=%s, futures=%s",
-                    type(spot).__name__ if spot else None,
-                    type(futures).__name__ if futures else None)
+        logger.debug("Adapters set (REST mode): spot=%s, futures=%s",
+                     type(spot).__name__ if spot else None,
+                     type(futures).__name__ if futures else None)
 
     def set_websocket_manager(self, ws_manager: OKXWebSocketManager) -> None:
         """Set WebSocket manager for real-time streaming."""
@@ -141,7 +141,7 @@ class TradingEngine:
         # Set up tick callback
         ws_manager.add_tick_callback(self._on_websocket_tick)
 
-        logger.info("WebSocket manager set (streaming mode)")
+        logger.debug("WebSocket manager set (streaming mode)")
 
     def _on_websocket_tick(self, symbol: str, tick: MarketTick) -> None:
         """Handle incoming WebSocket tick."""
@@ -187,8 +187,8 @@ class TradingEngine:
                 self.config.futures_symbol
             )
             if success:
-                logger.info("WebSocket streaming started for %s, %s",
-                            self.config.spot_symbol, self.config.futures_symbol)
+                logger.debug("WebSocket streaming started for %s, %s",
+                             self.config.spot_symbol, self.config.futures_symbol)
             else:
                 logger.warning("WebSocket start failed, falling back to REST polling")
                 self._use_websocket = False
@@ -218,7 +218,7 @@ class TradingEngine:
 
     async def _main_loop(self) -> None:
         """Main trading loop."""
-        logger.info("Main loop started")
+        logger.debug("Main loop started")
 
         while self._running:
             try:
@@ -234,7 +234,7 @@ class TradingEngine:
                     self.on_error(error_msg)
                 await asyncio.sleep(1)  # Wait before retrying
 
-        logger.info("Main loop ended")
+        logger.debug("Main loop ended")
 
     async def _tick(self) -> None:
         """Process one tick (REST polling mode)."""
@@ -349,8 +349,8 @@ class TradingEngine:
 
     async def _process_signal(self, signal: Signal) -> None:
         """Process a trading signal."""
-        logger.info("Processing signal: %s (zscore=%.4f, position=%s)",
-                    signal.signal_type, signal.zscore, self.state.current_position)
+        logger.debug("Processing signal: %s (zscore=%.4f, position=%s)",
+                     signal.signal_type, signal.zscore, self.state.current_position)
 
         if signal.signal_type in ("LONG", "SHORT"):
             await self._open_position(signal)
@@ -572,4 +572,4 @@ class TradingEngine:
         self.open_trade = None
         self.spot_tick = None
         self.futures_tick = None
-        logger.info("Engine reset")
+        logger.debug("Engine reset")

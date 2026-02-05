@@ -167,7 +167,7 @@ class OKXWebSocket:
 
         try:
             await self._ws.send_json(message)
-            logger.info("Subscribed to tickers: %s", instruments)
+            logger.debug("Subscribed to tickers: %s", instruments)
             return True
         except Exception as e:
             logger.error("Failed to subscribe: %s", e)
@@ -196,7 +196,7 @@ class OKXWebSocket:
             await self._ws.send_json(message)
             for inst in instruments:
                 self._subscribed.discard(inst)
-            logger.info("Unsubscribed from tickers: %s", instruments)
+            logger.debug("Unsubscribed from tickers: %s", instruments)
             return True
         except Exception as e:
             logger.error("Failed to unsubscribe: %s", e)
@@ -216,7 +216,7 @@ class OKXWebSocket:
 
     async def _receive_loop(self) -> None:
         """Main loop for receiving WebSocket messages."""
-        logger.info("WebSocket receive loop started")
+        logger.debug("WebSocket receive loop started")
 
         while self._running and self._ws and not self._ws.closed:
             try:
@@ -244,7 +244,7 @@ class OKXWebSocket:
                 logger.exception("Error in receive loop: %s", e)
                 break
 
-        logger.info("WebSocket receive loop ended")
+        logger.debug("WebSocket receive loop ended")
         self._connected = False
 
         # Attempt reconnect
@@ -333,7 +333,7 @@ class OKXWebSocket:
         max_delay = 30
 
         while self._running and not self._connected:
-            logger.info("Attempting to reconnect in %d seconds...", retry_delay)
+            logger.debug("Attempting to reconnect in %d seconds...", retry_delay)
             await asyncio.sleep(retry_delay)
 
             if await self.connect():

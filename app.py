@@ -95,7 +95,7 @@ def start_engine_loop():
         is_demo = os.getenv('OKX_DEMO_MODE', 'true').lower() == 'true'
         ws_manager = OKXWebSocketManager(is_demo=is_demo)
         engine.set_websocket_manager(ws_manager)
-        logger.info("WebSocket streaming enabled (demo=%s)", is_demo)
+        logger.debug("WebSocket streaming enabled (demo=%s)", is_demo)
 
     # Initialize REST adapters for account info and order execution
     # This allows us to use WebSocket for fast price updates and REST for account data + orders
@@ -120,9 +120,9 @@ def start_engine_loop():
         )
         engine.set_adapters(spot_adapter, futures_adapter)
         if config.paper_trading:
-            logger.info("REST adapters initialized for account info (paper trading mode, demo=%s)", is_demo)
+            logger.debug("REST adapters initialized for account info (paper trading mode, demo=%s)", is_demo)
         else:
-            logger.info("REST adapters initialized for order execution (demo=%s)", is_demo)
+            logger.debug("REST adapters initialized for order execution (demo=%s)", is_demo)
     else:
         logger.warning("API keys not configured - account info and order execution disabled")
 
@@ -233,8 +233,8 @@ def on_error_callback(error: str):
 def on_sd_touch_callback(event):
     """Handle SD touch events - log to database."""
     db.log_sd_touch(event)
-    logger.info("SD touch: level=%s, direction=%s, zscore=%.4f",
-                event.sd_level, event.direction, event.zscore)
+    logger.debug("SD touch: level=%s, direction=%s, zscore=%.4f",
+                 event.sd_level, event.direction, event.zscore)
 
 
 # Routes

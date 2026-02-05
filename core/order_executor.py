@@ -473,7 +473,7 @@ class OrderExecutor:
 
     async def _handle_timeout(self, spread_order: SpreadOrder) -> None:
         """Handle timeout - cancel unfilled orders and close any partial fills."""
-        logger.info("Handling limit order timeout")
+        logger.debug("Handling limit order timeout")
 
         # Cancel any open orders
         if spread_order.spot_leg.status == LegStatus.OPEN:
