@@ -55,6 +55,7 @@ class TradingEngine:
         # WebSocket manager (optional, for real-time streaming)
         self.ws_manager: Optional[OKXWebSocketManager] = None
         self._use_websocket: bool = False
+        self._pending_leverage_setup: bool = False
 
         # Current market data
         self.spot_tick: Optional[MarketTick] = None
@@ -125,8 +126,8 @@ class TradingEngine:
             self.order_executor = OrderExecutor(self.config, spot, futures)
             logger.info("Order executor initialized (mode=%s)", self.config.order_execution_mode)
 
-            # Apply leverage settings
-            asyncio.create_task(self._apply_leverage_settings())
+            # Mark that we need to apply leverage settings when engine starts
+            self._pending_leverage_setup = True
 
         logger.info("Adapters set (REST mode): spot=%s, futures=%s",
                     type(spot).__name__ if spot else None,
@@ -173,6 +174,11 @@ class TradingEngine:
 
         logger.info("Starting trading engine for %s (websocket=%s)",
                     self.config.asset, self._use_websocket)
+
+        # Apply pending leverage settings (deferred from set_adapters)
+        if self._pending_leverage_setup:
+            self._pending_leverage_setup = False
+            await self._apply_leverage_settings()
 
         # Start WebSocket if configured
         if self._use_websocket and self.ws_manager:
