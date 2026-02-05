@@ -458,6 +458,10 @@ def get_account_info():
     is_demo = os.getenv('OKX_DEMO_MODE', 'true').lower() == 'true'
     exchange_type = os.getenv('EXCHANGE_TYPE', 'OKX').upper()
 
+    # Check if API keys are configured
+    api_key = os.getenv('OKX_API_KEY', '')
+    has_api_keys = bool(api_key and os.getenv('OKX_SECRET_KEY', '') and os.getenv('OKX_PASSPHRASE', ''))
+
     account_data = {
         'connected': False,
         'exchange': exchange_type,
@@ -485,6 +489,9 @@ def get_account_info():
         'liquidation_price': None,
         'mark_price': None,
         'margin_health': 'N/A',  # SAFE, WARNING, DANGER
+        # Debug info
+        'has_api_keys': has_api_keys,
+        'has_adapters': bool(engine.spot_adapter or engine.futures_adapter),
     }
 
     # Check if we have adapters connected

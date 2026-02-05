@@ -892,8 +892,25 @@
         fetch('/api/account-info')
             .then(response => response.json())
             .then(data => {
+                // Debug: log connection status
+                if (!data.has_api_keys) {
+                    console.warn('Account: API keys not configured in .env file');
+                }
+                if (!data.has_adapters) {
+                    console.warn('Account: REST adapters not initialized (restart app after configuring API keys)');
+                }
+                if (!data.connected && data.has_adapters) {
+                    console.warn('Account: Adapters exist but not connected to exchange');
+                }
+
                 const exchangeEl = document.getElementById('exchange-name');
-                if (exchangeEl) exchangeEl.textContent = data.exchange + (data.is_demo ? ' Demo' : '');
+                if (exchangeEl) {
+                    let status = data.exchange + (data.is_demo ? ' Demo' : '');
+                    if (!data.has_api_keys) status += ' (No API Keys)';
+                    else if (!data.has_adapters) status += ' (Restart Required)';
+                    else if (!data.connected) status += ' (Not Connected)';
+                    exchangeEl.textContent = status;
+                }
 
                 updateElement('account-uid', data.uid || '-');
 
