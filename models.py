@@ -357,6 +357,10 @@ class AccountInfo:
     margin_used: float = 0.0
     unrealized_pnl: float = 0.0
 
+    # Account identification
+    uid: str = ""                       # User ID from exchange
+    account_level: str = ""             # Account level/type
+
     # Enhanced margin details
     total_equity: float = 0.0           # Total account equity
     initial_margin: float = 0.0         # Initial margin requirement (IMR)
@@ -382,6 +386,8 @@ class AccountInfo:
             'available_balance_usd': self.available_balance_usd,
             'margin_used': self.margin_used,
             'unrealized_pnl': self.unrealized_pnl,
+            'uid': self.uid,
+            'account_level': self.account_level,
             'total_equity': self.total_equity,
             'initial_margin': self.initial_margin,
             'maintenance_margin': self.maintenance_margin,

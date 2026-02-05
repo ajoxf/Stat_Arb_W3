@@ -460,6 +460,8 @@ def get_account_info():
     account_data = {
         'connected': False,
         'exchange': exchange_type,
+        'uid': '',
+        'account_level': '',
         'balance': 0,
         'available': 0,
         'margin_used': 0,
@@ -508,6 +510,11 @@ def get_account_info():
                     return await adapter.get_position_margin_info(config.futures_symbol)
                 return None
 
+            async def fetch_account_config():
+                if hasattr(adapter, 'get_account_config'):
+                    return await adapter.get_account_config()
+                return None
+
             if loop:
                 # Fetch account info
                 future = asyncio.run_coroutine_threadsafe(fetch_account(), loop)
@@ -545,6 +552,14 @@ def get_account_info():
                     account_data['mark_price'] = pos_margin.get('mark_price')
                     account_data['futures_margin_used'] = pos_margin.get('imr', 0)
                     account_data['futures_unrealized_pnl'] = pos_margin.get('unrealized_pnl', 0)
+
+                # Fetch account config for UID
+                config_future = asyncio.run_coroutine_threadsafe(fetch_account_config(), loop)
+                account_config = config_future.result(timeout=10)
+
+                if account_config:
+                    account_data['uid'] = account_config.get('uid', '')
+                    account_data['account_level'] = account_config.get('level', '')
 
         except Exception as e:
             logger.warning("Error fetching account info: %s", e)

@@ -518,3 +518,30 @@ class OKXAdapter(ExchangeAdapter):
             logger.error("Error getting leverage for %s: %s", symbol, e)
 
         return None
+
+    async def get_account_config(self) -> Optional[Dict[str, Any]]:
+        """
+        Get account configuration including UID.
+
+        Returns:
+            Dict with uid, account_level, position_mode, etc.
+        """
+        try:
+            result = await self._request("GET", "/api/v5/account/config")
+
+            if result and result.get("code") == "0" and result.get("data"):
+                data = result["data"][0]
+                return {
+                    "uid": data.get("uid", ""),
+                    "account_level": data.get("acctLv", ""),  # 1=Simple, 2=Single-currency margin, etc.
+                    "position_mode": data.get("posMode", ""),  # long_short_mode or net_mode
+                    "auto_loan": data.get("autoLoan", False),
+                    "greeks_type": data.get("greeksType", ""),
+                    "level": data.get("level", ""),  # User level (VIP tier)
+                    "level_tmp": data.get("levelTmp", ""),  # Temporary VIP level
+                }
+
+        except Exception as e:
+            logger.error("Error fetching account config: %s", e)
+
+        return None

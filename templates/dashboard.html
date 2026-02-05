@@ -417,6 +417,17 @@
                 <span id="margin-health-badge" class="badge bg-secondary">N/A</span>
             </div>
             <div class="card-body" style="font-size: 0.85rem;">
+                <!-- Account ID -->
+                <div class="mb-3 pb-2" style="border-bottom: 1px solid var(--border-color);">
+                    <div class="d-flex justify-content-between mb-1">
+                        <span class="text-secondary">UID</span>
+                        <span id="account-uid" class="fw-bold font-monospace">-</span>
+                    </div>
+                    <div class="d-flex justify-content-between">
+                        <span class="text-secondary">VIP Level</span>
+                        <span id="account-level" class="badge bg-info">-</span>
+                    </div>
+                </div>
                 <!-- Account Summary -->
                 <div class="mb-3 pb-2" style="border-bottom: 1px solid var(--border-color);">
                     <div class="d-flex justify-content-between mb-1">
@@ -1036,6 +1047,15 @@
                 }
 
                 // Update Account & Margin panel
+                // UID and account level
+                updateElement('account-uid', data.uid || '-');
+                const levelEl = document.getElementById('account-level');
+                if (levelEl) {
+                    const level = data.account_level || '-';
+                    levelEl.textContent = level || '-';
+                    levelEl.className = 'badge ' + (level ? 'bg-info' : 'bg-secondary');
+                }
+
                 updateElement('account-equity', '$' + (data.total_equity || data.balance || 0).toFixed(2));
                 updateElement('account-available', '$' + (data.available || 0).toFixed(2));
 
