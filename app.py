@@ -97,15 +97,15 @@ def start_engine_loop():
         engine.set_websocket_manager(ws_manager)
         logger.info("WebSocket streaming enabled (demo=%s)", is_demo)
 
-    # Initialize REST adapters for order execution (separate from WebSocket price streaming)
-    # This allows us to use WebSocket for fast price updates and REST for order placement
+    # Initialize REST adapters for account info and order execution
+    # This allows us to use WebSocket for fast price updates and REST for account data + orders
     api_key = os.getenv('OKX_API_KEY', '')
     secret_key = os.getenv('OKX_SECRET_KEY', '')
     passphrase = os.getenv('OKX_PASSPHRASE', '')
     is_demo = os.getenv('OKX_DEMO_MODE', 'true').lower() == 'true'
 
-    if api_key and secret_key and passphrase and not config.paper_trading:
-        # Create separate adapter instances for spot and futures order execution
+    if api_key and secret_key and passphrase:
+        # Create adapter instances - used for account info always, order execution only if not paper trading
         spot_adapter = OKXAdapter(
             api_key=api_key,
             secret_key=secret_key,
@@ -119,11 +119,12 @@ def start_engine_loop():
             is_testnet=is_demo,
         )
         engine.set_adapters(spot_adapter, futures_adapter)
-        logger.info("REST adapters initialized for order execution (demo=%s)", is_demo)
-    elif config.paper_trading:
-        logger.info("Paper trading mode - order execution disabled")
+        if config.paper_trading:
+            logger.info("REST adapters initialized for account info (paper trading mode, demo=%s)", is_demo)
+        else:
+            logger.info("REST adapters initialized for order execution (demo=%s)", is_demo)
     else:
-        logger.warning("API keys not configured - order execution disabled")
+        logger.warning("API keys not configured - account info and order execution disabled")
 
     # Start engine
     asyncio.run_coroutine_threadsafe(engine.start(), loop)
@@ -554,12 +555,18 @@ def get_account_info():
                     account_data['futures_unrealized_pnl'] = pos_margin.get('unrealized_pnl', 0)
 
                 # Fetch account config for UID
-                config_future = asyncio.run_coroutine_threadsafe(fetch_account_config(), loop)
-                account_config = config_future.result(timeout=10)
+                try:
+                    config_future = asyncio.run_coroutine_threadsafe(fetch_account_config(), loop)
+                    account_config = config_future.result(timeout=10)
 
-                if account_config:
-                    account_data['uid'] = account_config.get('uid', '')
-                    account_data['account_level'] = account_config.get('level', '')
+                    if account_config:
+                        account_data['uid'] = account_config.get('uid', '')
+                        account_data['account_level'] = account_config.get('level', '')
+                        logger.debug("UID fetched: %s, Level: %s", account_data['uid'], account_data['account_level'])
+                    else:
+                        logger.warning("Account config returned None")
+                except Exception as config_err:
+                    logger.warning("Error fetching account config: %s", config_err)
 
         except Exception as e:
             logger.warning("Error fetching account info: %s", e)

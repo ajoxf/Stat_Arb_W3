@@ -531,15 +531,21 @@ class OKXAdapter(ExchangeAdapter):
 
             if result and result.get("code") == "0" and result.get("data"):
                 data = result["data"][0]
+                uid = data.get("uid", "")
+                level = data.get("level", "")
+                logger.debug("Account config fetched: UID=%s, Level=%s", uid, level)
                 return {
-                    "uid": data.get("uid", ""),
+                    "uid": uid,
                     "account_level": data.get("acctLv", ""),  # 1=Simple, 2=Single-currency margin, etc.
                     "position_mode": data.get("posMode", ""),  # long_short_mode or net_mode
                     "auto_loan": data.get("autoLoan", False),
                     "greeks_type": data.get("greeksType", ""),
-                    "level": data.get("level", ""),  # User level (VIP tier)
+                    "level": level,  # User level (VIP tier)
                     "level_tmp": data.get("levelTmp", ""),  # Temporary VIP level
                 }
+            else:
+                error_msg = result.get("msg", "Unknown error") if result else "No response"
+                logger.warning("Failed to fetch account config: %s", error_msg)
 
         except Exception as e:
             logger.error("Error fetching account config: %s", e)
