@@ -57,6 +57,10 @@ class TradingEngine:
         self._use_websocket: bool = False
         self._pending_leverage_setup: bool = False
 
+        # Status logging
+        self._last_status_log: float = 0
+        self._status_log_interval: float = 0.3  # Log every 0.3 seconds
+
         # Current market data
         self.spot_tick: Optional[MarketTick] = None
         self.futures_tick: Optional[MarketTick] = None
@@ -275,9 +279,41 @@ class TradingEngine:
         if self.on_signal:
             self.on_signal(signal)
 
+        # Periodic status log
+        self._log_status(signal)
+
         # Execute trading logic if algo enabled
         if self.state.algo_enabled and signal.signal_type != "NONE":
             await self._process_signal(signal)
+
+    def _log_status(self, signal) -> None:
+        """Log periodic status update with key metrics."""
+        import time
+        now = time.time()
+        if now - self._last_status_log < self._status_log_interval:
+            return
+        self._last_status_log = now
+
+        # Build compact status line
+        z = signal.zscore if signal else 0
+        spread = signal.spread if signal else 0
+        regime = signal.regime if signal else "?"
+        pos = self.state.current_position or "FLAT"
+        algo = "ON" if self.state.algo_enabled else "OFF"
+
+        # Filters
+        hurst_ok = "H:OK" if signal and signal.hurst_filter_passed else "H:NO"
+        std_ok = "S:OK" if signal and signal.std_filter_passed else "S:NO"
+        data_ok = "D:OK" if signal and signal.data_ready else "D:NO"
+
+        # Prices
+        spot = self.spot_tick.last if self.spot_tick else 0
+        fut = self.futures_tick.last if self.futures_tick else 0
+
+        logger.info(
+            "Z:%.4f | Sprd:%.2f | %s | Pos:%s | Algo:%s | %s %s %s | S:%.2f F:%.2f",
+            z, spread, regime[:4], pos, algo, hurst_ok, std_ok, data_ok, spot, fut
+        )
 
     async def _get_spot_tick(self) -> Optional[MarketTick]:
         """Get current spot price."""
