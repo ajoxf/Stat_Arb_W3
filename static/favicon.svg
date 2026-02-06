@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <!-- Meridian favicon: converging lines -->
+  <rect width="32" height="32" rx="4" fill="#1a365d"/>
+  <!-- Left line -->
+  <line x1="6" y1="26" x2="16" y2="6" stroke="#c9a227" stroke-width="3" stroke-linecap="round"/>
+  <!-- Right line -->
+  <line x1="26" y1="26" x2="16" y2="6" stroke="#c9a227" stroke-width="3" stroke-linecap="round"/>
+  <!-- Convergence point -->
+  <circle cx="16" cy="6" r="3" fill="#c9a227"/>
+</svg>

@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 220 50" width="220" height="50">
+  <defs>
+    <linearGradient id="grad2" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#065f46;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#047857;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+
+  <!-- Logo Mark: Two arrows converging -->
+  <g transform="translate(5, 10)">
+    <!-- Left arrow -->
+    <path d="M0 15 L12 15 L8 10 M12 15 L8 20" stroke="#9ca3af" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+    <!-- Right arrow -->
+    <path d="M32 15 L20 15 L24 10 M20 15 L24 20" stroke="#9ca3af" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+    <!-- Center point -->
+    <circle cx="16" cy="15" r="3" fill="#047857"/>
+  </g>
+
+  <!-- Text: CONVERGENCE -->
+  <text x="48" y="33" font-family="'Segoe UI', Arial, sans-serif" font-size="20" font-weight="600" letter-spacing="1.5" fill="url(#grad2)">CONVERGENCE</text>
+</svg>
