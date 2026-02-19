@@ -135,7 +135,14 @@ class OKXAdapter(ExchangeAdapter):
 
                 if result.get("code") != "0":
                     error = result.get("msg", "Unknown error")
-                    logger.warning("OKX API error: %s", error)
+                    # Get detailed error from data array
+                    data_arr = result.get("data", [])
+                    if data_arr and isinstance(data_arr, list) and len(data_arr) > 0:
+                        sub_code = data_arr[0].get("sCode", "")
+                        sub_msg = data_arr[0].get("sMsg", "")
+                        if sub_code or sub_msg:
+                            error = f"{error} (sCode={sub_code}: {sub_msg})"
+                    logger.warning("OKX API error: %s | Full response: %s", error, result)
                     self._set_error(error)
 
                 return result
@@ -200,12 +207,17 @@ class OKXAdapter(ExchangeAdapter):
         quantity: float,
         price: Optional[float] = None,
         reduce_only: bool = False,
+        pos_side: Optional[str] = None,
     ) -> OrderResult:
         """
         Place an order.
 
         Note: For SWAP contracts, quantity is in base currency (e.g., BTC).
         This method converts to contracts automatically.
+
+        Args:
+            pos_side: Position side for long/short mode accounts ("long" or "short").
+                      If None, will auto-detect based on account mode.
         """
         try:
             # Determine instrument type and trade mode
@@ -240,7 +252,19 @@ class OKXAdapter(ExchangeAdapter):
             if reduce_only and inst_type == "SWAP":
                 order_data["reduceOnly"] = True
 
-            logger.debug("Placing order: %s", order_data)
+            # Handle position side for long/short mode accounts (required for SWAP)
+            if inst_type == "SWAP":
+                if pos_side:
+                    order_data["posSide"] = pos_side
+                else:
+                    # Auto-detect: check account position mode
+                    account_config = await self.get_account_config()
+                    if account_config and account_config.get("position_mode") == "long_short_mode":
+                        # In long/short mode: buy opens long, sell opens short
+                        order_data["posSide"] = "long" if side.upper() == "BUY" else "short"
+                        logger.info("Account in long_short_mode, setting posSide=%s", order_data["posSide"])
+
+            logger.info("Placing order: %s", order_data)
             result = await self._request("POST", "/api/v5/trade/order", data=order_data)
 
             if result and result.get("code") == "0" and result.get("data"):
