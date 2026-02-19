@@ -841,90 +841,134 @@ def get_active_orders():
 
 
 # ============== Manual Order Testing ==============
-# Store test order state
-test_order_state = {
-    'has_position': False,
-    'position_type': None,
-    'entry_spread': None,
-    'entry_spot_price': None,
-    'entry_futures_price': None,
-    'quantity': 0,
-    'spot_order_id': None,
-    'futures_order_id': None,
-    'entry_time': None,
-}
+# Store multiple test positions
+import uuid
+test_positions = {}  # id -> position data
 
 
 @app.route('/api/test-order/open', methods=['POST'])
 def open_test_order():
-    """Open a manual test order to test Market/Limit execution."""
-    global test_order_state
+    """Open a manual test order - single leg or spread."""
+    global test_positions
 
-    if test_order_state['has_position']:
-        return jsonify({'success': False, 'error': 'Test position already open'}), 400
-
-    if not engine.order_executor:
-        return jsonify({'success': False, 'error': 'Order executor not available. Check API keys.'}), 400
+    if not engine.spot_adapter and not engine.futures_adapter:
+        return jsonify({'success': False, 'error': 'No exchange adapters available. Check API keys.'}), 400
 
     if not engine.spot_tick or not engine.futures_tick:
         return jsonify({'success': False, 'error': 'No price data available. Wait for connection.'}), 400
 
     data = request.json
-    position_type = data.get('position_type', 'LONG')
+    order_type = data.get('order_type', 'BUY_SPOT')
     size_usd = data.get('size_usd', 100)
 
-    # Calculate quantity based on spot price
     spot_price = engine.spot_tick.mid
+    futures_price = engine.futures_tick.mid
     quantity = size_usd / spot_price
 
-    logger.info("Opening test %s position: size=$%.2f, qty=%.6f", position_type, size_usd, quantity)
+    logger.info("Executing test order: %s, size=$%.2f, qty=%.6f", order_type, size_usd, quantity)
 
-    async def execute_test_entry():
-        spread_order = await engine.order_executor.execute_entry(
-            position_type=position_type,
-            spot_tick=engine.spot_tick,
-            futures_tick=engine.futures_tick,
+    async def execute_single_leg(market_type: str, side: str, price: float):
+        """Execute a single leg order."""
+        adapter = engine.spot_adapter if market_type == "SPOT" else engine.futures_adapter
+        if not adapter:
+            return None, f"No {market_type} adapter available"
+
+        symbol = config.spot_symbol if market_type == "SPOT" else config.futures_symbol
+        order_type_str = config.order_execution_mode  # MARKET or LIMIT
+
+        result = await adapter.place_order(
+            symbol=symbol,
+            side=side,
+            order_type=order_type_str,
             quantity=quantity,
+            price=price if order_type_str == "LIMIT" else None,
         )
-        return spread_order
+
+        if result.success:
+            return result, None
+        return None, result.error
+
+    async def execute_order():
+        results = []
+
+        if order_type == "BUY_SPOT":
+            result, error = await execute_single_leg("SPOT", "BUY", spot_price)
+            if result:
+                results.append(("SPOT", "BUY", spot_price, result, quantity))
+            else:
+                return None, error
+
+        elif order_type == "SELL_SPOT":
+            result, error = await execute_single_leg("SPOT", "SELL", spot_price)
+            if result:
+                results.append(("SPOT", "SELL", spot_price, result, quantity))
+            else:
+                return None, error
+
+        elif order_type == "BUY_FUTURES":
+            result, error = await execute_single_leg("FUTURES", "BUY", futures_price)
+            if result:
+                results.append(("FUTURES", "BUY", futures_price, result, quantity))
+            else:
+                return None, error
+
+        elif order_type == "SELL_FUTURES":
+            result, error = await execute_single_leg("FUTURES", "SELL", futures_price)
+            if result:
+                results.append(("FUTURES", "SELL", futures_price, result, quantity))
+            else:
+                return None, error
+
+        elif order_type == "LONG_SPREAD":
+            # Buy Spot + Sell Futures
+            spot_result, spot_error = await execute_single_leg("SPOT", "BUY", spot_price)
+            if not spot_result:
+                return None, f"Spot order failed: {spot_error}"
+            results.append(("SPOT", "BUY", spot_price, spot_result, quantity))
+
+            futures_result, futures_error = await execute_single_leg("FUTURES", "SELL", futures_price)
+            if not futures_result:
+                return None, f"Futures order failed: {futures_error}"
+            results.append(("FUTURES", "SELL", futures_price, futures_result, quantity))
+
+        elif order_type == "SHORT_SPREAD":
+            # Sell Spot + Buy Futures
+            spot_result, spot_error = await execute_single_leg("SPOT", "SELL", spot_price)
+            if not spot_result:
+                return None, f"Spot order failed: {spot_error}"
+            results.append(("SPOT", "SELL", spot_price, spot_result, quantity))
+
+            futures_result, futures_error = await execute_single_leg("FUTURES", "BUY", futures_price)
+            if not futures_result:
+                return None, f"Futures order failed: {futures_error}"
+            results.append(("FUTURES", "BUY", futures_price, futures_result, quantity))
+
+        return results, None
 
     if loop:
         try:
-            future = asyncio.run_coroutine_threadsafe(execute_test_entry(), loop)
-            spread_order = future.result(timeout=60)  # Longer timeout for limit orders
+            future = asyncio.run_coroutine_threadsafe(execute_order(), loop)
+            results, error = future.result(timeout=60)
 
-            if spread_order and spread_order.is_complete:
-                entry_spread = spread_order.futures_leg.filled_price - spread_order.spot_leg.filled_price
+            if error:
+                return jsonify({'success': False, 'error': error}), 400
 
-                test_order_state = {
-                    'has_position': True,
-                    'position_type': position_type,
-                    'entry_spread': entry_spread,
-                    'entry_spot_price': spread_order.spot_leg.filled_price,
-                    'entry_futures_price': spread_order.futures_leg.filled_price,
-                    'quantity': quantity,
-                    'spot_order_id': spread_order.spot_leg.order_id,
-                    'futures_order_id': spread_order.futures_leg.order_id,
+            # Store positions
+            for market_type, side, entry_price, result, qty in results:
+                pos_id = str(uuid.uuid4())[:8]
+                test_positions[pos_id] = {
+                    'id': pos_id,
+                    'market_type': market_type,
+                    'side': side,
+                    'quantity': qty,
+                    'entry_price': entry_price,
+                    'order_id': result.order_id,
                     'entry_time': datetime.now(timezone.utc).isoformat(),
                 }
+                logger.info("Test position opened: %s %s %s @ $%.2f, order_id=%s",
+                           pos_id, side, market_type, entry_price, result.order_id)
 
-                logger.info("Test position opened: %s @ spread=%.2f", position_type, entry_spread)
-
-                return jsonify({
-                    'success': True,
-                    'position': {
-                        'position_type': position_type,
-                        'entry_spread': entry_spread,
-                        'current_spread': entry_spread,
-                        'unrealized_pnl': 0,
-                        'spot_order_id': spread_order.spot_leg.order_id,
-                        'futures_order_id': spread_order.futures_leg.order_id,
-                    }
-                })
-            elif spread_order and spread_order.is_failed:
-                return jsonify({'success': False, 'error': 'Order execution failed'}), 400
-            else:
-                return jsonify({'success': False, 'error': 'Order not fully filled (timeout or partial)'}), 400
+            return jsonify({'success': True, 'positions_opened': len(results)})
 
         except Exception as e:
             logger.error("Error executing test order: %s", e)
@@ -935,78 +979,148 @@ def open_test_order():
 
 @app.route('/api/test-order/close', methods=['POST'])
 def close_test_order():
-    """Close the manual test order."""
-    global test_order_state
+    """Close a specific test position."""
+    global test_positions
 
-    if not test_order_state['has_position']:
-        return jsonify({'success': False, 'error': 'No test position open'}), 400
+    data = request.json
+    position_id = data.get('position_id')
 
-    if not engine.order_executor:
-        return jsonify({'success': False, 'error': 'Order executor not available'}), 400
+    if not position_id or position_id not in test_positions:
+        return jsonify({'success': False, 'error': 'Position not found'}), 404
+
+    pos = test_positions[position_id]
 
     if not engine.spot_tick or not engine.futures_tick:
         return jsonify({'success': False, 'error': 'No price data available'}), 400
 
-    position_type = test_order_state['position_type']
-    quantity = test_order_state['quantity']
-    entry_spread = test_order_state['entry_spread']
+    # Determine closing side (opposite of entry)
+    close_side = "SELL" if pos['side'] == "BUY" else "BUY"
+    market_type = pos['market_type']
+    quantity = pos['quantity']
+    current_price = engine.spot_tick.mid if market_type == "SPOT" else engine.futures_tick.mid
 
-    logger.info("Closing test %s position: qty=%.6f", position_type, quantity)
+    logger.info("Closing test position %s: %s %s @ $%.2f", position_id, close_side, market_type, current_price)
 
-    async def execute_test_exit():
-        spread_order = await engine.order_executor.execute_exit(
-            position_type=position_type,
-            spot_tick=engine.spot_tick,
-            futures_tick=engine.futures_tick,
+    async def close_position():
+        adapter = engine.spot_adapter if market_type == "SPOT" else engine.futures_adapter
+        if not adapter:
+            return None, f"No {market_type} adapter available"
+
+        symbol = config.spot_symbol if market_type == "SPOT" else config.futures_symbol
+        order_type_str = config.order_execution_mode
+
+        result = await adapter.place_order(
+            symbol=symbol,
+            side=close_side,
+            order_type=order_type_str,
             quantity=quantity,
+            price=current_price if order_type_str == "LIMIT" else None,
         )
-        return spread_order
+
+        return result, None if result.success else result.error
 
     if loop:
         try:
-            future = asyncio.run_coroutine_threadsafe(execute_test_exit(), loop)
-            spread_order = future.result(timeout=60)
+            future = asyncio.run_coroutine_threadsafe(close_position(), loop)
+            result, error = future.result(timeout=60)
 
-            if spread_order and spread_order.is_complete:
-                exit_spread = spread_order.futures_leg.filled_price - spread_order.spot_leg.filled_price
+            if error or not result.success:
+                return jsonify({'success': False, 'error': error or 'Close order failed'}), 400
 
-                # Calculate P&L
-                if position_type == "LONG":
-                    # Long spread: profit when spread narrows (exit < entry)
-                    pnl = (entry_spread - exit_spread) * quantity
-                else:
-                    # Short spread: profit when spread widens (exit > entry)
-                    pnl = (exit_spread - entry_spread) * quantity
-
-                logger.info("Test position closed: exit_spread=%.2f, P&L=$%.2f", exit_spread, pnl)
-
-                # Reset state
-                test_order_state = {
-                    'has_position': False,
-                    'position_type': None,
-                    'entry_spread': None,
-                    'entry_spot_price': None,
-                    'entry_futures_price': None,
-                    'quantity': 0,
-                    'spot_order_id': None,
-                    'futures_order_id': None,
-                    'entry_time': None,
-                }
-
-                return jsonify({
-                    'success': True,
-                    'pnl_usd': pnl,
-                    'exit_spread': exit_spread,
-                    'spot_order_id': spread_order.spot_leg.order_id,
-                    'futures_order_id': spread_order.futures_leg.order_id,
-                })
-            elif spread_order and spread_order.is_failed:
-                return jsonify({'success': False, 'error': 'Exit order failed'}), 400
+            # Calculate P&L
+            entry_price = pos['entry_price']
+            if pos['side'] == "BUY":
+                pnl = (current_price - entry_price) * quantity
             else:
-                return jsonify({'success': False, 'error': 'Exit not fully filled'}), 400
+                pnl = (entry_price - current_price) * quantity
+
+            logger.info("Test position %s closed: P&L=$%.2f", position_id, pnl)
+
+            # Remove position
+            del test_positions[position_id]
+
+            return jsonify({
+                'success': True,
+                'pnl_usd': pnl,
+                'close_price': current_price,
+                'order_id': result.order_id,
+            })
 
         except Exception as e:
-            logger.error("Error closing test order: %s", e)
+            logger.error("Error closing test position: %s", e)
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    return jsonify({'success': False, 'error': 'Event loop not running'}), 500
+
+
+@app.route('/api/test-order/close-all', methods=['POST'])
+def close_all_test_orders():
+    """Close all test positions."""
+    global test_positions
+
+    if not test_positions:
+        return jsonify({'success': True, 'total_pnl': 0, 'closed': 0})
+
+    if not engine.spot_tick or not engine.futures_tick:
+        return jsonify({'success': False, 'error': 'No price data available'}), 400
+
+    total_pnl = 0
+    closed = 0
+    errors = []
+
+    async def close_all():
+        nonlocal total_pnl, closed, errors
+
+        for pos_id, pos in list(test_positions.items()):
+            close_side = "SELL" if pos['side'] == "BUY" else "BUY"
+            market_type = pos['market_type']
+            quantity = pos['quantity']
+            current_price = engine.spot_tick.mid if market_type == "SPOT" else engine.futures_tick.mid
+
+            adapter = engine.spot_adapter if market_type == "SPOT" else engine.futures_adapter
+            if not adapter:
+                errors.append(f"No {market_type} adapter for {pos_id}")
+                continue
+
+            symbol = config.spot_symbol if market_type == "SPOT" else config.futures_symbol
+            order_type_str = config.order_execution_mode
+
+            result = await adapter.place_order(
+                symbol=symbol,
+                side=close_side,
+                order_type=order_type_str,
+                quantity=quantity,
+                price=current_price if order_type_str == "LIMIT" else None,
+            )
+
+            if result.success:
+                entry_price = pos['entry_price']
+                if pos['side'] == "BUY":
+                    pnl = (current_price - entry_price) * quantity
+                else:
+                    pnl = (entry_price - current_price) * quantity
+
+                total_pnl += pnl
+                closed += 1
+                del test_positions[pos_id]
+                logger.info("Closed position %s: P&L=$%.2f", pos_id, pnl)
+            else:
+                errors.append(f"{pos_id}: {result.error}")
+
+    if loop:
+        try:
+            future = asyncio.run_coroutine_threadsafe(close_all(), loop)
+            future.result(timeout=120)
+
+            return jsonify({
+                'success': len(errors) == 0,
+                'total_pnl': total_pnl,
+                'closed': closed,
+                'errors': errors if errors else None,
+            })
+
+        except Exception as e:
+            logger.error("Error closing all test positions: %s", e)
             return jsonify({'success': False, 'error': str(e)}), 500
 
     return jsonify({'success': False, 'error': 'Event loop not running'}), 500
@@ -1014,36 +1128,37 @@ def close_test_order():
 
 @app.route('/api/test-order/status', methods=['GET'])
 def get_test_order_status():
-    """Get the current test order status."""
-    if not test_order_state['has_position']:
-        return jsonify({'has_position': False})
+    """Get all test positions with current prices and P&L."""
+    positions = []
 
-    # Calculate current spread and unrealized P&L
-    current_spread = 0
-    unrealized_pnl = 0
+    for pos_id, pos in test_positions.items():
+        market_type = pos['market_type']
+        current_price = 0
+        unrealized_pnl = 0
 
-    if engine.spot_tick and engine.futures_tick:
-        current_spread = engine.futures_tick.mid - engine.spot_tick.mid
-        entry_spread = test_order_state['entry_spread']
-        quantity = test_order_state['quantity']
+        if engine.spot_tick and engine.futures_tick:
+            current_price = engine.spot_tick.mid if market_type == "SPOT" else engine.futures_tick.mid
+            entry_price = pos['entry_price']
+            quantity = pos['quantity']
 
-        if test_order_state['position_type'] == "LONG":
-            unrealized_pnl = (entry_spread - current_spread) * quantity
-        else:
-            unrealized_pnl = (current_spread - entry_spread) * quantity
+            if pos['side'] == "BUY":
+                unrealized_pnl = (current_price - entry_price) * quantity
+            else:
+                unrealized_pnl = (entry_price - current_price) * quantity
 
-    return jsonify({
-        'has_position': True,
-        'position': {
-            'position_type': test_order_state['position_type'],
-            'entry_spread': test_order_state['entry_spread'],
-            'current_spread': current_spread,
+        positions.append({
+            'id': pos_id,
+            'market_type': market_type,
+            'side': pos['side'],
+            'quantity': pos['quantity'],
+            'entry_price': pos['entry_price'],
+            'current_price': current_price,
             'unrealized_pnl': unrealized_pnl,
-            'spot_order_id': test_order_state['spot_order_id'],
-            'futures_order_id': test_order_state['futures_order_id'],
-            'entry_time': test_order_state['entry_time'],
-        }
-    })
+            'order_id': pos['order_id'],
+            'entry_time': pos['entry_time'],
+        })
+
+    return jsonify({'positions': positions})
 
 
 @app.route('/api/reset-all', methods=['POST'])

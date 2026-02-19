@@ -247,10 +247,18 @@
 
                     <div class="row mb-3">
                         <div class="col-md-4">
-                            <label class="form-label">Position Type</label>
-                            <select class="form-select" id="test_position_type">
-                                <option value="LONG">LONG (Buy Spot, Sell Futures)</option>
-                                <option value="SHORT">SHORT (Sell Spot, Buy Futures)</option>
+                            <label class="form-label">Order Type</label>
+                            <select class="form-select" id="test_order_type">
+                                <optgroup label="Single Leg">
+                                    <option value="BUY_SPOT">Buy Spot</option>
+                                    <option value="SELL_SPOT">Sell Spot</option>
+                                    <option value="BUY_FUTURES">Buy Futures (Long)</option>
+                                    <option value="SELL_FUTURES">Sell Futures (Short)</option>
+                                </optgroup>
+                                <optgroup label="Spread (Both Legs)">
+                                    <option value="LONG_SPREAD">Buy Spot + Sell Futures</option>
+                                    <option value="SHORT_SPREAD">Sell Spot + Buy Futures</option>
+                                </optgroup>
                             </select>
                         </div>
                         <div class="col-md-4">
@@ -258,48 +266,38 @@
                             <input type="number" class="form-control" id="test_size_usd" value="100" min="10" max="10000" step="10">
                         </div>
                         <div class="col-md-4">
-                            <label class="form-label">Actions</label>
-                            <div class="d-flex gap-2">
-                                <button type="button" class="btn btn-success flex-grow-1" id="btn-open-test" onclick="openTestOrder()">
-                                    <i class="bi bi-play-fill me-1"></i>Open
-                                </button>
-                                <button type="button" class="btn btn-danger flex-grow-1" id="btn-close-test" onclick="closeTestOrder()" disabled>
-                                    <i class="bi bi-stop-fill me-1"></i>Close
-                                </button>
-                            </div>
+                            <label class="form-label">Action</label>
+                            <button type="button" class="btn btn-success w-100" id="btn-open-test" onclick="openTestOrder()">
+                                <i class="bi bi-play-fill me-1"></i>Execute Order
+                            </button>
                         </div>
                     </div>
 
-                    <!-- Test Order Status -->
-                    <div class="card bg-dark" id="test-order-status" style="display: none;">
+                    <!-- Open Positions -->
+                    <div class="card bg-dark mb-3" id="test-positions-card" style="display: none;">
+                        <div class="card-header py-2 d-flex justify-content-between align-items-center">
+                            <span><i class="bi bi-list-check me-2"></i>Open Test Positions</span>
+                            <button type="button" class="btn btn-outline-danger btn-sm" onclick="closeAllTestOrders()">
+                                <i class="bi bi-x-lg me-1"></i>Close All
+                            </button>
+                        </div>
                         <div class="card-body py-2">
-                            <div class="row align-items-center">
-                                <div class="col-md-3">
-                                    <small class="text-secondary">Position</small>
-                                    <div class="fw-bold" id="test-position-type">-</div>
-                                </div>
-                                <div class="col-md-3">
-                                    <small class="text-secondary">Entry Spread</small>
-                                    <div id="test-entry-spread">-</div>
-                                </div>
-                                <div class="col-md-3">
-                                    <small class="text-secondary">Current Spread</small>
-                                    <div id="test-current-spread">-</div>
-                                </div>
-                                <div class="col-md-3">
-                                    <small class="text-secondary">Unrealized P&L</small>
-                                    <div id="test-unrealized-pnl">-</div>
-                                </div>
-                            </div>
-                            <div class="row mt-2">
-                                <div class="col-12">
-                                    <small class="text-secondary">Order IDs</small>
-                                    <div class="small">
-                                        Spot: <code id="test-spot-order-id">-</code> |
-                                        Futures: <code id="test-futures-order-id">-</code>
-                                    </div>
-                                </div>
-                            </div>
+                            <table class="table table-sm table-dark mb-0">
+                                <thead>
+                                    <tr>
+                                        <th>Type</th>
+                                        <th>Side</th>
+                                        <th>Qty</th>
+                                        <th>Entry Price</th>
+                                        <th>Current</th>
+                                        <th>P&L</th>
+                                        <th>Order ID</th>
+                                        <th></th>
+                                    </tr>
+                                </thead>
+                                <tbody id="test-positions-body">
+                                </tbody>
+                            </table>
                         </div>
                     </div>
 
@@ -431,96 +429,114 @@
     let testOrderInterval = null;
 
     function openTestOrder() {
-        const positionType = document.getElementById('test_position_type').value;
+        const orderType = document.getElementById('test_order_type').value;
         const sizeUsd = parseFloat(document.getElementById('test_size_usd').value);
 
         document.getElementById('btn-open-test').disabled = true;
-        document.getElementById('btn-open-test').innerHTML = '<i class="bi bi-hourglass-split me-1"></i>Opening...';
+        document.getElementById('btn-open-test').innerHTML = '<i class="bi bi-hourglass-split me-1"></i>Executing...';
 
         fetch('/api/test-order/open', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({
-                position_type: positionType,
+                order_type: orderType,
                 size_usd: sizeUsd
             })
         })
         .then(response => response.json())
         .then(data => {
+            document.getElementById('btn-open-test').disabled = false;
+            document.getElementById('btn-open-test').innerHTML = '<i class="bi bi-play-fill me-1"></i>Execute Order';
+
             if (data.success) {
-                showToast(`Test ${positionType} position opened`, 'success');
-                updateTestOrderUI(data);
-                startTestOrderPolling();
+                showToast(`Order executed: ${orderType}`, 'success');
+                fetchTestOrderStatus();
             } else {
                 showToast(`Error: ${data.error}`, 'danger');
-                document.getElementById('btn-open-test').disabled = false;
-                document.getElementById('btn-open-test').innerHTML = '<i class="bi bi-play-fill me-1"></i>Open';
             }
         })
         .catch(error => {
             console.error('Error:', error);
-            showToast('Error opening test order', 'danger');
+            showToast('Error executing order', 'danger');
             document.getElementById('btn-open-test').disabled = false;
-            document.getElementById('btn-open-test').innerHTML = '<i class="bi bi-play-fill me-1"></i>Open';
+            document.getElementById('btn-open-test').innerHTML = '<i class="bi bi-play-fill me-1"></i>Execute Order';
         });
     }
 
-    function closeTestOrder() {
-        document.getElementById('btn-close-test').disabled = true;
-        document.getElementById('btn-close-test').innerHTML = '<i class="bi bi-hourglass-split me-1"></i>Closing...';
-
+    function closeTestOrder(positionId) {
         fetch('/api/test-order/close', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ position_id: positionId })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                showToast(`Position closed. P&L: $${data.pnl_usd?.toFixed(2) || '0.00'}`, 'success');
+                fetchTestOrderStatus();
+            } else {
+                showToast(`Error: ${data.error}`, 'danger');
+            }
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            showToast('Error closing position', 'danger');
+        });
+    }
+
+    function closeAllTestOrders() {
+        fetch('/api/test-order/close-all', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'}
         })
         .then(response => response.json())
         .then(data => {
             if (data.success) {
-                showToast(`Test position closed. P&L: $${data.pnl_usd?.toFixed(2) || '0.00'}`, 'success');
-                resetTestOrderUI();
+                showToast(`All positions closed. Total P&L: $${data.total_pnl?.toFixed(2) || '0.00'}`, 'success');
+                fetchTestOrderStatus();
             } else {
                 showToast(`Error: ${data.error}`, 'danger');
-                document.getElementById('btn-close-test').disabled = false;
-                document.getElementById('btn-close-test').innerHTML = '<i class="bi bi-stop-fill me-1"></i>Close';
             }
         })
         .catch(error => {
             console.error('Error:', error);
-            showToast('Error closing test order', 'danger');
-            document.getElementById('btn-close-test').disabled = false;
-            document.getElementById('btn-close-test').innerHTML = '<i class="bi bi-stop-fill me-1"></i>Close';
+            showToast('Error closing positions', 'danger');
         });
     }
 
-    function updateTestOrderUI(data) {
-        document.getElementById('test-order-status').style.display = 'block';
-        document.getElementById('btn-open-test').disabled = true;
-        document.getElementById('btn-open-test').innerHTML = '<i class="bi bi-play-fill me-1"></i>Open';
-        document.getElementById('btn-close-test').disabled = false;
-        document.getElementById('btn-close-test').innerHTML = '<i class="bi bi-stop-fill me-1"></i>Close';
+    function updateTestPositionsTable(positions) {
+        const tbody = document.getElementById('test-positions-body');
+        const card = document.getElementById('test-positions-card');
 
-        if (data.position) {
-            document.getElementById('test-position-type').textContent = data.position.position_type;
-            document.getElementById('test-position-type').className = data.position.position_type === 'LONG' ? 'fw-bold text-success' : 'fw-bold text-danger';
-            document.getElementById('test-entry-spread').textContent = data.position.entry_spread?.toFixed(2) || '-';
-            document.getElementById('test-current-spread').textContent = data.position.current_spread?.toFixed(2) || '-';
-
-            const pnl = data.position.unrealized_pnl || 0;
-            document.getElementById('test-unrealized-pnl').textContent = `$${pnl.toFixed(2)}`;
-            document.getElementById('test-unrealized-pnl').className = pnl >= 0 ? 'text-success' : 'text-danger';
-
-            document.getElementById('test-spot-order-id').textContent = data.position.spot_order_id || '-';
-            document.getElementById('test-futures-order-id').textContent = data.position.futures_order_id || '-';
+        if (!positions || positions.length === 0) {
+            card.style.display = 'none';
+            return;
         }
-    }
 
-    function resetTestOrderUI() {
-        stopTestOrderPolling();
-        document.getElementById('test-order-status').style.display = 'none';
-        document.getElementById('btn-open-test').disabled = false;
-        document.getElementById('btn-open-test').innerHTML = '<i class="bi bi-play-fill me-1"></i>Open';
-        document.getElementById('btn-close-test').disabled = true;
-        document.getElementById('btn-close-test').innerHTML = '<i class="bi bi-stop-fill me-1"></i>Close';
+        card.style.display = 'block';
+        tbody.innerHTML = '';
+
+        positions.forEach(pos => {
+            const pnlClass = pos.unrealized_pnl >= 0 ? 'text-success' : 'text-danger';
+            const sideClass = pos.side === 'BUY' ? 'text-success' : 'text-danger';
+
+            const row = document.createElement('tr');
+            row.innerHTML = `
+                <td>${pos.market_type}</td>
+                <td class="${sideClass}">${pos.side}</td>
+                <td>${pos.quantity?.toFixed(6) || '-'}</td>
+                <td>$${pos.entry_price?.toFixed(2) || '-'}</td>
+                <td>$${pos.current_price?.toFixed(2) || '-'}</td>
+                <td class="${pnlClass}">$${pos.unrealized_pnl?.toFixed(2) || '0.00'}</td>
+                <td><code class="small">${pos.order_id || '-'}</code></td>
+                <td>
+                    <button class="btn btn-outline-danger btn-sm py-0 px-1" onclick="closeTestOrder('${pos.id}')">
+                        <i class="bi bi-x"></i>
+                    </button>
+                </td>
+            `;
+            tbody.appendChild(row);
+        });
     }
 
     function startTestOrderPolling() {
@@ -539,16 +555,17 @@
         fetch('/api/test-order/status')
             .then(response => response.json())
             .then(data => {
-                if (data.has_position) {
-                    updateTestOrderUI(data);
+                updateTestPositionsTable(data.positions || []);
+                if (data.positions && data.positions.length > 0) {
+                    startTestOrderPolling();
                 } else {
-                    resetTestOrderUI();
+                    stopTestOrderPolling();
                 }
             })
             .catch(error => console.error('Error fetching test order status:', error));
     }
 
-    // Check for existing test position on page load
+    // Check for existing test positions on page load
     document.addEventListener('DOMContentLoaded', function() {
         fetchTestOrderStatus();
     });
