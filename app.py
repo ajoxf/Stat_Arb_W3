@@ -871,10 +871,15 @@ def open_test_order():
         """Execute a single leg order."""
         adapter = engine.spot_adapter if market_type == "SPOT" else engine.futures_adapter
         if not adapter:
-            return None, f"No {market_type} adapter available"
+            return None, f"No {market_type} adapter available", None
 
         symbol = config.spot_symbol if market_type == "SPOT" else config.futures_symbol
         order_type_str = config.order_execution_mode  # MARKET or LIMIT
+
+        # For futures, determine pos_side for long_short_mode
+        pos_side = None
+        if market_type == "FUTURES":
+            pos_side = "long" if side == "BUY" else "short"
 
         result = await adapter.place_order(
             symbol=symbol,
@@ -882,66 +887,67 @@ def open_test_order():
             order_type=order_type_str,
             quantity=quantity,
             price=price if order_type_str == "LIMIT" else None,
+            pos_side=pos_side,
         )
 
         if result.success:
-            return result, None
-        return None, result.error
+            return result, None, pos_side
+        return None, result.error, None
 
     async def execute_order():
         results = []
 
         if order_type == "BUY_SPOT":
-            result, error = await execute_single_leg("SPOT", "BUY", spot_price)
+            result, error, pos_side = await execute_single_leg("SPOT", "BUY", spot_price)
             if result:
-                results.append(("SPOT", "BUY", spot_price, result, quantity))
+                results.append(("SPOT", "BUY", spot_price, result, quantity, pos_side))
             else:
                 return None, error
 
         elif order_type == "SELL_SPOT":
-            result, error = await execute_single_leg("SPOT", "SELL", spot_price)
+            result, error, pos_side = await execute_single_leg("SPOT", "SELL", spot_price)
             if result:
-                results.append(("SPOT", "SELL", spot_price, result, quantity))
+                results.append(("SPOT", "SELL", spot_price, result, quantity, pos_side))
             else:
                 return None, error
 
         elif order_type == "BUY_FUTURES":
-            result, error = await execute_single_leg("FUTURES", "BUY", futures_price)
+            result, error, pos_side = await execute_single_leg("FUTURES", "BUY", futures_price)
             if result:
-                results.append(("FUTURES", "BUY", futures_price, result, quantity))
+                results.append(("FUTURES", "BUY", futures_price, result, quantity, pos_side))
             else:
                 return None, error
 
         elif order_type == "SELL_FUTURES":
-            result, error = await execute_single_leg("FUTURES", "SELL", futures_price)
+            result, error, pos_side = await execute_single_leg("FUTURES", "SELL", futures_price)
             if result:
-                results.append(("FUTURES", "SELL", futures_price, result, quantity))
+                results.append(("FUTURES", "SELL", futures_price, result, quantity, pos_side))
             else:
                 return None, error
 
         elif order_type == "LONG_SPREAD":
             # Buy Spot + Sell Futures
-            spot_result, spot_error = await execute_single_leg("SPOT", "BUY", spot_price)
+            spot_result, spot_error, _ = await execute_single_leg("SPOT", "BUY", spot_price)
             if not spot_result:
                 return None, f"Spot order failed: {spot_error}"
-            results.append(("SPOT", "BUY", spot_price, spot_result, quantity))
+            results.append(("SPOT", "BUY", spot_price, spot_result, quantity, None))
 
-            futures_result, futures_error = await execute_single_leg("FUTURES", "SELL", futures_price)
+            futures_result, futures_error, pos_side = await execute_single_leg("FUTURES", "SELL", futures_price)
             if not futures_result:
                 return None, f"Futures order failed: {futures_error}"
-            results.append(("FUTURES", "SELL", futures_price, futures_result, quantity))
+            results.append(("FUTURES", "SELL", futures_price, futures_result, quantity, pos_side))
 
         elif order_type == "SHORT_SPREAD":
             # Sell Spot + Buy Futures
-            spot_result, spot_error = await execute_single_leg("SPOT", "SELL", spot_price)
+            spot_result, spot_error, _ = await execute_single_leg("SPOT", "SELL", spot_price)
             if not spot_result:
                 return None, f"Spot order failed: {spot_error}"
-            results.append(("SPOT", "SELL", spot_price, spot_result, quantity))
+            results.append(("SPOT", "SELL", spot_price, spot_result, quantity, None))
 
-            futures_result, futures_error = await execute_single_leg("FUTURES", "BUY", futures_price)
+            futures_result, futures_error, pos_side = await execute_single_leg("FUTURES", "BUY", futures_price)
             if not futures_result:
                 return None, f"Futures order failed: {futures_error}"
-            results.append(("FUTURES", "BUY", futures_price, futures_result, quantity))
+            results.append(("FUTURES", "BUY", futures_price, futures_result, quantity, pos_side))
 
         return results, None
 
@@ -954,7 +960,7 @@ def open_test_order():
                 return jsonify({'success': False, 'error': error}), 400
 
             # Store positions
-            for market_type, side, entry_price, result, qty in results:
+            for market_type, side, entry_price, result, qty, pos_side in results:
                 pos_id = str(uuid.uuid4())[:8]
                 test_positions[pos_id] = {
                     'id': pos_id,
@@ -964,9 +970,10 @@ def open_test_order():
                     'entry_price': entry_price,
                     'order_id': result.order_id,
                     'entry_time': datetime.now(timezone.utc).isoformat(),
+                    'pos_side': pos_side,  # Store for closing futures in long_short_mode
                 }
-                logger.info("Test position opened: %s %s %s @ $%.2f, order_id=%s",
-                           pos_id, side, market_type, entry_price, result.order_id)
+                logger.info("Test position opened: %s %s %s @ $%.2f, order_id=%s, pos_side=%s",
+                           pos_id, side, market_type, entry_price, result.order_id, pos_side)
 
             return jsonify({'success': True, 'positions_opened': len(results)})
 
@@ -1001,6 +1008,9 @@ def close_test_order():
 
     logger.info("Closing test position %s: %s %s @ $%.2f", position_id, close_side, market_type, current_price)
 
+    # Get stored pos_side for futures (critical for long_short_mode!)
+    stored_pos_side = pos.get('pos_side')
+
     async def close_position():
         adapter = engine.spot_adapter if market_type == "SPOT" else engine.futures_adapter
         if not adapter:
@@ -1015,6 +1025,8 @@ def close_test_order():
             order_type=order_type_str,
             quantity=quantity,
             price=current_price if order_type_str == "LIMIT" else None,
+            pos_side=stored_pos_side,  # Use original pos_side for closing!
+            reduce_only=True if market_type == "FUTURES" else False,
         )
 
         return result, None if result.success else result.error
@@ -1076,6 +1088,7 @@ def close_all_test_orders():
             market_type = pos['market_type']
             quantity = pos['quantity']
             current_price = engine.spot_tick.mid if market_type == "SPOT" else engine.futures_tick.mid
+            stored_pos_side = pos.get('pos_side')
 
             adapter = engine.spot_adapter if market_type == "SPOT" else engine.futures_adapter
             if not adapter:
@@ -1091,6 +1104,8 @@ def close_all_test_orders():
                 order_type=order_type_str,
                 quantity=quantity,
                 price=current_price if order_type_str == "LIMIT" else None,
+                pos_side=stored_pos_side,  # Use original pos_side for closing!
+                reduce_only=True if market_type == "FUTURES" else False,
             )
 
             if result.success:

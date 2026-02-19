@@ -49,6 +49,7 @@ class LegOrder:
     filled_qty: float = 0.0
     filled_price: float = 0.0
     last_update: Optional[datetime] = None
+    pos_side: Optional[str] = None  # For OKX long_short_mode: "long" or "short"
 
 
 @dataclass
@@ -142,13 +143,17 @@ class OrderExecutor:
             logger.warning("Already executing an order")
             return None
 
-        # Determine leg sides
+        # Determine leg sides and futures pos_side for OKX long_short_mode
+        # LONG spread: Buy spot, Sell futures (short position)
+        # SHORT spread: Sell spot, Buy futures (long position)
         if position_type == "LONG":
             spot_side = "BUY"
             futures_side = "SELL"
+            futures_pos_side = "short"  # Selling futures = opening short
         else:
             spot_side = "SELL"
             futures_side = "BUY"
+            futures_pos_side = "long"  # Buying futures = opening long
 
         # Create spread order
         spread_order = SpreadOrder(
@@ -161,6 +166,7 @@ class OrderExecutor:
                 symbol=self.config.futures_symbol,
                 side=futures_side,
                 quantity=quantity,
+                pos_side=futures_pos_side,  # For OKX long_short_mode
             ),
             is_entry=True,
             position_type=position_type,
@@ -192,13 +198,17 @@ class OrderExecutor:
             logger.warning("Already executing an order")
             return None
 
-        # Opposite of entry
+        # Opposite of entry, but SAME pos_side (closing the same position)
+        # Close LONG spread: Sell spot, Buy futures (to close short = pos_side stays "short")
+        # Close SHORT spread: Buy spot, Sell futures (to close long = pos_side stays "long")
         if position_type == "LONG":
             spot_side = "SELL"
             futures_side = "BUY"
+            futures_pos_side = "short"  # Closing the short position
         else:
             spot_side = "BUY"
             futures_side = "SELL"
+            futures_pos_side = "long"  # Closing the long position
 
         spread_order = SpreadOrder(
             spot_leg=LegOrder(
@@ -210,6 +220,7 @@ class OrderExecutor:
                 symbol=self.config.futures_symbol,
                 side=futures_side,
                 quantity=quantity,
+                pos_side=futures_pos_side,  # CRITICAL: same as entry pos_side!
             ),
             is_entry=False,
             position_type=position_type,
@@ -384,6 +395,7 @@ class OrderExecutor:
             side=leg.side,
             order_type="MARKET",
             quantity=leg.quantity,
+            pos_side=leg.pos_side,  # For OKX long_short_mode
         )
 
     async def _place_limit_orders(self, spread_order: SpreadOrder) -> None:
@@ -395,6 +407,7 @@ class OrderExecutor:
             order_type="LIMIT",
             quantity=spread_order.spot_leg.quantity,
             price=spread_order.spot_leg.target_price,
+            pos_side=spread_order.spot_leg.pos_side,
         )
 
         if spot_result.success:
@@ -411,6 +424,7 @@ class OrderExecutor:
             order_type="LIMIT",
             quantity=spread_order.futures_leg.quantity,
             price=spread_order.futures_leg.target_price,
+            pos_side=spread_order.futures_leg.pos_side,  # CRITICAL for OKX long_short_mode
         )
 
         if futures_result.success:
@@ -436,6 +450,7 @@ class OrderExecutor:
                     order_type="LIMIT",
                     quantity=spread_order.spot_leg.quantity - spread_order.spot_leg.filled_qty,
                     price=spread_order.spot_leg.target_price,
+                    pos_side=spread_order.spot_leg.pos_side,
                 )
                 if result.success:
                     spread_order.spot_leg.order_id = result.order_id
@@ -455,6 +470,7 @@ class OrderExecutor:
                     order_type="LIMIT",
                     quantity=spread_order.futures_leg.quantity - spread_order.futures_leg.filled_qty,
                     price=spread_order.futures_leg.target_price,
+                    pos_side=spread_order.futures_leg.pos_side,  # Keep same pos_side
                 )
                 if result.success:
                     spread_order.futures_leg.order_id = result.order_id
@@ -524,12 +540,15 @@ class OrderExecutor:
 
         elif futures_filled and not spot_filled:
             # Futures filled, spot didn't - close futures position
+            # IMPORTANT: Use SAME pos_side as entry to close the position
             close_side = "SELL" if spread_order.futures_leg.side == "BUY" else "BUY"
             result = await self.futures_adapter.place_order(
                 symbol=spread_order.futures_leg.symbol,
                 side=close_side,
                 order_type="MARKET",
                 quantity=spread_order.futures_leg.filled_qty,
+                pos_side=spread_order.futures_leg.pos_side,  # Same pos_side to close!
+                reduce_only=True,
             )
             logger.info("Closed futures leg to handle leg risk: %s", result)
 

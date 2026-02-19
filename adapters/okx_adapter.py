@@ -255,14 +255,16 @@ class OKXAdapter(ExchangeAdapter):
             # Handle position side for long/short mode accounts (required for SWAP)
             if inst_type == "SWAP":
                 if pos_side:
+                    # Explicit pos_side provided - use it (important for closing positions!)
                     order_data["posSide"] = pos_side
-                else:
-                    # Auto-detect: check account position mode
+                    logger.info("Using explicit posSide=%s", pos_side)
+                elif not reduce_only:
+                    # Only auto-detect for NEW positions (entries), not for exits
                     account_config = await self.get_account_config()
                     if account_config and account_config.get("position_mode") == "long_short_mode":
                         # In long/short mode: buy opens long, sell opens short
                         order_data["posSide"] = "long" if side.upper() == "BUY" else "short"
-                        logger.info("Account in long_short_mode, setting posSide=%s", order_data["posSide"])
+                        logger.info("Account in long_short_mode, auto-setting posSide=%s for entry", order_data["posSide"])
 
             logger.info("Placing order: %s", order_data)
             result = await self._request("POST", "/api/v5/trade/order", data=order_data)
