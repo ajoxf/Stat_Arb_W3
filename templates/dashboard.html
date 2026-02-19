@@ -65,6 +65,35 @@
     </div>
 </div>
 
+<!-- Trading Status Banner -->
+<div class="card mb-3" id="trading-status-card">
+    <div class="card-body py-2">
+        <div class="d-flex align-items-center justify-content-between">
+            <div class="d-flex align-items-center">
+                <span id="trading-status-icon" class="me-2" style="font-size: 1.2rem;">
+                    <i class="bi bi-hourglass-split text-warning"></i>
+                </span>
+                <div>
+                    <div id="trading-status-text" class="fw-bold">Collecting Data...</div>
+                    <small id="trading-status-detail" class="text-secondary">Waiting for lookback period</small>
+                </div>
+            </div>
+            <div class="d-flex align-items-center flex-grow-1 mx-4">
+                <div class="progress flex-grow-1" style="height: 20px;">
+                    <div class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar"
+                         id="trading-progress-bar" style="width: 0%;">
+                        <span id="trading-progress-text" style="font-size: 0.75rem;">0%</span>
+                    </div>
+                </div>
+            </div>
+            <div class="text-end">
+                <div id="data-count-display" class="fw-bold font-monospace">0 / {{ config.lookback_period }}</div>
+                <small class="text-secondary">data points</small>
+            </div>
+        </div>
+    </div>
+</div>
+
 <div class="row g-3">
     <!-- Left Column: Prices and Signal -->
     <div class="col-lg-5">
@@ -719,6 +748,9 @@
         }
         if (percentEl) percentEl.textContent = Math.round(progressPercent);
 
+        // Update Trading Status Banner
+        updateTradingStatus(dataPoints, lookback, data.data_ready, data.hurst_ok, data.std_filter_ok);
+
         updateFilterStatus('hurst-status', data.hurst_ok, data.hurst);
         updateFilterStatus('std-status', data.std_filter_ok);
 
@@ -829,6 +861,57 @@
             badge.style.padding = '0.4rem 0.8rem';
             details.style.display = 'block';
             if (closeBtn) closeBtn.style.display = 'inline-block';
+        }
+    }
+
+    function updateTradingStatus(dataPoints, lookback, dataReady, hurstOk, stdOk) {
+        const statusCard = document.getElementById('trading-status-card');
+        const statusIcon = document.getElementById('trading-status-icon');
+        const statusText = document.getElementById('trading-status-text');
+        const statusDetail = document.getElementById('trading-status-detail');
+        const progressBar = document.getElementById('trading-progress-bar');
+        const progressText = document.getElementById('trading-progress-text');
+        const dataCountDisplay = document.getElementById('data-count-display');
+
+        const percent = Math.min(100, (dataPoints / lookback) * 100);
+
+        // Update progress bar
+        progressBar.style.width = percent + '%';
+        progressText.textContent = Math.round(percent) + '%';
+        dataCountDisplay.textContent = dataPoints.toLocaleString() + ' / ' + lookback.toLocaleString();
+
+        if (!dataReady) {
+            // Collecting data
+            statusCard.style.borderLeft = '4px solid #ffc107';
+            statusIcon.innerHTML = '<i class="bi bi-hourglass-split text-warning"></i>';
+            statusText.textContent = 'Collecting Data...';
+            statusText.className = 'fw-bold text-warning';
+            statusDetail.textContent = 'Cannot trade until lookback period is complete';
+            progressBar.className = 'progress-bar progress-bar-striped progress-bar-animated bg-warning';
+        } else {
+            // Check if filters pass
+            const filtersPass = (hurstOk !== false) && (stdOk !== false);
+
+            if (filtersPass) {
+                // Ready to trade
+                statusCard.style.borderLeft = '4px solid #198754';
+                statusIcon.innerHTML = '<i class="bi bi-check-circle-fill text-success"></i>';
+                statusText.textContent = 'Ready to Trade';
+                statusText.className = 'fw-bold text-success';
+                statusDetail.textContent = 'All filters passed - waiting for Z-score signal';
+                progressBar.className = 'progress-bar bg-success';
+            } else {
+                // Data ready but filters blocked
+                statusCard.style.borderLeft = '4px solid #dc3545';
+                statusIcon.innerHTML = '<i class="bi bi-pause-circle-fill text-danger"></i>';
+                statusText.textContent = 'Filters Blocked';
+                statusText.className = 'fw-bold text-danger';
+                let blockedBy = [];
+                if (hurstOk === false) blockedBy.push('Hurst');
+                if (stdOk === false) blockedBy.push('STD');
+                statusDetail.textContent = 'Blocked by: ' + blockedBy.join(', ');
+                progressBar.className = 'progress-bar bg-danger';
+            }
         }
     }
 
