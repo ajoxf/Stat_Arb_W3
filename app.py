@@ -840,6 +840,212 @@ def get_active_orders():
     })
 
 
+# ============== Manual Order Testing ==============
+# Store test order state
+test_order_state = {
+    'has_position': False,
+    'position_type': None,
+    'entry_spread': None,
+    'entry_spot_price': None,
+    'entry_futures_price': None,
+    'quantity': 0,
+    'spot_order_id': None,
+    'futures_order_id': None,
+    'entry_time': None,
+}
+
+
+@app.route('/api/test-order/open', methods=['POST'])
+def open_test_order():
+    """Open a manual test order to test Market/Limit execution."""
+    global test_order_state
+
+    if test_order_state['has_position']:
+        return jsonify({'success': False, 'error': 'Test position already open'}), 400
+
+    if not engine.order_executor:
+        return jsonify({'success': False, 'error': 'Order executor not available. Check API keys.'}), 400
+
+    if not engine.spot_tick or not engine.futures_tick:
+        return jsonify({'success': False, 'error': 'No price data available. Wait for connection.'}), 400
+
+    data = request.json
+    position_type = data.get('position_type', 'LONG')
+    size_usd = data.get('size_usd', 100)
+
+    # Calculate quantity based on spot price
+    spot_price = engine.spot_tick.mid
+    quantity = size_usd / spot_price
+
+    logger.info("Opening test %s position: size=$%.2f, qty=%.6f", position_type, size_usd, quantity)
+
+    async def execute_test_entry():
+        spread_order = await engine.order_executor.execute_entry(
+            position_type=position_type,
+            spot_tick=engine.spot_tick,
+            futures_tick=engine.futures_tick,
+            quantity=quantity,
+        )
+        return spread_order
+
+    if loop:
+        try:
+            future = asyncio.run_coroutine_threadsafe(execute_test_entry(), loop)
+            spread_order = future.result(timeout=60)  # Longer timeout for limit orders
+
+            if spread_order and spread_order.is_complete:
+                entry_spread = spread_order.futures_leg.filled_price - spread_order.spot_leg.filled_price
+
+                test_order_state = {
+                    'has_position': True,
+                    'position_type': position_type,
+                    'entry_spread': entry_spread,
+                    'entry_spot_price': spread_order.spot_leg.filled_price,
+                    'entry_futures_price': spread_order.futures_leg.filled_price,
+                    'quantity': quantity,
+                    'spot_order_id': spread_order.spot_leg.order_id,
+                    'futures_order_id': spread_order.futures_leg.order_id,
+                    'entry_time': datetime.now(timezone.utc).isoformat(),
+                }
+
+                logger.info("Test position opened: %s @ spread=%.2f", position_type, entry_spread)
+
+                return jsonify({
+                    'success': True,
+                    'position': {
+                        'position_type': position_type,
+                        'entry_spread': entry_spread,
+                        'current_spread': entry_spread,
+                        'unrealized_pnl': 0,
+                        'spot_order_id': spread_order.spot_leg.order_id,
+                        'futures_order_id': spread_order.futures_leg.order_id,
+                    }
+                })
+            elif spread_order and spread_order.is_failed:
+                return jsonify({'success': False, 'error': 'Order execution failed'}), 400
+            else:
+                return jsonify({'success': False, 'error': 'Order not fully filled (timeout or partial)'}), 400
+
+        except Exception as e:
+            logger.error("Error executing test order: %s", e)
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    return jsonify({'success': False, 'error': 'Event loop not running'}), 500
+
+
+@app.route('/api/test-order/close', methods=['POST'])
+def close_test_order():
+    """Close the manual test order."""
+    global test_order_state
+
+    if not test_order_state['has_position']:
+        return jsonify({'success': False, 'error': 'No test position open'}), 400
+
+    if not engine.order_executor:
+        return jsonify({'success': False, 'error': 'Order executor not available'}), 400
+
+    if not engine.spot_tick or not engine.futures_tick:
+        return jsonify({'success': False, 'error': 'No price data available'}), 400
+
+    position_type = test_order_state['position_type']
+    quantity = test_order_state['quantity']
+    entry_spread = test_order_state['entry_spread']
+
+    logger.info("Closing test %s position: qty=%.6f", position_type, quantity)
+
+    async def execute_test_exit():
+        spread_order = await engine.order_executor.execute_exit(
+            position_type=position_type,
+            spot_tick=engine.spot_tick,
+            futures_tick=engine.futures_tick,
+            quantity=quantity,
+        )
+        return spread_order
+
+    if loop:
+        try:
+            future = asyncio.run_coroutine_threadsafe(execute_test_exit(), loop)
+            spread_order = future.result(timeout=60)
+
+            if spread_order and spread_order.is_complete:
+                exit_spread = spread_order.futures_leg.filled_price - spread_order.spot_leg.filled_price
+
+                # Calculate P&L
+                if position_type == "LONG":
+                    # Long spread: profit when spread narrows (exit < entry)
+                    pnl = (entry_spread - exit_spread) * quantity
+                else:
+                    # Short spread: profit when spread widens (exit > entry)
+                    pnl = (exit_spread - entry_spread) * quantity
+
+                logger.info("Test position closed: exit_spread=%.2f, P&L=$%.2f", exit_spread, pnl)
+
+                # Reset state
+                test_order_state = {
+                    'has_position': False,
+                    'position_type': None,
+                    'entry_spread': None,
+                    'entry_spot_price': None,
+                    'entry_futures_price': None,
+                    'quantity': 0,
+                    'spot_order_id': None,
+                    'futures_order_id': None,
+                    'entry_time': None,
+                }
+
+                return jsonify({
+                    'success': True,
+                    'pnl_usd': pnl,
+                    'exit_spread': exit_spread,
+                    'spot_order_id': spread_order.spot_leg.order_id,
+                    'futures_order_id': spread_order.futures_leg.order_id,
+                })
+            elif spread_order and spread_order.is_failed:
+                return jsonify({'success': False, 'error': 'Exit order failed'}), 400
+            else:
+                return jsonify({'success': False, 'error': 'Exit not fully filled'}), 400
+
+        except Exception as e:
+            logger.error("Error closing test order: %s", e)
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    return jsonify({'success': False, 'error': 'Event loop not running'}), 500
+
+
+@app.route('/api/test-order/status', methods=['GET'])
+def get_test_order_status():
+    """Get the current test order status."""
+    if not test_order_state['has_position']:
+        return jsonify({'has_position': False})
+
+    # Calculate current spread and unrealized P&L
+    current_spread = 0
+    unrealized_pnl = 0
+
+    if engine.spot_tick and engine.futures_tick:
+        current_spread = engine.futures_tick.mid - engine.spot_tick.mid
+        entry_spread = test_order_state['entry_spread']
+        quantity = test_order_state['quantity']
+
+        if test_order_state['position_type'] == "LONG":
+            unrealized_pnl = (entry_spread - current_spread) * quantity
+        else:
+            unrealized_pnl = (current_spread - entry_spread) * quantity
+
+    return jsonify({
+        'has_position': True,
+        'position': {
+            'position_type': test_order_state['position_type'],
+            'entry_spread': test_order_state['entry_spread'],
+            'current_spread': current_spread,
+            'unrealized_pnl': unrealized_pnl,
+            'spot_order_id': test_order_state['spot_order_id'],
+            'futures_order_id': test_order_state['futures_order_id'],
+            'entry_time': test_order_state['entry_time'],
+        }
+    })
+
+
 @app.route('/api/reset-all', methods=['POST'])
 def reset_all():
     """Reset everything - trades, SD touches, spread history, and engine state."""
