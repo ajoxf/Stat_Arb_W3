@@ -201,38 +201,69 @@ class OKXAdapter(ExchangeAdapter):
         price: Optional[float] = None,
         reduce_only: bool = False,
     ) -> OrderResult:
-        """Place an order."""
+        """
+        Place an order.
+
+        Note: For SWAP contracts, quantity is in base currency (e.g., BTC).
+        This method converts to contracts automatically.
+        """
         try:
             # Determine instrument type and trade mode
             inst_type = "SWAP" if "-SWAP" in symbol else "SPOT"
             td_mode = "cross" if inst_type == "SWAP" else "cash"
+
+            # For SWAP, convert quantity to contracts
+            sz = quantity
+            if inst_type == "SWAP":
+                # Get contract value (e.g., 0.01 BTC per contract for BTC-USDT-SWAP)
+                symbol_info = await self.get_symbol_info(symbol)
+                if symbol_info:
+                    ct_val = symbol_info.get("contract_val", 0.01)
+                    # Convert BTC quantity to number of contracts
+                    contracts = quantity / ct_val
+                    # Round to nearest whole contract (minimum 1)
+                    sz = max(1, round(contracts))
+                    logger.info("SWAP order: %.6f %s = %d contracts (ctVal=%.4f)",
+                               quantity, symbol.split("-")[0], sz, ct_val)
 
             order_data = {
                 "instId": symbol,
                 "tdMode": td_mode,
                 "side": side.lower(),
                 "ordType": "market" if order_type == "MARKET" else "limit",
-                "sz": str(quantity),
+                "sz": str(int(sz) if inst_type == "SWAP" else sz),
             }
 
             if order_type == "LIMIT" and price:
-                order_data["px"] = str(price)
+                order_data["px"] = str(round(price, 2))  # Round price to 2 decimals
 
             if reduce_only and inst_type == "SWAP":
                 order_data["reduceOnly"] = True
 
+            logger.debug("Placing order: %s", order_data)
             result = await self._request("POST", "/api/v5/trade/order", data=order_data)
 
             if result and result.get("code") == "0" and result.get("data"):
                 order_info = result["data"][0]
+                order_id = order_info.get("ordId", "")
+                logger.info("Order placed successfully: %s %s %s qty=%s, order_id=%s",
+                           side, order_type, symbol, sz, order_id)
                 return OrderResult(
                     success=True,
-                    order_id=order_info.get("ordId", ""),
-                    filled_qty=quantity,  # OKX returns fill info separately
+                    order_id=order_id,
+                    filled_qty=quantity,  # Return original quantity in base currency
                     filled_price=price or 0,
                 )
             else:
+                # Log full error details
                 error = result.get("msg", "Unknown error") if result else "No response"
+                data_errors = result.get("data", []) if result else []
+                if data_errors and isinstance(data_errors, list) and len(data_errors) > 0:
+                    sub_error = data_errors[0].get("sMsg", "") or data_errors[0].get("sCode", "")
+                    if sub_error:
+                        error = f"{error}: {sub_error}"
+                logger.error("Order failed: %s | Request: %s | Response: %s",
+                            error, order_data, result)
                 return OrderResult(success=False, error=error)
 
         except Exception as e:
