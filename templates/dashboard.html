@@ -445,6 +445,43 @@
             </div>
         </div>
 
+        <!-- Position Margin Breakdown -->
+        <div class="card mb-3" id="position-margin-card" style="display: none;">
+            <div class="card-header py-1">
+                <small><i class="bi bi-calculator me-2"></i>Position Margin</small>
+            </div>
+            <div class="card-body py-1" style="font-size: 0.75rem;">
+                <table class="table table-sm mb-0" style="font-size: 0.7rem;">
+                    <thead>
+                        <tr class="text-secondary">
+                            <th style="padding: 2px;">Leg</th>
+                            <th style="padding: 2px;" class="text-end">Value</th>
+                            <th style="padding: 2px;" class="text-center">Lev</th>
+                            <th style="padding: 2px;" class="text-end">Margin</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td style="padding: 2px;">Spot</td>
+                            <td style="padding: 2px;" class="text-end" id="spot-position-value">-</td>
+                            <td style="padding: 2px;" class="text-center" id="spot-leverage">1x</td>
+                            <td style="padding: 2px;" class="text-end" id="spot-margin-used">-</td>
+                        </tr>
+                        <tr>
+                            <td style="padding: 2px;">Futures</td>
+                            <td style="padding: 2px;" class="text-end" id="futures-position-value">-</td>
+                            <td style="padding: 2px;" class="text-center" id="futures-leverage">1x</td>
+                            <td style="padding: 2px;" class="text-end" id="futures-margin-used">-</td>
+                        </tr>
+                        <tr style="border-top: 1px solid var(--border-color);">
+                            <td style="padding: 2px;" colspan="3"><strong>Total Margin</strong></td>
+                            <td style="padding: 2px;" class="text-end"><strong id="total-margin-used">-</strong></td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
         <!-- Trading Config -->
         <div class="card mb-3">
             <div class="card-header py-1">
@@ -685,6 +722,17 @@
     let lastUpdateTime = Date.now();
     const UPDATE_INTERVAL = 300;
 
+    // Position margin tracking
+    let currentPosition = {
+        type: 'NONE',
+        quantity: 0,
+        entrySpotPrice: 0,
+        entryFuturesPrice: 0,
+        notionalUsd: 0
+    };
+    const spotLeverage = {{ config.spot_leverage }};
+    const futuresLeverage = {{ config.futures_leverage }};
+
     // Socket event handlers
     socket.on('tick', function(data) {
         updatePrices(data.spot, data.futures);
@@ -700,6 +748,22 @@
     socket.on('trade', function(data) {
         addTradeToTable(data);
         showToast(`Trade ${data.is_open ? 'opened' : 'closed'}: ${data.position_type}`, 'info');
+
+        // Update position margin tracking
+        if (data.is_open) {
+            currentPosition = {
+                type: data.position_type,
+                quantity: data.quantity || 0,
+                entrySpotPrice: data.entry_spot_price || 0,
+                entryFuturesPrice: data.entry_futures_price || 0,
+                notionalUsd: data.notional_usd || 0
+            };
+            updateMarginDisplay(currentPosition.entrySpotPrice, currentPosition.entryFuturesPrice);
+        } else {
+            // Position closed
+            currentPosition = { type: 'NONE', quantity: 0, entrySpotPrice: 0, entryFuturesPrice: 0, notionalUsd: 0 };
+            updateMarginDisplay(0, 0);
+        }
     });
 
     // Fallback polling
@@ -757,7 +821,44 @@
                 spreadEl.classList.remove('price-up', 'price-down', 'price-neutral');
                 spreadEl.classList.add(spread > 0 ? 'price-up' : spread < 0 ? 'price-down' : 'price-neutral');
             }
+
+            // Update margin display if we have a position
+            if (currentPosition.type !== 'NONE' && currentPosition.quantity > 0) {
+                updateMarginDisplay(spot.last, futures.last);
+            }
         }
+    }
+
+    function updateMarginDisplay(spotPrice, futuresPrice) {
+        const card = document.getElementById('position-margin-card');
+
+        if (currentPosition.type === 'NONE' || currentPosition.quantity <= 0 || !spotPrice || !futuresPrice) {
+            card.style.display = 'none';
+            return;
+        }
+
+        card.style.display = 'block';
+
+        // Calculate position values based on current prices
+        const qty = currentPosition.quantity;
+        const spotValue = qty * spotPrice;
+        const futuresValue = qty * futuresPrice;
+
+        // Calculate margin used (value / leverage)
+        const spotMargin = spotValue / spotLeverage;
+        const futuresMargin = futuresValue / futuresLeverage;
+        const totalMargin = spotMargin + futuresMargin;
+
+        // Update display
+        document.getElementById('spot-position-value').textContent = '$' + spotValue.toFixed(2);
+        document.getElementById('spot-leverage').textContent = spotLeverage + 'x';
+        document.getElementById('spot-margin-used').textContent = '$' + spotMargin.toFixed(2);
+
+        document.getElementById('futures-position-value').textContent = '$' + futuresValue.toFixed(2);
+        document.getElementById('futures-leverage').textContent = futuresLeverage + 'x';
+        document.getElementById('futures-margin-used').textContent = '$' + futuresMargin.toFixed(2);
+
+        document.getElementById('total-margin-used').textContent = '$' + totalMargin.toFixed(2);
     }
 
     function updatePriceWithColor(elementId, value, direction) {
@@ -1107,7 +1208,22 @@
 
     fetch('/api/trades?limit=10')
         .then(response => response.json())
-        .then(trades => { trades.reverse().forEach(trade => addTradeToTable(trade)); });
+        .then(trades => {
+            trades.reverse().forEach(trade => addTradeToTable(trade));
+
+            // Check for open position to initialize margin display
+            const openTrade = trades.find(t => t.is_open);
+            if (openTrade) {
+                currentPosition = {
+                    type: openTrade.position_type,
+                    quantity: openTrade.quantity || 0,
+                    entrySpotPrice: openTrade.entry_spot_price || 0,
+                    entryFuturesPrice: openTrade.entry_futures_price || 0,
+                    notionalUsd: openTrade.notional_usd || 0
+                };
+                updateMarginDisplay(currentPosition.entrySpotPrice, currentPosition.entryFuturesPrice);
+            }
+        });
 
     fetch('/api/spread-history?n=100')
         .then(response => response.json())
