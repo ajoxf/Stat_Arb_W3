@@ -462,27 +462,32 @@ def get_spot_holdings():
             stablecoins = {'USDT', 'USDC', 'BUSD', 'DAI', 'TUSD'}
             holdings = []
 
+            # Minimum USD value to consider as orphan (ignore dust < $1)
+            MIN_USD_ORPHAN_THRESHOLD = 1.0
+
             for currency, bal_info in balances.items():
                 if currency not in stablecoins:
                     available = bal_info.get('available', 0)
                     frozen = bal_info.get('frozen', 0)
                     total = bal_info.get('total', 0) or (available + frozen)
 
-                    if total > 0.00000001:  # Filter out dust
+                    if total > 0.00000001:  # Filter out zero
                         # Get USD value
                         usd_value = 0
                         if engine.spot_tick and currency == config.asset:
                             usd_value = total * engine.spot_tick.mid
 
-                        holdings.append({
-                            'currency': currency,
-                            'available': available,
-                            'frozen': frozen,
-                            'total': total,
-                            'usd_value': usd_value,
-                            'is_trading_asset': currency == config.asset,
-                            'can_sell': available > 0.00000001,
-                        })
+                        # Only include if above minimum USD threshold (ignore dust)
+                        if usd_value >= MIN_USD_ORPHAN_THRESHOLD:
+                            holdings.append({
+                                'currency': currency,
+                                'available': available,
+                                'frozen': frozen,
+                                'total': total,
+                                'usd_value': usd_value,
+                                'is_trading_asset': currency == config.asset,
+                                'can_sell': available > 0.00000001,
+                            })
 
             # Check if there's an orphan (holding without active position)
             has_orphan = False
