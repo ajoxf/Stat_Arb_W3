@@ -85,6 +85,11 @@ class TradingEngine:
         # Execution lock to prevent new trades while one is being executed
         self._executing_trade = False
 
+        # Position reconciliation tracking
+        self._last_position_verify: Optional[datetime] = None
+        self._position_verify_interval = 60  # seconds between checks
+        self._position_mismatch: Optional[Dict[str, Any]] = None
+
         # Tick interval in seconds
         self.tick_interval = 0.5  # 500ms
 
@@ -309,6 +314,10 @@ class TradingEngine:
             return
 
         self.state.last_tick_time = datetime.utcnow()
+
+        # Periodic position reconciliation (every 60 seconds)
+        if not self.state.paper_trading:
+            await self._periodic_position_check()
 
         # Update signal generator with position
         self.signal_generator.set_position(self.state.current_position)
@@ -624,6 +633,76 @@ class TradingEngine:
             # On error, allow the trade but log warning
             return None
 
+    async def verify_position_sync(self) -> Dict[str, Any]:
+        """
+        Verify that engine position state matches exchange positions.
+
+        This is called periodically to detect orphaned/lost positions.
+        Returns a dict with mismatch info if any discrepancy is found.
+        """
+        result = {
+            'checked': True,
+            'mismatch': False,
+            'engine_position': self.state.current_position,
+            'exchange_positions': [],
+            'mismatch_reason': None,
+        }
+
+        try:
+            # Get actual exchange positions
+            if self.futures_adapter and hasattr(self.futures_adapter, 'get_positions'):
+                positions = await self.futures_adapter.get_positions()
+
+                for pos in positions:
+                    if pos.quantity > 0:
+                        result['exchange_positions'].append({
+                            'symbol': pos.symbol,
+                            'side': pos.side,
+                            'quantity': pos.quantity,
+                            'entry_price': pos.entry_price,
+                            'unrealized_pnl': pos.unrealized_pnl,
+                        })
+
+            engine_has_position = self.state.current_position != "NONE"
+            exchange_has_position = len(result['exchange_positions']) > 0
+
+            # Check for mismatches
+            if engine_has_position and not exchange_has_position:
+                result['mismatch'] = True
+                result['mismatch_reason'] = "Engine shows position but exchange has none (manually closed?)"
+                logger.warning("Position mismatch: Engine=%s but exchange has no positions",
+                             self.state.current_position)
+
+            elif not engine_has_position and exchange_has_position:
+                result['mismatch'] = True
+                total_size = sum(p['quantity'] for p in result['exchange_positions'])
+                total_pnl = sum(p['unrealized_pnl'] for p in result['exchange_positions'])
+                result['mismatch_reason'] = f"Exchange has {len(result['exchange_positions'])} position(s) but engine shows FLAT"
+                logger.warning("Position mismatch: Engine=FLAT but exchange has %d positions (size=%.2f, PnL=%.2f)",
+                             len(result['exchange_positions']), total_size, total_pnl)
+
+            # Store mismatch state for status reporting
+            self._position_mismatch = result if result['mismatch'] else None
+            self._last_position_verify = datetime.utcnow()
+
+            return result
+
+        except Exception as e:
+            logger.warning("Error verifying position sync: %s", e)
+            result['error'] = str(e)
+            return result
+
+    async def _periodic_position_check(self) -> None:
+        """Run position verification if enough time has passed."""
+        now = datetime.utcnow()
+
+        if self._last_position_verify is None:
+            # First check - do it
+            await self.verify_position_sync()
+        elif (now - self._last_position_verify).total_seconds() >= self._position_verify_interval:
+            # Time for another check
+            await self.verify_position_sync()
+
     async def _verify_leverage_settings(self) -> bool:
         """
         Verify that leverage settings on the exchange match our config.
@@ -767,6 +846,7 @@ class TradingEngine:
             'sl_cooldown_remaining': sl_cooldown_remaining,
             'sl_cooldown_sec': self._stop_loss_cooldown_sec,
             'executing_trade': self._executing_trade,
+            'position_mismatch': self._position_mismatch,
         }
 
     def get_spread_history(self, n: int = 100) -> List[float]:
