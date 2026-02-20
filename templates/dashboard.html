@@ -165,6 +165,9 @@
                         <div id="position-badge" class="badge bg-secondary" style="font-size: 1.2rem; padding: 0.4rem 0.8rem;">
                             FLAT
                         </div>
+                        <div id="sl-cooldown-indicator" style="display:none; margin-top:4px;">
+                            <span class="badge bg-warning" style="font-size:0.65rem;">SL COOLDOWN <span id="sl-cooldown-secs">0</span>s</span>
+                        </div>
                         <div class="metric-label mt-1">Position</div>
                     </div>
                 </div>
@@ -674,6 +677,18 @@
                     if (data.signal) {
                         updateSignal(data.signal);
                         updateCharts(data.signal);
+                    }
+                    // Update stop-loss cooldown indicator
+                    const cooldownIndicator = document.getElementById('sl-cooldown-indicator');
+                    const cooldownSecs = document.getElementById('sl-cooldown-secs');
+                    const remaining = data.sl_cooldown_remaining || 0;
+                    if (cooldownIndicator && cooldownSecs) {
+                        if (remaining > 0) {
+                            cooldownSecs.textContent = remaining;
+                            cooldownIndicator.style.display = 'block';
+                        } else {
+                            cooldownIndicator.style.display = 'none';
+                        }
                     }
                     lastUpdateTime = Date.now();
                 })

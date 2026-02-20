@@ -220,8 +220,11 @@ def on_signal_callback(signal: Signal):
 def on_trade_callback(trade: Trade):
     """Handle trade updates."""
     try:
-        # Save to database
-        trade.id = db.save_trade(trade)
+        # Only save real (non-paper) trades to the journal database.
+        # Paper trades are emitted to the socket for live dashboard view only.
+        if not trade.is_paper:
+            trade.id = db.save_trade(trade)
+        # Always emit to socket so the dashboard shows real-time updates
         socketio.emit('trade', trade.to_dict(), namespace='/')
     except Exception as e:
         logger.error("Error emitting trade: %s", e)

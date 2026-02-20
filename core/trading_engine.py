@@ -75,6 +75,10 @@ class TradingEngine:
         self._running = False
         self._task: Optional[asyncio.Task] = None
 
+        # Post-stop-loss cooldown: prevent re-entry for this many seconds after a stop-loss
+        self._stop_loss_cooldown_sec = 60
+        self._stop_loss_cooldown_until: Optional[datetime] = None
+
         # Tick interval in seconds
         self.tick_interval = 0.5  # 500ms
 
@@ -363,6 +367,12 @@ class TradingEngine:
             logger.warning("Already in position, ignoring entry signal")
             return
 
+        # Check post-stop-loss cooldown
+        if self._stop_loss_cooldown_until and datetime.utcnow() < self._stop_loss_cooldown_until:
+            remaining = (self._stop_loss_cooldown_until - datetime.utcnow()).total_seconds()
+            logger.debug("Stop-loss cooldown active, %.0fs remaining", remaining)
+            return
+
         if not self.spot_tick or not self.futures_tick:
             logger.warning("No tick data available")
             return
@@ -456,6 +466,12 @@ class TradingEngine:
         self.signal_generator.set_position("NONE")
         self.open_trade = None
 
+        # Apply post-stop-loss cooldown to prevent immediate re-entry
+        if signal.signal_type == "STOP_LOSS":
+            from datetime import timedelta
+            self._stop_loss_cooldown_until = datetime.utcnow() + timedelta(seconds=self._stop_loss_cooldown_sec)
+            logger.info("Stop-loss cooldown active for %ds", self._stop_loss_cooldown_sec)
+
         if self.on_trade:
             self.on_trade(trade)
 
@@ -541,6 +557,11 @@ class TradingEngine:
         """Get current engine status."""
         signal_state = self.signal_generator.get_state()
 
+        # Calculate stop-loss cooldown remaining
+        sl_cooldown_remaining = 0
+        if self._stop_loss_cooldown_until and datetime.utcnow() < self._stop_loss_cooldown_until:
+            sl_cooldown_remaining = round((self._stop_loss_cooldown_until - datetime.utcnow()).total_seconds())
+
         return {
             'is_running': self.state.is_running,
             'algo_enabled': self.state.algo_enabled,
@@ -555,6 +576,8 @@ class TradingEngine:
             'spot_tick': self.spot_tick.to_dict() if self.spot_tick else None,
             'futures_tick': self.futures_tick.to_dict() if self.futures_tick else None,
             'open_trade': self.open_trade.to_dict() if self.open_trade else None,
+            'sl_cooldown_remaining': sl_cooldown_remaining,
+            'sl_cooldown_sec': self._stop_loss_cooldown_sec,
         }
 
     def get_spread_history(self, n: int = 100) -> List[float]:
@@ -572,4 +595,5 @@ class TradingEngine:
         self.open_trade = None
         self.spot_tick = None
         self.futures_tick = None
+        self._stop_loss_cooldown_until = None
         logger.debug("Engine reset")

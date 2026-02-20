@@ -326,10 +326,14 @@ class SignalGenerator:
 
         if self.current_position == "NONE":
             # Entry signals - filters apply
+            # Guard: do NOT enter if Z is already at or beyond the stop-loss level.
+            # Entering at such an extreme would cause an immediate stop-loss on the next tick.
             if hurst_ok and std_ok:
-                if self.current_zscore >= self.config.entry_threshold:
+                if (self.current_zscore >= self.config.entry_threshold and
+                        self.current_zscore < self.config.stop_loss_threshold):
                     signal_type = "LONG"  # Spread above mean (high futures premium), expect reversion down
-                elif self.current_zscore <= -self.config.entry_threshold:
+                elif (self.current_zscore <= -self.config.entry_threshold and
+                        self.current_zscore > -self.config.stop_loss_threshold):
                     signal_type = "SHORT"  # Spread below mean (futures discount), expect reversion up
 
         elif self.current_position == "LONG":
