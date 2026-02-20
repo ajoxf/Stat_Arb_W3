@@ -384,12 +384,14 @@
                                 <th>Time</th>
                                 <th>Type</th>
                                 <th>Z</th>
+                                <th>Spot</th>
+                                <th>Futures</th>
                                 <th>P&L</th>
                             </tr>
                         </thead>
                         <tbody id="trades-table">
                             <tr>
-                                <td colspan="4" class="text-center text-secondary">No trades</td>
+                                <td colspan="6" class="text-center text-secondary">No trades</td>
                             </tr>
                         </tbody>
                     </table>
@@ -1079,10 +1081,23 @@
         const row = document.createElement('tr');
         const pnlClass = trade.pnl_usd > 0 ? 'price-up' : trade.pnl_usd < 0 ? 'price-down' : '';
 
+        // Format prices - show entry price, and if closed show "entry → exit"
+        const formatPrice = (price) => price ? '$' + price.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0}) : '-';
+
+        let spotDisplay = formatPrice(trade.entry_spot_price);
+        let futDisplay = formatPrice(trade.entry_futures_price);
+
+        if (!trade.is_open && trade.exit_spot_price) {
+            spotDisplay = `${formatPrice(trade.entry_spot_price)}<br><span class="text-secondary">→${formatPrice(trade.exit_spot_price)}</span>`;
+            futDisplay = `${formatPrice(trade.entry_futures_price)}<br><span class="text-secondary">→${formatPrice(trade.exit_futures_price)}</span>`;
+        }
+
         row.innerHTML = `
             <td>${trade.entry_time ? new Date(trade.entry_time).toLocaleTimeString() : '-'}</td>
             <td><span class="badge ${trade.position_type === 'LONG' ? 'badge-long' : 'badge-short'}" style="font-size:0.6rem;">${trade.position_type}</span></td>
             <td>${(trade.entry_zscore || 0).toFixed(1)}</td>
+            <td style="font-size:0.65rem;">${spotDisplay}</td>
+            <td style="font-size:0.65rem;">${futDisplay}</td>
             <td class="${pnlClass}">${trade.is_open ? '-' : '$' + (trade.pnl_usd || 0).toFixed(2)}</td>
         `;
 
