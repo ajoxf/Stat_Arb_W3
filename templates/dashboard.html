@@ -162,8 +162,19 @@
                         <div class="metric-label">Spread</div>
                     </div>
                     <div class="col-4 text-center">
-                        <div id="position-badge" class="badge bg-secondary" style="font-size: 1.2rem; padding: 0.4rem 0.8rem;">
-                            FLAT
+                        <div class="d-flex align-items-center justify-content-center gap-2">
+                            <div id="position-badge" class="badge bg-secondary" style="font-size: 1.2rem; padding: 0.4rem 0.8rem;">
+                                FLAT
+                            </div>
+                            <div class="dropdown">
+                                <button class="btn btn-sm btn-outline-secondary py-0 px-1" type="button" data-bs-toggle="dropdown" title="Sync Position">
+                                    <i class="bi bi-arrow-repeat"></i>
+                                </button>
+                                <ul class="dropdown-menu dropdown-menu-end">
+                                    <li><a class="dropdown-item" href="#" onclick="syncPosition('recover'); return false;"><i class="bi bi-download me-2"></i>Recover from DB</a></li>
+                                    <li><a class="dropdown-item text-danger" href="#" onclick="syncPosition('clear'); return false;"><i class="bi bi-x-circle me-2"></i>Clear Position</a></li>
+                                </ul>
+                            </div>
                         </div>
                         <div id="sl-cooldown-indicator" style="display:none; margin-top:4px;">
                             <span class="badge bg-warning" style="font-size:0.65rem;">SL COOLDOWN <span id="sl-cooldown-secs">0</span>s</span>
@@ -1290,6 +1301,34 @@
             if (data.zscores) zscoreHistory = data.zscores;
             if (data.spreads) spreadHistory = data.spreads;
         });
+
+    function syncPosition(action) {
+        fetch('/api/engine/sync-position', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({action: action})
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                if (action === 'recover') {
+                    if (data.recovered_position) {
+                        alert(`Position recovered: ${data.recovered_position}\nTrade ID: ${data.trade_id}\nEntry Z-Score: ${data.entry_zscore.toFixed(2)}`);
+                    } else {
+                        alert(data.message || 'No open trades to recover');
+                    }
+                } else if (action === 'clear') {
+                    alert(`Position cleared.\nPrevious: ${data.previous_position}\nTrades closed in DB: ${data.trades_closed}`);
+                }
+            } else {
+                alert('Sync failed: ' + (data.error || 'Unknown error'));
+            }
+        })
+        .catch(err => {
+            console.error('Sync position error:', err);
+            alert('Error syncing position: ' + err.message);
+        });
+    }
 
     function updateAccountInfo() {
         fetch('/api/account-info')

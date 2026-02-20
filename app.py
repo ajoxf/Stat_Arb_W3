@@ -94,6 +94,20 @@ def start_engine_loop():
     keep_count = max(config.lookback_period * 2, 2000)
     db.cleanup_old_spread_history(config.asset, keep_count=keep_count)
 
+    # Recover open position from database (if any)
+    open_trades = db.get_trades(limit=1, open_only=True)
+    if open_trades:
+        open_trade = open_trades[0]
+        if open_trade.asset == config.asset:
+            engine.open_trade = open_trade
+            engine.state.current_position = open_trade.position_type
+            engine.signal_generator.set_position(open_trade.position_type)
+            logger.info("Recovered open %s position from database (trade_id=%d, entry_zscore=%.2f)",
+                       open_trade.position_type, open_trade.id, open_trade.entry_zscore)
+        else:
+            logger.warning("Open trade exists for different asset (%s vs %s), not recovering",
+                          open_trade.asset, config.asset)
+
     # Set up WebSocket streaming if enabled
     use_websocket = os.getenv('USE_WEBSOCKET', 'true').lower() == 'true'
     if use_websocket:
@@ -348,6 +362,81 @@ def reset_engine():
     """Reset engine state."""
     engine.reset()
     return jsonify({'success': True})
+
+
+@app.route('/api/engine/sync-position', methods=['POST'])
+def sync_position():
+    """Sync engine position state with database.
+
+    This recovers the position if the engine lost track of it (e.g., after restart).
+    Can also be used to force-clear the position if it's stuck.
+    """
+    data = request.json or {}
+    action = data.get('action', 'recover')  # 'recover' or 'clear'
+
+    if action == 'clear':
+        # Force clear the position state (useful if position was manually closed on exchange)
+        old_position = engine.state.current_position
+        engine.state.current_position = "NONE"
+        engine.signal_generator.set_position("NONE")
+        engine.open_trade = None
+
+        # Also mark any open trades in DB as closed
+        open_trades = db.get_trades(limit=10, open_only=True)
+        for trade in open_trades:
+            db.close_trade(trade.id, exit_reason="MANUAL_SYNC")
+
+        socketio.emit('status', engine.get_status())
+
+        return jsonify({
+            'success': True,
+            'action': 'clear',
+            'previous_position': old_position,
+            'current_position': 'NONE',
+            'trades_closed': len(open_trades),
+        })
+
+    elif action == 'recover':
+        # Recover position from database
+        open_trades = db.get_trades(limit=1, open_only=True)
+
+        if not open_trades:
+            return jsonify({
+                'success': True,
+                'action': 'recover',
+                'message': 'No open trades in database',
+                'current_position': engine.state.current_position,
+            })
+
+        open_trade = open_trades[0]
+
+        # Check if it matches the current asset
+        if open_trade.asset != config.asset:
+            return jsonify({
+                'success': False,
+                'error': f'Open trade is for {open_trade.asset}, current asset is {config.asset}',
+            })
+
+        # Recover the position
+        old_position = engine.state.current_position
+        engine.open_trade = open_trade
+        engine.state.current_position = open_trade.position_type
+        engine.signal_generator.set_position(open_trade.position_type)
+
+        socketio.emit('status', engine.get_status())
+
+        return jsonify({
+            'success': True,
+            'action': 'recover',
+            'previous_position': old_position,
+            'recovered_position': open_trade.position_type,
+            'trade_id': open_trade.id,
+            'entry_zscore': open_trade.entry_zscore,
+            'entry_time': open_trade.entry_time.isoformat() if open_trade.entry_time else None,
+        })
+
+    else:
+        return jsonify({'success': False, 'error': f'Unknown action: {action}'}), 400
 
 
 @app.route('/api/exchanges', methods=['GET'])
