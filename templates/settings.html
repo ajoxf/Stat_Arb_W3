@@ -337,6 +337,159 @@
                 </div>
             </div>
         </div>
+
+        <!-- API Keys Configuration -->
+        <div class="card mt-4">
+            <div class="card-header">
+                <i class="bi bi-key me-2"></i>OKX API Keys
+            </div>
+            <div class="card-body">
+                <!-- Permission Guide -->
+                <div class="alert alert-info mb-4">
+                    <h6 class="alert-heading"><i class="bi bi-shield-check me-2"></i>Required API Permissions</h6>
+                    <p class="mb-2">When creating your OKX API key, select <strong>only</strong> these permissions:</p>
+                    <div class="row">
+                        <div class="col-md-6">
+                            <div class="d-flex align-items-center mb-2">
+                                <span class="badge bg-success me-2"><i class="bi bi-check-lg"></i></span>
+                                <strong>Read</strong> - View account balances and positions
+                            </div>
+                            <div class="d-flex align-items-center mb-2">
+                                <span class="badge bg-success me-2"><i class="bi bi-check-lg"></i></span>
+                                <strong>Trade</strong> - Place and cancel orders
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="d-flex align-items-center mb-2">
+                                <span class="badge bg-danger me-2"><i class="bi bi-x-lg"></i></span>
+                                <strong class="text-danger">Withdraw</strong> - DO NOT enable this!
+                            </div>
+                            <div class="d-flex align-items-center">
+                                <span class="badge bg-secondary me-2"><i class="bi bi-dash"></i></span>
+                                <span class="text-muted">Transfer - Not needed</span>
+                            </div>
+                        </div>
+                    </div>
+                    <hr>
+                    <small class="text-muted">
+                        <i class="bi bi-lock me-1"></i>
+                        <strong>Security:</strong> With only Read + Trade permissions, your funds can never be withdrawn.
+                        The bot can only trade within your account.
+                    </small>
+                </div>
+
+                <!-- Demo/Live Toggle -->
+                <div class="mb-4">
+                    <div class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" id="api_demo_mode" checked>
+                        <label class="form-check-label" for="api_demo_mode">
+                            <strong>Demo Trading Mode</strong>
+                            <span class="text-muted">(Use OKX Demo account for testing)</span>
+                        </label>
+                    </div>
+                    <small class="text-secondary d-block mt-1">
+                        <i class="bi bi-info-circle me-1"></i>
+                        Enable this to use OKX Demo trading. Disable for live trading with real funds.
+                    </small>
+                </div>
+
+                <form id="api-keys-form">
+                    <div class="row mb-3">
+                        <div class="col-md-12">
+                            <label class="form-label">API Key</label>
+                            <input type="text" class="form-control font-monospace" id="okx_api_key" name="okx_api_key"
+                                   placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" autocomplete="off">
+                        </div>
+                    </div>
+                    <div class="row mb-3">
+                        <div class="col-md-12">
+                            <label class="form-label">Secret Key</label>
+                            <div class="input-group">
+                                <input type="password" class="form-control font-monospace" id="okx_secret_key" name="okx_secret_key"
+                                       placeholder="Your secret key" autocomplete="off">
+                                <button class="btn btn-outline-secondary" type="button" onclick="toggleSecretVisibility()">
+                                    <i class="bi bi-eye" id="secret-toggle-icon"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="row mb-3">
+                        <div class="col-md-12">
+                            <label class="form-label">Passphrase</label>
+                            <div class="input-group">
+                                <input type="password" class="form-control font-monospace" id="okx_passphrase" name="okx_passphrase"
+                                       placeholder="Your API passphrase" autocomplete="off">
+                                <button class="btn btn-outline-secondary" type="button" onclick="togglePassphraseVisibility()">
+                                    <i class="bi bi-eye" id="passphrase-toggle-icon"></i>
+                                </button>
+                            </div>
+                            <small class="text-secondary">The passphrase you set when creating the API key on OKX</small>
+                        </div>
+                    </div>
+
+                    <!-- Connection Status -->
+                    <div class="card bg-dark mb-3" id="api-status-card" style="display: none;">
+                        <div class="card-body py-3">
+                            <div class="d-flex align-items-center justify-content-between">
+                                <div>
+                                    <span id="api-status-icon" class="me-2"></span>
+                                    <span id="api-status-text"></span>
+                                </div>
+                                <div id="api-status-details" class="text-muted small"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="d-flex justify-content-between">
+                        <button type="button" class="btn btn-outline-info" onclick="testApiConnection()">
+                            <i class="bi bi-wifi me-1"></i>Test Connection
+                        </button>
+                        <button type="submit" class="btn btn-primary">
+                            <i class="bi bi-save me-1"></i>Save API Keys
+                        </button>
+                    </div>
+                </form>
+
+                <hr class="my-4" style="border-color: var(--border-color);">
+
+                <!-- How to Create API Key Guide -->
+                <div class="accordion" id="apiGuideAccordion">
+                    <div class="accordion-item bg-dark">
+                        <h2 class="accordion-header">
+                            <button class="accordion-button collapsed bg-dark text-light" type="button"
+                                    data-bs-toggle="collapse" data-bs-target="#apiGuideCollapse">
+                                <i class="bi bi-question-circle me-2"></i>How to Create OKX API Keys
+                            </button>
+                        </h2>
+                        <div id="apiGuideCollapse" class="accordion-collapse collapse" data-bs-parent="#apiGuideAccordion">
+                            <div class="accordion-body">
+                                <ol class="mb-0">
+                                    <li class="mb-2">Log in to your <a href="https://www.okx.com" target="_blank" class="text-info">OKX account</a></li>
+                                    <li class="mb-2">Go to <strong>Profile → API</strong> (or navigate to API management)</li>
+                                    <li class="mb-2">Click <strong>"Create API Key"</strong></li>
+                                    <li class="mb-2">Set a name (e.g., "Trading Bot")</li>
+                                    <li class="mb-2">Create a <strong>passphrase</strong> (you'll need this)</li>
+                                    <li class="mb-2">
+                                        Select permissions:
+                                        <ul class="mt-1">
+                                            <li><span class="text-success">✓</span> Read</li>
+                                            <li><span class="text-success">✓</span> Trade</li>
+                                            <li><span class="text-danger">✗</span> Withdraw (leave unchecked!)</li>
+                                        </ul>
+                                    </li>
+                                    <li class="mb-2">Complete verification (2FA, email, etc.)</li>
+                                    <li>Copy your <strong>API Key</strong>, <strong>Secret Key</strong>, and remember your <strong>Passphrase</strong></li>
+                                </ol>
+                                <div class="alert alert-warning mt-3 mb-0">
+                                    <i class="bi bi-exclamation-triangle me-2"></i>
+                                    <strong>Important:</strong> The Secret Key is only shown once! Save it securely.
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 </div>
 {% endblock %}
