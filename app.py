@@ -605,9 +605,14 @@ def get_account_info():
                     for pos in positions:
                         pos_data = pos.to_dict()
                         account_data['positions'].append(pos_data)
-                        # Track futures leverage specifically
+                        # Track leverage from actual positions
                         if 'SWAP' in pos.symbol or 'PERP' in pos.symbol:
                             account_data['actual_futures_leverage'] = pos.leverage
+                            account_data['futures_leverage_source'] = 'exchange'
+                        elif pos.symbol and not any(x in pos.symbol for x in ['SWAP', 'PERP', 'FUTURE']):
+                            # This is a spot/margin position - get its leverage
+                            account_data['actual_spot_leverage'] = pos.leverage
+                            account_data['spot_leverage_source'] = 'exchange'
                 except Exception as pos_err:
                     logger.warning("Error fetching positions: %s", pos_err)
 
@@ -617,8 +622,18 @@ def get_account_info():
     # Add configured leverage for comparison
     account_data['configured_spot_leverage'] = config.spot_leverage
     account_data['configured_futures_leverage'] = config.futures_leverage
-    # Note: Spot on OKX is typically 1x (cash trading) unless using margin trading
-    account_data['actual_spot_leverage'] = 1  # OKX spot is cash-based, no leverage
+
+    # Set actual leverage - prefer exchange data, fallback to configured
+    # For spot: Use configured if exchange doesn't report (e.g., margin trading enabled)
+    if 'actual_spot_leverage' not in account_data:
+        # No spot position found - use configured leverage
+        # This allows VIP/margin accounts to work with their configured leverage
+        account_data['actual_spot_leverage'] = config.spot_leverage
+        account_data['spot_leverage_source'] = 'configured'
+
+    if 'actual_futures_leverage' not in account_data:
+        account_data['actual_futures_leverage'] = config.futures_leverage
+        account_data['futures_leverage_source'] = 'configured'
 
     # Calculate daily P&L from trades
     stats = db.get_trade_statistics()

@@ -867,21 +867,42 @@
 
         document.getElementById('total-margin-used').textContent = '$' + totalMargin.toFixed(2);
 
-        // Show warning if actual leverage differs from configured
+        // Show leverage source indicator and warning if mismatch
         const warningEl = document.getElementById('leverage-warning');
         const warningText = document.getElementById('leverage-warning-text');
-        let warnings = [];
+        let messages = [];
 
-        if (actualSpotLeverage !== configuredSpotLeverage) {
-            warnings.push(`Spot: ${actualSpotLeverage}x actual vs ${configuredSpotLeverage}x configured`);
+        // Show source of leverage data
+        const spotSource = window.spotLeverageSource || 'configured';
+        const futSource = window.futuresLeverageSource || 'configured';
+
+        // Add warning if actual differs from configured (only if from exchange)
+        if (actualSpotLeverage !== configuredSpotLeverage && spotSource === 'exchange') {
+            messages.push(`Spot: ${actualSpotLeverage}x (exchange) vs ${configuredSpotLeverage}x (configured)`);
         }
-        if (actualFuturesLeverage !== configuredFuturesLeverage) {
-            warnings.push(`Futures: ${actualFuturesLeverage}x actual vs ${configuredFuturesLeverage}x configured`);
+        if (actualFuturesLeverage !== configuredFuturesLeverage && futSource === 'exchange') {
+            messages.push(`Futures: ${actualFuturesLeverage}x (exchange) vs ${configuredFuturesLeverage}x (configured)`);
         }
 
-        if (warnings.length > 0) {
-            warningText.textContent = warnings.join(', ');
+        // Show info about leverage source when no position open yet
+        if (messages.length === 0 && (spotSource === 'configured' || futSource === 'configured')) {
+            const sourceInfo = [];
+            if (spotSource === 'configured') sourceInfo.push(`Spot: ${actualSpotLeverage}x (from settings)`);
+            if (futSource === 'configured') sourceInfo.push(`Futures: ${actualFuturesLeverage}x (from settings)`);
+            if (sourceInfo.length > 0) {
+                warningText.innerHTML = '<i class="bi bi-info-circle"></i> ' + sourceInfo.join(', ');
+                warningEl.style.display = 'block';
+                warningEl.classList.remove('text-warning');
+                warningEl.classList.add('text-secondary');
+                return;
+            }
+        }
+
+        if (messages.length > 0) {
+            warningText.innerHTML = '<i class="bi bi-exclamation-triangle"></i> ' + messages.join(', ');
             warningEl.style.display = 'block';
+            warningEl.classList.remove('text-secondary');
+            warningEl.classList.add('text-warning');
         } else {
             warningEl.style.display = 'none';
         }
@@ -1348,11 +1369,17 @@
                 if (data.actual_futures_leverage !== undefined) {
                     actualFuturesLeverage = data.actual_futures_leverage;
                 }
-                // Also check positions array for actual leverage
+
+                // Store leverage source for display
+                window.spotLeverageSource = data.spot_leverage_source || 'unknown';
+                window.futuresLeverageSource = data.futures_leverage_source || 'unknown';
+
+                // Also check positions array for actual leverage (if we have open positions)
                 if (data.positions && data.positions.length > 0) {
                     data.positions.forEach(pos => {
                         if (pos.symbol && (pos.symbol.includes('SWAP') || pos.symbol.includes('PERP'))) {
                             actualFuturesLeverage = pos.leverage || actualFuturesLeverage;
+                            window.futuresLeverageSource = 'exchange';
                         }
                     });
                 }
