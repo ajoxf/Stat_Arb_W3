@@ -375,27 +375,31 @@ class OrderExecutor:
         Calculate target prices for limit orders based on current orderbook.
 
         For MAKER orders (lower fees):
-        - BUY: place at or below best bid (join the bid queue)
-        - SELL: place at or above best ask (join the ask queue)
+        - BUY: place at bid + offset (improve bid to increase fill probability)
+        - SELL: place at ask - offset (improve ask to increase fill probability)
 
-        The offset can be used to slightly improve our price vs best bid/ask,
-        but we stay on our side of the spread to remain maker.
+        The offset moves the price closer to the spread midpoint for faster fills.
+        POST_ONLY order type acts as a safety net - if the price would cross
+        the spread, the order is rejected rather than filling as taker.
+
+        offset = 0: exactly at bid/ask (most passive, may not fill)
+        offset = 1-2 bps: slightly improve price (better fill rate, still maker)
         """
         offset_bps = self.config.limit_order_price_offset_bps / 10000
 
         if spread_order.spot_leg.side == "BUY":
-            # BUY as maker: place at best bid (or slightly below to ensure maker)
-            # Don't cross the spread - stay on bid side
-            spread_order.spot_leg.target_price = spot_tick.bid
+            # BUY: improve bid by adding offset (move toward ask but don't cross)
+            # POST_ONLY will reject if this would cross the spread
+            spread_order.spot_leg.target_price = spot_tick.bid * (1 + offset_bps)
         else:
-            # SELL as maker: place at best ask (or slightly above to ensure maker)
-            # Don't cross the spread - stay on ask side
-            spread_order.spot_leg.target_price = spot_tick.ask
+            # SELL: improve ask by subtracting offset (move toward bid but don't cross)
+            # POST_ONLY will reject if this would cross the spread
+            spread_order.spot_leg.target_price = spot_tick.ask * (1 - offset_bps)
 
         if spread_order.futures_leg.side == "BUY":
-            spread_order.futures_leg.target_price = futures_tick.bid
+            spread_order.futures_leg.target_price = futures_tick.bid * (1 + offset_bps)
         else:
-            spread_order.futures_leg.target_price = futures_tick.ask
+            spread_order.futures_leg.target_price = futures_tick.ask * (1 - offset_bps)
 
     async def _place_market_order(
         self,
