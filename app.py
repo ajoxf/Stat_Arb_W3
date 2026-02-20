@@ -439,6 +439,112 @@ def sync_position():
         return jsonify({'success': False, 'error': f'Unknown action: {action}'}), 400
 
 
+@app.route('/api/exchange-positions', methods=['GET'])
+def get_exchange_positions():
+    """
+    Get actual positions from the exchange.
+
+    This helps detect orphaned futures positions that the engine lost track of.
+    """
+    adapter = engine.futures_adapter
+    if not adapter:
+        return jsonify({'positions': [], 'error': 'No futures adapter available'})
+
+    async def fetch_positions():
+        return await adapter.get_positions()
+
+    if loop:
+        try:
+            future = asyncio.run_coroutine_threadsafe(fetch_positions(), loop)
+            positions = future.result(timeout=10)
+
+            # Format positions for response
+            position_list = []
+            for pos in positions:
+                position_list.append({
+                    'symbol': pos.symbol,
+                    'side': pos.side,
+                    'quantity': pos.quantity,
+                    'entry_price': pos.entry_price,
+                    'unrealized_pnl': pos.unrealized_pnl,
+                    'leverage': pos.leverage,
+                })
+
+            # Compare with engine state
+            engine_position = engine.state.current_position if engine.state else "NONE"
+            engine_has_position = engine_position != "NONE"
+            exchange_has_position = len(position_list) > 0
+
+            # Detect mismatch
+            mismatch = False
+            mismatch_reason = None
+
+            if engine_has_position and not exchange_has_position:
+                mismatch = True
+                mismatch_reason = "Engine thinks position is open but exchange has no position"
+            elif not engine_has_position and exchange_has_position:
+                mismatch = True
+                mismatch_reason = "Exchange has position but engine shows FLAT"
+
+            return jsonify({
+                'success': True,
+                'positions': position_list,
+                'engine_position': engine_position,
+                'engine_has_position': engine_has_position,
+                'exchange_has_position': exchange_has_position,
+                'mismatch': mismatch,
+                'mismatch_reason': mismatch_reason,
+            })
+
+        except Exception as e:
+            logger.error("Error fetching exchange positions: %s", e)
+            return jsonify({'success': False, 'positions': [], 'error': str(e)})
+
+    return jsonify({'positions': [], 'error': 'Event loop not running'})
+
+
+@app.route('/api/close-exchange-position', methods=['POST'])
+def close_exchange_position():
+    """
+    Close a position directly on the exchange.
+
+    Use this to close orphaned positions that the engine lost track of.
+    """
+    data = request.json or {}
+    symbol = data.get('symbol')
+
+    if not symbol:
+        return jsonify({'success': False, 'error': 'Symbol is required'})
+
+    adapter = engine.futures_adapter
+    if not adapter:
+        return jsonify({'success': False, 'error': 'No futures adapter available'})
+
+    async def close_position():
+        return await adapter.close_position(symbol)
+
+    if loop:
+        try:
+            future = asyncio.run_coroutine_threadsafe(close_position(), loop)
+            result = future.result(timeout=30)
+
+            if result.success:
+                logger.info("Closed exchange position for %s", symbol)
+                return jsonify({
+                    'success': True,
+                    'message': f'Position closed for {symbol}',
+                    'order_id': result.order_id,
+                })
+            else:
+                return jsonify({'success': False, 'error': result.error})
+
+        except Exception as e:
+            logger.error("Error closing exchange position: %s", e)
+            return jsonify({'success': False, 'error': str(e)})
+
+    return jsonify({'success': False, 'error': 'Event loop not running'})
+
+
 @app.route('/api/spot-holdings', methods=['GET'])
 def get_spot_holdings():
     """
