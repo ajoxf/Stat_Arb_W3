@@ -103,6 +103,9 @@ class TradingConfig:
     entry_cooldown_seconds: int = 60  # Minimum seconds between trades (prevents rapid re-entry)
     verify_exchange_position: bool = True  # Check exchange for existing positions before entry
 
+    # Orphan leg recovery: try LIMIT order for unfilled leg before falling back to market
+    orphan_recovery_timeout_sec: int = 60  # Seconds to try filling orphan leg as maker
+
     # Legacy field - now computed from taker/maker fees based on order mode
     estimated_costs_bps: float = 10.0  # Kept for backward compatibility
 
@@ -137,6 +140,7 @@ class TradingConfig:
             'estimated_costs_bps': self.estimated_costs_bps,
             'entry_cooldown_seconds': self.entry_cooldown_seconds,
             'verify_exchange_position': self.verify_exchange_position,
+            'orphan_recovery_timeout_sec': self.orphan_recovery_timeout_sec,
         }
 
     @classmethod

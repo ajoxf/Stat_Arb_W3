@@ -257,6 +257,14 @@
                             </div>
                             <small class="text-secondary">Query exchange for existing positions before placing new orders</small>
                         </div>
+                        <div class="col-md-6 mt-3">
+                            <label class="form-label">Orphan Leg Recovery Timeout (seconds)</label>
+                            <input type="number" class="form-control" id="orphan_recovery_timeout_sec" name="orphan_recovery_timeout_sec" value="{{ config.orphan_recovery_timeout_sec }}" min="10" max="300">
+                            <small class="text-secondary">
+                                When one leg fills and the other is cancelled, try to fill the missing leg as a <strong>maker</strong> order for this many seconds before falling back to market.
+                                Higher = more time to fill at maker rates. Lower = faster resolution but may use market orders.
+                            </small>
+                        </div>
                     </div>
 
                     <div class="d-flex justify-content-end gap-2">
@@ -559,6 +567,7 @@
             limit_order_price_offset_bps: parseFloat(document.getElementById('limit_order_price_offset_bps').value),
             entry_cooldown_seconds: parseInt(document.getElementById('entry_cooldown_seconds').value),
             verify_exchange_position: document.getElementById('verify_exchange_position').checked,
+            orphan_recovery_timeout_sec: parseInt(document.getElementById('orphan_recovery_timeout_sec').value),
         };
 
         fetch('/api/config', {
@@ -609,6 +618,7 @@
                 document.getElementById('limit_order_price_offset_bps').value = config.limit_order_price_offset_bps;
                 document.getElementById('entry_cooldown_seconds').value = config.entry_cooldown_seconds || 60;
                 document.getElementById('verify_exchange_position').checked = config.verify_exchange_position !== false;
+                document.getElementById('orphan_recovery_timeout_sec').value = config.orphan_recovery_timeout_sec || 60;
                 updateLimitSettingsVisibility();
             });
     }

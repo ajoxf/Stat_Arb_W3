@@ -10,7 +10,7 @@ For spread trades, both legs must be managed simultaneously to avoid leg risk.
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, Tuple, Callable
 from dataclasses import dataclass
 from enum import Enum
@@ -399,34 +399,42 @@ class OrderExecutor:
         futures_tick: MarketTick,
     ) -> None:
         """
-        Calculate target prices for limit orders based on current orderbook.
+        Calculate target prices for POST_ONLY limit orders.
 
-        For MAKER orders (lower fees):
-        - BUY: place at bid + offset (improve bid to increase fill probability)
-        - SELL: place at ask - offset (improve ask to increase fill probability)
+        For MAKER orders:
+        - BUY: place at bid + offset, but NEVER >= ask (POST_ONLY rejection)
+        - SELL: place at ask - offset, but NEVER <= bid (POST_ONLY rejection)
 
-        The offset moves the price closer to the spread midpoint for faster fills.
-        POST_ONLY order type acts as a safety net - if the price would cross
-        the spread, the order is rejected rather than filling as taker.
+        Safety cap prevents the price from crossing the spread which would
+        cause OKX to immediately cancel the POST_ONLY order, creating orphans.
 
-        offset = 0: exactly at bid/ask (most passive, may not fill)
-        offset = 1-2 bps: slightly improve price (better fill rate, still maker)
+        offset = 0: exactly at bid/ask (most passive, safest for POST_ONLY)
+        offset = 1-2 bps: slightly better price, still maker if spread is wider
         """
         offset_bps = self.config.limit_order_price_offset_bps / 10000
+        # Safety buffer: keep price 0.5 bps away from the opposite side
+        # This prevents POST_ONLY rejection when spread is very tight
+        SAFETY_BUFFER_BPS = 0.5 / 10000
 
         if spread_order.spot_leg.side == "BUY":
-            # BUY: improve bid by adding offset (move toward ask but don't cross)
-            # POST_ONLY will reject if this would cross the spread
-            spread_order.spot_leg.target_price = spot_tick.bid * (1 + offset_bps)
+            target = spot_tick.bid * (1 + offset_bps)
+            # Cap below ask to guarantee maker fill (prevents POST_ONLY rejection)
+            max_price = spot_tick.ask * (1 - SAFETY_BUFFER_BPS)
+            spread_order.spot_leg.target_price = round(min(target, max_price), 2)
         else:
-            # SELL: improve ask by subtracting offset (move toward bid but don't cross)
-            # POST_ONLY will reject if this would cross the spread
-            spread_order.spot_leg.target_price = spot_tick.ask * (1 - offset_bps)
+            target = spot_tick.ask * (1 - offset_bps)
+            # Cap above bid to guarantee maker fill (prevents POST_ONLY rejection)
+            min_price = spot_tick.bid * (1 + SAFETY_BUFFER_BPS)
+            spread_order.spot_leg.target_price = round(max(target, min_price), 2)
 
         if spread_order.futures_leg.side == "BUY":
-            spread_order.futures_leg.target_price = futures_tick.bid * (1 + offset_bps)
+            target = futures_tick.bid * (1 + offset_bps)
+            max_price = futures_tick.ask * (1 - SAFETY_BUFFER_BPS)
+            spread_order.futures_leg.target_price = round(min(target, max_price), 2)
         else:
-            spread_order.futures_leg.target_price = futures_tick.ask * (1 - offset_bps)
+            target = futures_tick.ask * (1 - offset_bps)
+            min_price = futures_tick.bid * (1 + SAFETY_BUFFER_BPS)
+            spread_order.futures_leg.target_price = round(max(target, min_price), 2)
 
     async def _place_market_order(
         self,
@@ -739,59 +747,215 @@ class OrderExecutor:
         """
         Handle leg risk when one leg is filled but the other isn't.
 
-        This handles:
-        - Partial fills (one leg FILLED, other PARTIAL or not filled)
-        - Orphan risk (one leg FILLED, other CANCELLED/FAILED from POST_ONLY rejection)
+        Strategy (fee-aware):
+        1. Try to fill the missing leg with a LIMIT order (maker fees, no slippage)
+        2. Progressively move price toward market if unfilled
+        3. Only use market order as absolute last resort after timeout
 
-        Strategy: Market-close the filled leg to eliminate directional exposure.
+        This avoids paying taker fees + slippage to close what could be
+        recovered as a complete spread trade at maker rates.
         """
-        logger.warning("Handling leg risk - closing orphan position with market order")
-
         filled_states = (LegStatus.FILLED, LegStatus.PARTIAL)
-        failed_states = (LegStatus.FAILED, LegStatus.CANCELLED, LegStatus.OPEN, LegStatus.PENDING)
 
         spot_filled = spread_order.spot_leg.status in filled_states and spread_order.spot_leg.filled_qty > 0
         futures_filled = spread_order.futures_leg.status in filled_states and spread_order.futures_leg.filled_qty > 0
-        spot_failed = spread_order.spot_leg.status in failed_states or spread_order.spot_leg.filled_qty == 0
-        futures_failed = spread_order.futures_leg.status in failed_states or spread_order.futures_leg.filled_qty == 0
 
-        if spot_filled and futures_failed:
-            # Spot filled, futures didn't - close spot position
-            close_side = "SELL" if spread_order.spot_leg.side == "BUY" else "BUY"
-            logger.warning("Closing orphan SPOT position: %s %.6f @ market",
-                          close_side, spread_order.spot_leg.filled_qty)
-            result = await self.spot_adapter.place_order(
-                symbol=spread_order.spot_leg.symbol,
-                side=close_side,
-                order_type="MARKET",
-                quantity=spread_order.spot_leg.filled_qty,
+        if spot_filled and not futures_filled:
+            logger.warning("Orphan SPOT filled - attempting LIMIT recovery for futures leg")
+            recovered = await self._attempt_maker_recovery(
+                adapter=self.futures_adapter,
+                leg=spread_order.futures_leg,
+                label="futures",
+                recovery_timeout_sec=getattr(self.config, 'orphan_recovery_timeout_sec', 60),
             )
-            if result.success:
-                logger.info("Successfully closed orphan spot leg: order_id=%s", result.order_id)
-            else:
-                logger.error("Failed to close orphan spot leg: %s", result.error)
+            if not recovered:
+                # Last resort: close the spot leg at market
+                logger.error("Futures recovery failed - closing spot orphan at MARKET (taker fees apply)")
+                close_side = "SELL" if spread_order.spot_leg.side == "BUY" else "BUY"
+                result = await self.spot_adapter.place_order(
+                    symbol=spread_order.spot_leg.symbol,
+                    side=close_side,
+                    order_type="MARKET",
+                    quantity=spread_order.spot_leg.filled_qty,
+                )
+                if result.success:
+                    logger.info("Closed orphan spot leg at market: order_id=%s", result.order_id)
+                else:
+                    logger.error("CRITICAL: Failed to close orphan spot leg: %s", result.error)
 
-        elif futures_filled and spot_failed:
-            # Futures filled, spot didn't - close futures position
-            # IMPORTANT: Use SAME pos_side as entry to close the position
-            close_side = "SELL" if spread_order.futures_leg.side == "BUY" else "BUY"
-            logger.warning("Closing orphan FUTURES position: %s %.6f @ market (pos_side=%s)",
-                          close_side, spread_order.futures_leg.filled_qty, spread_order.futures_leg.pos_side)
-            result = await self.futures_adapter.place_order(
-                symbol=spread_order.futures_leg.symbol,
-                side=close_side,
-                order_type="MARKET",
-                quantity=spread_order.futures_leg.filled_qty,
-                pos_side=spread_order.futures_leg.pos_side,  # Same pos_side to close!
-                reduce_only=True,
+        elif futures_filled and not spot_filled:
+            logger.warning("Orphan FUTURES filled - attempting LIMIT recovery for spot leg")
+            recovered = await self._attempt_maker_recovery(
+                adapter=self.spot_adapter,
+                leg=spread_order.spot_leg,
+                label="spot",
+                recovery_timeout_sec=getattr(self.config, 'orphan_recovery_timeout_sec', 60),
             )
-            if result.success:
-                logger.info("Successfully closed orphan futures leg: order_id=%s", result.order_id)
-            else:
-                logger.error("Failed to close orphan futures leg: %s", result.error)
+            if not recovered:
+                # Last resort: close the futures leg at market
+                logger.error("Spot recovery failed - closing futures orphan at MARKET (taker fees apply)")
+                close_side = "SELL" if spread_order.futures_leg.side == "BUY" else "BUY"
+                result = await self.futures_adapter.place_order(
+                    symbol=spread_order.futures_leg.symbol,
+                    side=close_side,
+                    order_type="MARKET",
+                    quantity=spread_order.futures_leg.filled_qty,
+                    pos_side=spread_order.futures_leg.pos_side,
+                    reduce_only=True,
+                )
+                if result.success:
+                    logger.info("Closed orphan futures leg at market: order_id=%s", result.order_id)
+                else:
+                    logger.error("CRITICAL: Failed to close orphan futures leg: %s", result.error)
 
         if self.on_error:
-            self.on_error("Leg risk occurred - orphan position closed with market order")
+            self.on_error("Leg risk occurred - check positions for orphan state")
+
+    async def _attempt_maker_recovery(
+        self,
+        adapter: ExchangeAdapter,
+        leg: LegOrder,
+        label: str,
+        recovery_timeout_sec: int = 60,
+        price_step_bps: float = 1.0,
+        max_price_steps: int = 10,
+    ) -> bool:
+        """
+        Attempt to fill an orphaned leg using LIMIT orders before falling back to market.
+
+        Strategy:
+        - Place a passive LIMIT order (not POST_ONLY, so it won't be auto-cancelled)
+        - Check every second for fill
+        - Every (timeout / max_steps) seconds, nudge price 1 bps closer to market
+        - Return True if filled as maker, False if gave up (caller should market close)
+
+        This preserves maker fees instead of paying taker fees + slippage.
+        """
+        logger.info("Starting maker recovery for %s leg: %s %.6f",
+                    label, leg.side, leg.quantity)
+
+        step_interval = recovery_timeout_sec / max_price_steps
+        price_offset_bps = 0.0  # Start at best bid/ask, move toward market each step
+        deadline = datetime.utcnow() + timedelta(seconds=recovery_timeout_sec)
+        step_deadline = datetime.utcnow() + timedelta(seconds=step_interval)
+        current_order_id = None
+
+        try:
+            # Get current market price for the leg
+            tick = await adapter.get_tick(leg.symbol)
+            if not tick:
+                logger.error("Cannot get tick for %s during recovery", leg.symbol)
+                return False
+
+            # Calculate initial recovery price (passive - at best bid/ask)
+            recovery_price = self._calc_recovery_price(leg.side, tick, price_offset_bps)
+
+            # Place initial LIMIT order (not POST_ONLY - it won't get auto-cancelled)
+            result = await adapter.place_order(
+                symbol=leg.symbol,
+                side=leg.side,
+                order_type="LIMIT",
+                quantity=leg.quantity,
+                price=recovery_price,
+                pos_side=leg.pos_side,
+            )
+
+            if not result.success:
+                logger.error("Failed to place recovery LIMIT order for %s: %s", label, result.error)
+                return False
+
+            current_order_id = result.order_id
+            logger.info("Recovery LIMIT order placed for %s: id=%s @ %.4f",
+                       label, current_order_id, recovery_price)
+
+            # Poll until filled or deadline
+            while datetime.utcnow() < deadline:
+                await asyncio.sleep(1.0)
+
+                # Check fill status
+                status = await adapter.get_order_status(leg.symbol, current_order_id)
+                if status:
+                    if status["state"] == "filled":
+                        leg.status = LegStatus.FILLED
+                        leg.filled_qty = status["filled_qty"]
+                        leg.filled_price = status["filled_price"]
+                        leg.order_id = current_order_id
+                        logger.info("Recovery SUCCESS: %s leg filled as maker @ %.4f",
+                                   label, leg.filled_price)
+                        return True
+                    elif status["state"] == "partially_filled":
+                        leg.status = LegStatus.PARTIAL
+                        leg.filled_qty = status["filled_qty"]
+                        leg.filled_price = status["filled_price"]
+                        # Continue waiting for full fill
+
+                # Time to nudge the price closer to market?
+                if datetime.utcnow() >= step_deadline and price_offset_bps < max_price_steps * price_step_bps:
+                    price_offset_bps += price_step_bps
+                    step_deadline = datetime.utcnow() + timedelta(seconds=step_interval)
+
+                    # Get fresh tick
+                    tick = await adapter.get_tick(leg.symbol)
+                    if not tick:
+                        continue
+
+                    new_price = self._calc_recovery_price(leg.side, tick, price_offset_bps)
+                    logger.info("Recovery: nudging %s price toward market: %.4f (offset=%.1f bps)",
+                               label, new_price, price_offset_bps)
+
+                    # Cancel current order and replace with better price
+                    cancelled = await adapter.cancel_order(leg.symbol, current_order_id)
+                    if cancelled:
+                        remaining_qty = leg.quantity - leg.filled_qty
+                        if remaining_qty > 0:
+                            result = await adapter.place_order(
+                                symbol=leg.symbol,
+                                side=leg.side,
+                                order_type="LIMIT",
+                                quantity=remaining_qty,
+                                price=new_price,
+                                pos_side=leg.pos_side,
+                            )
+                            if result.success:
+                                current_order_id = result.order_id
+                                recovery_price = new_price
+                            else:
+                                logger.error("Failed to replace recovery order: %s", result.error)
+                                return False
+
+            # Timeout - cancel the recovery order
+            logger.warning("Recovery timeout for %s after %ds - falling back to market",
+                          label, recovery_timeout_sec)
+            if current_order_id:
+                await adapter.cancel_order(leg.symbol, current_order_id)
+
+            return False
+
+        except Exception as e:
+            logger.exception("Error during maker recovery for %s: %s", label, e)
+            # Try to cancel any open recovery order
+            if current_order_id:
+                try:
+                    await adapter.cancel_order(leg.symbol, current_order_id)
+                except Exception:
+                    pass
+            return False
+
+    def _calc_recovery_price(self, side: str, tick: MarketTick, offset_bps: float) -> float:
+        """
+        Calculate a passive LIMIT price for recovery, optionally nudged toward market.
+
+        offset_bps=0: exactly at best bid/ask (most passive, best fees)
+        offset_bps=N: N bps closer to the other side of the spread
+        Higher offset = higher fill probability but still maker (until it crosses spread)
+        """
+        offset = offset_bps / 10000
+        if side == "BUY":
+            # BUY: start at bid, nudge toward ask
+            return round(tick.bid * (1 + offset), 2)
+        else:
+            # SELL: start at ask, nudge toward bid
+            return round(tick.ask * (1 - offset), 2)
 
     def _update_leg_from_result(self, leg: LegOrder, result: OrderResult) -> None:
         """Update leg status from order result."""

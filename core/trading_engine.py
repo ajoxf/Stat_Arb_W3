@@ -5,7 +5,7 @@ Manages the main trading loop, position management, and order execution.
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, Callable, Dict, Any, List
 from dataclasses import dataclass
 
@@ -84,6 +84,10 @@ class TradingEngine:
 
         # Execution lock to prevent new trades while one is being executed
         self._executing_trade = False
+
+        # Tick processing lock: prevents concurrent _process_tick_pair tasks
+        # Critical for WebSocket mode where ticks arrive faster than processing
+        self._processing_tick = False
 
         # Position reconciliation tracking
         self._last_position_verify: Optional[datetime] = None
@@ -206,10 +210,21 @@ class TradingEngine:
         elif symbol == self.config.futures_symbol:
             self.futures_tick = tick
 
-        # Process tick if we have both
-        if self.spot_tick and self.futures_tick:
-            # Use create_task to avoid blocking the WebSocket callback
-            asyncio.create_task(self._process_tick_pair())
+        # Process tick if we have both AND no tick is currently being processed
+        # Without this guard, rapid WebSocket ticks spawn concurrent tasks that
+        # all see current_position=NONE and place duplicate orders simultaneously
+        if self.spot_tick and self.futures_tick and not self._processing_tick:
+            asyncio.create_task(self._run_tick_guarded())
+
+    async def _run_tick_guarded(self) -> None:
+        """Process a tick with a guard to prevent concurrent execution."""
+        if self._processing_tick:
+            return  # Already processing, skip this tick
+        self._processing_tick = True
+        try:
+            await self._process_tick_pair()
+        finally:
+            self._processing_tick = False
 
     def toggle_algo(self, enabled: bool) -> None:
         """Enable or disable algorithmic trading."""
@@ -479,6 +494,23 @@ class TradingEngine:
                 }
                 return
 
+        # SAFETY: Check for existing open orders before placing new ones
+        # This prevents placing duplicate orders when previous ones are still pending
+        if not self.state.paper_trading:
+            open_order_count = await self._count_open_orders()
+            if open_order_count > 0:
+                logger.warning("Exchange already has %d open order(s) - blocking new entry to prevent duplicates",
+                               open_order_count)
+                # Apply a short cooldown to give time for existing orders to resolve
+                self._entry_cooldown_until = datetime.utcnow() + timedelta(seconds=30)
+                self.signal_generator.last_blocked_signal = {
+                    'timestamp': datetime.utcnow().isoformat(),
+                    'would_be_signal': signal.signal_type,
+                    'zscore': round(signal.zscore, 4),
+                    'reason': f"Exchange has {open_order_count} open order(s) already pending",
+                }
+                return
+
         if not self.spot_tick or not self.futures_tick:
             logger.warning("No tick data available")
             self.signal_generator.last_blocked_signal = {
@@ -517,6 +549,12 @@ class TradingEngine:
             try:
                 success = await self._execute_entry_orders(trade, signal)
                 if not success:
+                    # Apply cooldown after any failed order to prevent rapid retry
+                    # This is critical: without this, the engine retries on every tick
+                    cooldown_sec = max(30, getattr(self.config, 'entry_cooldown_seconds', 60))
+                    self._entry_cooldown_until = datetime.utcnow() + timedelta(seconds=cooldown_sec)
+                    logger.warning("Entry orders failed - applying %ds cooldown to prevent rapid retry",
+                                   cooldown_sec)
                     return
             finally:
                 self._executing_trade = False
@@ -632,6 +670,37 @@ class TradingEngine:
             logger.warning("Error checking exchange positions: %s", e)
             # On error, allow the trade but log warning
             return None
+
+    async def _count_open_orders(self) -> int:
+        """
+        Count open/pending orders on the exchange for the current symbols.
+
+        Used to prevent placing new orders when previous ones are still pending.
+        Returns the total count across spot and futures.
+        On error, returns 0 (fail open - allow trading rather than blocking indefinitely).
+        """
+        count = 0
+        try:
+            # Use get_pending_orders which queries /api/v5/trade/orders-pending
+            if self.futures_adapter and hasattr(self.futures_adapter, 'get_pending_orders'):
+                futures_orders = await self.futures_adapter.get_pending_orders(
+                    symbol=self.config.futures_symbol
+                )
+                count += len(futures_orders) if futures_orders else 0
+
+            if self.spot_adapter and hasattr(self.spot_adapter, 'get_pending_orders'):
+                spot_orders = await self.spot_adapter.get_pending_orders(
+                    symbol=self.config.spot_symbol
+                )
+                count += len(spot_orders) if spot_orders else 0
+
+            if count > 0:
+                logger.warning("Found %d open/pending order(s) on exchange - blocking new entry", count)
+
+        except Exception as e:
+            logger.warning("Error counting open orders: %s", e)
+
+        return count
 
     async def verify_position_sync(self) -> Dict[str, Any]:
         """
