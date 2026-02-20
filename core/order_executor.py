@@ -94,8 +94,9 @@ class OrderExecutor:
     (track best bid/ask for better fills).
     """
 
-    # How often to update limit order prices (ms)
-    PRICE_UPDATE_INTERVAL_MS = 200
+    # How often to check limit order status (ms)
+    # Increased from 200ms to reduce excessive polling and order amendments
+    PRICE_UPDATE_INTERVAL_MS = 1000  # 1 second
 
     def __init__(
         self,
@@ -345,9 +346,13 @@ class OrderExecutor:
 
                 self._update_target_prices(spread_order, new_spot_tick, new_futures_tick)
 
-                # Amend orders if prices changed significantly
-                if (abs(spread_order.spot_leg.target_price - old_spot_price) > 0.01 or
-                    abs(spread_order.futures_leg.target_price - old_futures_price) > 0.01):
+                # Amend orders if prices changed by more than 0.05% (5 bps)
+                # This prevents excessive order amendments on small price moves
+                spot_change_pct = abs(spread_order.spot_leg.target_price - old_spot_price) / old_spot_price if old_spot_price else 0
+                futures_change_pct = abs(spread_order.futures_leg.target_price - old_futures_price) / old_futures_price if old_futures_price else 0
+                amend_threshold = 0.0005  # 0.05% = 5 basis points
+
+                if spot_change_pct > amend_threshold or futures_change_pct > amend_threshold:
                     await self._amend_limit_orders(spread_order)
 
         # Handle partial fills
@@ -366,23 +371,31 @@ class OrderExecutor:
         spot_tick: MarketTick,
         futures_tick: MarketTick,
     ) -> None:
-        """Calculate target prices for limit orders based on current orderbook."""
+        """
+        Calculate target prices for limit orders based on current orderbook.
+
+        For MAKER orders (lower fees):
+        - BUY: place at or below best bid (join the bid queue)
+        - SELL: place at or above best ask (join the ask queue)
+
+        The offset can be used to slightly improve our price vs best bid/ask,
+        but we stay on our side of the spread to remain maker.
+        """
         offset_bps = self.config.limit_order_price_offset_bps / 10000
 
-        # For BUY: place slightly above best bid to be near top of book
-        # For SELL: place slightly below best ask to be near top of book
-
         if spread_order.spot_leg.side == "BUY":
-            # Want to buy: place at bid + small offset (maker, won't cross)
-            spread_order.spot_leg.target_price = spot_tick.bid * (1 + offset_bps)
+            # BUY as maker: place at best bid (or slightly below to ensure maker)
+            # Don't cross the spread - stay on bid side
+            spread_order.spot_leg.target_price = spot_tick.bid
         else:
-            # Want to sell: place at ask - small offset (maker, won't cross)
-            spread_order.spot_leg.target_price = spot_tick.ask * (1 - offset_bps)
+            # SELL as maker: place at best ask (or slightly above to ensure maker)
+            # Don't cross the spread - stay on ask side
+            spread_order.spot_leg.target_price = spot_tick.ask
 
         if spread_order.futures_leg.side == "BUY":
-            spread_order.futures_leg.target_price = futures_tick.bid * (1 + offset_bps)
+            spread_order.futures_leg.target_price = futures_tick.bid
         else:
-            spread_order.futures_leg.target_price = futures_tick.ask * (1 - offset_bps)
+            spread_order.futures_leg.target_price = futures_tick.ask
 
     async def _place_market_order(
         self,
@@ -399,12 +412,15 @@ class OrderExecutor:
         )
 
     async def _place_limit_orders(self, spread_order: SpreadOrder) -> None:
-        """Place initial limit orders for both legs."""
+        """Place initial limit orders for both legs using POST_ONLY for maker fills."""
+        # Use POST_ONLY to ensure maker execution (order rejected if it would cross spread)
+        order_type = "POST_ONLY"
+
         # Place spot limit order
         spot_result = await self.spot_adapter.place_order(
             symbol=spread_order.spot_leg.symbol,
             side=spread_order.spot_leg.side,
-            order_type="LIMIT",
+            order_type=order_type,
             quantity=spread_order.spot_leg.quantity,
             price=spread_order.spot_leg.target_price,
             pos_side=spread_order.spot_leg.pos_side,
@@ -413,6 +429,8 @@ class OrderExecutor:
         if spot_result.success:
             spread_order.spot_leg.order_id = spot_result.order_id
             spread_order.spot_leg.status = LegStatus.OPEN
+            logger.info("Placed spot POST_ONLY order: %s @ %.2f",
+                       spread_order.spot_leg.side, spread_order.spot_leg.target_price)
         else:
             spread_order.spot_leg.status = LegStatus.FAILED
             logger.error("Failed to place spot limit order: %s", spot_result.error)
@@ -421,7 +439,7 @@ class OrderExecutor:
         futures_result = await self.futures_adapter.place_order(
             symbol=spread_order.futures_leg.symbol,
             side=spread_order.futures_leg.side,
-            order_type="LIMIT",
+            order_type=order_type,
             quantity=spread_order.futures_leg.quantity,
             price=spread_order.futures_leg.target_price,
             pos_side=spread_order.futures_leg.pos_side,  # CRITICAL for OKX long_short_mode
@@ -430,6 +448,8 @@ class OrderExecutor:
         if futures_result.success:
             spread_order.futures_leg.order_id = futures_result.order_id
             spread_order.futures_leg.status = LegStatus.OPEN
+            logger.info("Placed futures POST_ONLY order: %s @ %.2f",
+                       spread_order.futures_leg.side, spread_order.futures_leg.target_price)
         else:
             spread_order.futures_leg.status = LegStatus.FAILED
             logger.error("Failed to place futures limit order: %s", futures_result.error)
@@ -454,7 +474,7 @@ class OrderExecutor:
                     spread_order.spot_leg.filled_price = status["filled_price"]
                     logger.info("Spot leg already filled during amend check")
                 elif status and status["state"] in ("live", "partially_filled"):
-                    # Cancel and replace
+                    # Cancel and replace with POST_ONLY order
                     cancel_success = await self.spot_adapter.cancel_order(
                         spread_order.spot_leg.symbol,
                         spread_order.spot_leg.order_id,
@@ -465,7 +485,7 @@ class OrderExecutor:
                             result = await self.spot_adapter.place_order(
                                 symbol=spread_order.spot_leg.symbol,
                                 side=spread_order.spot_leg.side,
-                                order_type="LIMIT",
+                                order_type="POST_ONLY",  # Use POST_ONLY for maker fees
                                 quantity=remaining_qty,
                                 price=spread_order.spot_leg.target_price,
                                 pos_side=spread_order.spot_leg.pos_side,
@@ -496,7 +516,7 @@ class OrderExecutor:
                     spread_order.futures_leg.filled_price = status["filled_price"]
                     logger.info("Futures leg already filled during amend check")
                 elif status and status["state"] in ("live", "partially_filled"):
-                    # Cancel and replace
+                    # Cancel and replace with POST_ONLY order
                     cancel_success = await self.futures_adapter.cancel_order(
                         spread_order.futures_leg.symbol,
                         spread_order.futures_leg.order_id,
@@ -507,7 +527,7 @@ class OrderExecutor:
                             result = await self.futures_adapter.place_order(
                                 symbol=spread_order.futures_leg.symbol,
                                 side=spread_order.futures_leg.side,
-                                order_type="LIMIT",
+                                order_type="POST_ONLY",  # Use POST_ONLY for maker fees
                                 quantity=remaining_qty,
                                 price=spread_order.futures_leg.target_price,
                                 pos_side=spread_order.futures_leg.pos_side,

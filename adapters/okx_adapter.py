@@ -238,15 +238,24 @@ class OKXAdapter(ExchangeAdapter):
                     logger.info("SWAP order: %.6f %s = %d contracts (ctVal=%.4f)",
                                quantity, symbol.split("-")[0], sz, ct_val)
 
+            # OKX order types: market, limit, post_only, fok, ioc
+            # post_only = limit order that's cancelled if it would fill immediately (ensures maker)
+            if order_type == "MARKET":
+                okx_ord_type = "market"
+            elif order_type == "POST_ONLY":
+                okx_ord_type = "post_only"  # Maker-only limit order
+            else:
+                okx_ord_type = "limit"
+
             order_data = {
                 "instId": symbol,
                 "tdMode": td_mode,
                 "side": side.lower(),
-                "ordType": "market" if order_type == "MARKET" else "limit",
+                "ordType": okx_ord_type,
                 "sz": str(int(sz) if inst_type == "SWAP" else sz),
             }
 
-            if order_type == "LIMIT" and price:
+            if order_type in ("LIMIT", "POST_ONLY") and price:
                 order_data["px"] = str(round(price, 2))  # Round price to 2 decimals
 
             if reduce_only and inst_type == "SWAP":
@@ -276,7 +285,7 @@ class OKXAdapter(ExchangeAdapter):
                            side, order_type, symbol, sz, order_id)
 
                 # For MARKET orders, assume immediate fill
-                # For LIMIT orders, return 0 filled until confirmed via get_order_status
+                # For LIMIT/POST_ONLY orders, return 0 filled until confirmed via get_order_status
                 if order_type == "MARKET":
                     return OrderResult(
                         success=True,
@@ -285,7 +294,7 @@ class OKXAdapter(ExchangeAdapter):
                         filled_price=price or 0,
                     )
                 else:
-                    # Limit order - don't assume fill, let caller check status
+                    # Limit/post_only order - don't assume fill, let caller check status
                     return OrderResult(
                         success=True,
                         order_id=order_id,
