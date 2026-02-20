@@ -540,31 +540,47 @@ class OKXAdapter(ExchangeAdapter):
                 mmr = float(data.get("mmr") or 0)  # Maintenance margin requirement
                 upl = float(data.get("upl") or 0)  # Unrealized P&L
 
-                # Get USDT balance specifically
-                usdt_balance = 0
-                usdt_frozen = 0
+                # Available equity from top-level (cross-margin available)
+                # This is more accurate than just USDT availBal
+                avail_eq = float(data.get("availEq") or 0)
+
+                # Get USDT balance specifically as fallback
+                usdt_avail = 0
+                usdt_eq = 0
+                total_cash_bal = 0
                 for detail in data.get("details", []):
-                    if detail.get("ccy") == "USDT":
-                        usdt_balance = float(detail.get("availBal", 0))
-                        usdt_frozen = float(detail.get("frozenBal", 0))
-                        break
+                    ccy = detail.get("ccy", "")
+                    # Sum up all cash balances for reference
+                    cash_bal = float(detail.get("cashBal") or 0)
+                    eq = float(detail.get("eq") or 0)
+                    total_cash_bal += cash_bal
+
+                    if ccy == "USDT":
+                        usdt_avail = float(detail.get("availBal") or 0)
+                        usdt_eq = eq
+
+                # Use availEq if available, otherwise fall back to USDT available
+                available = avail_eq if avail_eq > 0 else usdt_avail
 
                 # Calculate margin ratio (lower is riskier)
                 margin_ratio = 0.0
                 if mmr > 0:
                     margin_ratio = (total_eq / mmr) * 100  # As percentage
 
+                logger.debug("Account: totalEq=%.2f, availEq=%.2f, usdt_avail=%.2f, imr=%.2f, upl=%.2f",
+                            total_eq, avail_eq, usdt_avail, imr, upl)
+
                 return AccountInfo(
                     exchange="OKX",
                     balance_usd=total_eq,
-                    available_balance_usd=usdt_balance,
+                    available_balance_usd=available,
                     margin_used=imr,
                     unrealized_pnl=upl,
                     total_equity=total_eq,
                     initial_margin=imr,
                     maintenance_margin=mmr,
                     margin_ratio=margin_ratio,
-                    available_margin=usdt_balance,
+                    available_margin=available,
                     leverage_used=imr / total_eq if total_eq > 0 else 0,
                 )
 
