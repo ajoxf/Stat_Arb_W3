@@ -92,8 +92,14 @@ class TradingEngine:
             self.order_executor.update_config(config)
 
         # Apply leverage settings if adapters are configured
+        # Note: This may be called from Flask thread without an event loop
         if self.futures_adapter and not config.paper_trading:
-            asyncio.create_task(self._apply_leverage_settings())
+            try:
+                loop = asyncio.get_running_loop()
+                asyncio.create_task(self._apply_leverage_settings())
+            except RuntimeError:
+                # No running loop - leverage will be applied on next trade or engine restart
+                logger.debug("Skipping leverage update (no event loop) - will apply on next trade")
 
         logger.debug("Trading config updated: asset=%s, paper=%s, algo=%s, exec_mode=%s",
                      config.asset, config.paper_trading, config.algo_enabled,
