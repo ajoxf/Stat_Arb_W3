@@ -824,3 +824,87 @@ class OKXAdapter(ExchangeAdapter):
             logger.error("Error fetching account config: %s", e)
 
         return None
+
+    async def get_spot_balances(self) -> Dict[str, float]:
+        """
+        Get all spot balances from trading account.
+
+        Returns:
+            Dict mapping currency to available balance (e.g., {'BTC': 0.25, 'USDT': 1000})
+        """
+        balances = {}
+        try:
+            result = await self._request("GET", "/api/v5/account/balance")
+
+            if result and result.get("code") == "0" and result.get("data"):
+                data = result["data"][0]
+                for detail in data.get("details", []):
+                    ccy = detail.get("ccy", "")
+                    avail = float(detail.get("availBal", 0) or 0)
+                    if avail > 0:
+                        balances[ccy] = avail
+
+        except Exception as e:
+            logger.error("Error fetching spot balances: %s", e)
+
+        return balances
+
+    async def get_asset_balance(self, currency: str) -> float:
+        """
+        Get available balance for a specific currency.
+
+        Args:
+            currency: Currency code (e.g., 'BTC', 'USDT')
+
+        Returns:
+            Available balance or 0 if none
+        """
+        balances = await self.get_spot_balances()
+        return balances.get(currency, 0.0)
+
+    async def sell_spot_to_usdt(self, currency: str, quantity: float = None) -> OrderResult:
+        """
+        Sell a spot asset to USDT.
+
+        Args:
+            currency: Currency to sell (e.g., 'BTC')
+            quantity: Amount to sell (if None, sells entire balance)
+
+        Returns:
+            OrderResult with success/failure info
+        """
+        try:
+            # Get current balance if quantity not specified
+            if quantity is None:
+                quantity = await self.get_asset_balance(currency)
+
+            if quantity <= 0:
+                return OrderResult(success=True, error=f"No {currency} balance to sell")
+
+            symbol = f"{currency}-USDT"
+
+            # Get symbol info for precision
+            symbol_info = await self.get_symbol_info(symbol)
+            min_qty = symbol_info.get("min_qty", 0) if symbol_info else 0
+
+            if quantity < min_qty:
+                return OrderResult(success=False, error=f"Quantity {quantity} below minimum {min_qty}")
+
+            # Place market sell order
+            result = await self.place_order(
+                symbol=symbol,
+                side="SELL",
+                order_type="MARKET",
+                quantity=quantity,
+            )
+
+            if result.success:
+                logger.info("Sold %.6f %s to USDT, order_id=%s", quantity, currency, result.order_id)
+            else:
+                logger.error("Failed to sell %s: %s", currency, result.error)
+
+            return result
+
+        except Exception as e:
+            logger.exception("Error selling %s to USDT", currency)
+            return OrderResult(success=False, error=str(e))

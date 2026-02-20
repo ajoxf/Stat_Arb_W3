@@ -439,6 +439,112 @@ def sync_position():
         return jsonify({'success': False, 'error': f'Unknown action: {action}'}), 400
 
 
+@app.route('/api/spot-holdings', methods=['GET'])
+def get_spot_holdings():
+    """
+    Get current spot holdings (non-USDT assets).
+
+    This helps detect orphaned spot positions from incomplete trades.
+    """
+    adapter = engine.spot_adapter or engine.futures_adapter
+    if not adapter or not hasattr(adapter, 'get_spot_balances'):
+        return jsonify({'holdings': [], 'error': 'No adapter available'})
+
+    async def fetch_balances():
+        return await adapter.get_spot_balances()
+
+    if loop:
+        try:
+            future = asyncio.run_coroutine_threadsafe(fetch_balances(), loop)
+            balances = future.result(timeout=10)
+
+            # Filter out stablecoins, keep only crypto assets
+            stablecoins = {'USDT', 'USDC', 'BUSD', 'DAI', 'TUSD'}
+            holdings = []
+
+            for currency, amount in balances.items():
+                if currency not in stablecoins and amount > 0:
+                    # Get USD value
+                    usd_value = 0
+                    if engine.spot_tick and currency == config.asset:
+                        usd_value = amount * engine.spot_tick.mid
+
+                    holdings.append({
+                        'currency': currency,
+                        'amount': amount,
+                        'usd_value': usd_value,
+                        'is_trading_asset': currency == config.asset,
+                    })
+
+            # Check if there's an orphan (holding without active position)
+            has_orphan = False
+            for h in holdings:
+                if h['is_trading_asset'] and engine.state.current_position == "NONE":
+                    has_orphan = True
+                    h['is_orphan'] = True
+
+            return jsonify({
+                'holdings': holdings,
+                'has_orphan': has_orphan,
+                'current_position': engine.state.current_position,
+            })
+
+        except Exception as e:
+            logger.error("Error fetching spot holdings: %s", e)
+            return jsonify({'holdings': [], 'error': str(e)})
+
+    return jsonify({'holdings': [], 'error': 'Event loop not running'})
+
+
+@app.route('/api/close-orphaned-spot', methods=['POST'])
+def close_orphaned_spot():
+    """
+    Sell orphaned spot holdings back to USDT.
+
+    Use this when a trade exit only closed the futures leg, leaving spot behind.
+    """
+    data = request.json or {}
+    currency = data.get('currency', config.asset)  # Default to trading asset
+
+    adapter = engine.spot_adapter
+    if not adapter or not hasattr(adapter, 'sell_spot_to_usdt'):
+        return jsonify({'success': False, 'error': 'No spot adapter available'})
+
+    async def sell_to_usdt():
+        # Get current balance
+        balance = await adapter.get_asset_balance(currency)
+        if balance <= 0:
+            return None, f"No {currency} balance to sell"
+
+        # Sell to USDT
+        result = await adapter.sell_spot_to_usdt(currency)
+        return result, balance
+
+    if loop:
+        try:
+            future = asyncio.run_coroutine_threadsafe(sell_to_usdt(), loop)
+            result, balance = future.result(timeout=30)
+
+            if result is None:
+                return jsonify({'success': True, 'message': balance})  # balance is error message
+
+            if result.success:
+                return jsonify({
+                    'success': True,
+                    'currency': currency,
+                    'amount_sold': balance,
+                    'order_id': result.order_id,
+                })
+            else:
+                return jsonify({'success': False, 'error': result.error})
+
+        except Exception as e:
+            logger.error("Error closing orphaned spot: %s", e)
+            return jsonify({'success': False, 'error': str(e)})
+
+    return jsonify({'success': False, 'error': 'Event loop not running'})
+
+
 @app.route('/api/exchanges', methods=['GET'])
 def get_exchanges():
     """Get all exchanges."""
