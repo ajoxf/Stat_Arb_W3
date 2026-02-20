@@ -830,6 +830,82 @@ def get_exchange_orders():
     return jsonify({'orders': [], 'error': 'Event loop not running'})
 
 
+@app.route('/api/exchange-orders/csv', methods=['GET'])
+def download_exchange_orders_csv():
+    """Download exchange order history as CSV."""
+    import csv
+    import io
+    from flask import Response
+
+    limit = request.args.get('limit', 100, type=int)
+
+    adapter = engine.futures_adapter or engine.spot_adapter
+    if not adapter or not hasattr(adapter, 'get_order_history'):
+        return Response("No adapter available", status=400)
+
+    async def fetch_orders():
+        return await adapter.get_order_history(limit=limit)
+
+    if loop:
+        try:
+            future = asyncio.run_coroutine_threadsafe(fetch_orders(), loop)
+            orders = future.result(timeout=15)
+
+            # Create CSV
+            output = io.StringIO()
+            if orders:
+                fieldnames = ['created_at', 'symbol', 'inst_type', 'side', 'pos_side',
+                              'order_type', 'quantity', 'fill_qty', 'fill_price',
+                              'leverage', 'fee', 'fee_ccy', 'pnl', 'state', 'order_id']
+                writer = csv.DictWriter(output, fieldnames=fieldnames, extrasaction='ignore')
+                writer.writeheader()
+                for order in orders:
+                    writer.writerow(order)
+
+            output.seek(0)
+            return Response(
+                output.getvalue(),
+                mimetype='text/csv',
+                headers={'Content-Disposition': 'attachment; filename=exchange_orders.csv'}
+            )
+        except Exception as e:
+            logger.error("Error exporting exchange orders: %s", e)
+            return Response(f"Error: {e}", status=500)
+
+    return Response("Event loop not running", status=500)
+
+
+@app.route('/api/trades/csv', methods=['GET'])
+def download_trades_csv():
+    """Download trade journal as CSV."""
+    import csv
+    import io
+    from flask import Response
+
+    limit = request.args.get('limit', 500, type=int)
+    trades = db.get_trades(limit=limit)
+
+    output = io.StringIO()
+    if trades:
+        fieldnames = ['id', 'asset', 'position_type', 'entry_time', 'entry_spot_price',
+                      'entry_futures_price', 'entry_spread', 'entry_zscore',
+                      'exit_time', 'exit_spot_price', 'exit_futures_price',
+                      'exit_spread', 'exit_zscore', 'exit_reason',
+                      'quantity', 'notional_usd', 'pnl_usd', 'pnl_percent',
+                      'spot_order_id', 'futures_order_id', 'is_open', 'is_paper']
+        writer = csv.DictWriter(output, fieldnames=fieldnames, extrasaction='ignore')
+        writer.writeheader()
+        for trade in trades:
+            writer.writerow(trade.to_dict())
+
+    output.seek(0)
+    return Response(
+        output.getvalue(),
+        mimetype='text/csv',
+        headers={'Content-Disposition': 'attachment; filename=trade_journal.csv'}
+    )
+
+
 @app.route('/api/active-orders', methods=['GET'])
 def get_active_orders():
     """Get currently active/pending orders."""
