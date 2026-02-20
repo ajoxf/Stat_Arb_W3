@@ -305,14 +305,21 @@ def save_config():
     """Save configuration."""
     global config, engine
 
-    data = request.json
-    config = TradingConfig.from_dict(data)
-    db.save_config(config)
+    try:
+        data = request.json
+        if not data:
+            return jsonify({'success': False, 'error': 'No data received'}), 400
 
-    # Update engine
-    engine.update_config(config)
+        config = TradingConfig.from_dict(data)
+        db.save_config(config)
 
-    return jsonify({'success': True, 'config': config.to_dict()})
+        # Update engine
+        engine.update_config(config)
+
+        return jsonify({'success': True, 'config': config.to_dict()})
+    except Exception as e:
+        logger.error("Error saving config: %s", e)
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @app.route('/api/engine/toggle-algo', methods=['POST'])

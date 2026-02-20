@@ -386,12 +386,12 @@
             if (data.success) {
                 showToast('Configuration saved successfully', 'success');
             } else {
-                showToast('Error saving configuration', 'danger');
+                showToast('Error: ' + (data.error || 'Unknown error'), 'danger');
             }
         })
         .catch(error => {
             console.error('Error:', error);
-            showToast('Error saving configuration', 'danger');
+            showToast('Error: ' + error.message, 'danger');
         });
     });
 
