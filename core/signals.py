@@ -65,6 +65,9 @@ class SignalGenerator:
         # Track current position for exit signals
         self.current_position: str = "NONE"
 
+        # Track blocked signals for diagnostics
+        self.last_blocked_signal: Optional[Dict[str, Any]] = None
+
     def update_config(self, config: TradingConfig) -> None:
         """Update configuration."""
         self.config = config
@@ -323,18 +326,44 @@ class SignalGenerator:
 
         # Determine signal type
         signal_type = "NONE"
+        blocked_reason = None
 
         if self.current_position == "NONE":
-            # Entry signals - filters apply
-            # Guard: do NOT enter if Z is already at or beyond the stop-loss level.
-            # Entering at such an extreme would cause an immediate stop-loss on the next tick.
-            if hurst_ok and std_ok:
-                if (self.current_zscore >= self.config.entry_threshold and
-                        self.current_zscore < self.config.stop_loss_threshold):
-                    signal_type = "LONG"  # Spread above mean (high futures premium), expect reversion down
-                elif (self.current_zscore <= -self.config.entry_threshold and
-                        self.current_zscore > -self.config.stop_loss_threshold):
-                    signal_type = "SHORT"  # Spread below mean (futures discount), expect reversion up
+            # Check if Z-score crosses entry threshold
+            z_triggers_long = self.current_zscore >= self.config.entry_threshold
+            z_triggers_short = self.current_zscore <= -self.config.entry_threshold
+
+            if z_triggers_long or z_triggers_short:
+                # Z-score triggered - check why it might be blocked
+                if not hurst_ok:
+                    blocked_reason = "Hurst filter (H={:.3f} > {:.2f})".format(
+                        self.current_hurst, self.config.hurst_threshold)
+                elif not std_ok:
+                    blocked_reason = "STD filter (volatility too low)"
+                elif z_triggers_long and self.current_zscore >= self.config.stop_loss_threshold:
+                    blocked_reason = "Z-score at stop-loss level ({:.2f} >= {:.2f})".format(
+                        self.current_zscore, self.config.stop_loss_threshold)
+                elif z_triggers_short and self.current_zscore <= -self.config.stop_loss_threshold:
+                    blocked_reason = "Z-score at stop-loss level ({:.2f} <= -{:.2f})".format(
+                        self.current_zscore, self.config.stop_loss_threshold)
+                else:
+                    # All filters pass - generate signal
+                    if z_triggers_long:
+                        signal_type = "LONG"
+                    else:
+                        signal_type = "SHORT"
+
+                # Record blocked signal if applicable
+                if blocked_reason:
+                    self.last_blocked_signal = {
+                        'timestamp': timestamp.isoformat(),
+                        'would_be_signal': 'LONG' if z_triggers_long else 'SHORT',
+                        'zscore': round(self.current_zscore, 4),
+                        'reason': blocked_reason,
+                    }
+                    logger.debug("Signal blocked: %s (Z=%.4f) - %s",
+                                'LONG' if z_triggers_long else 'SHORT',
+                                self.current_zscore, blocked_reason)
 
         elif self.current_position == "LONG":
             # Exit signals for LONG position - filters do NOT apply
@@ -435,6 +464,7 @@ class SignalGenerator:
             'stats_update_interval': self.stats_update_interval,
             'last_stats_update': self.last_stats_update.isoformat() if self.last_stats_update else None,
             'next_stats_update_in': round(next_update_in),
+            'last_blocked_signal': self.last_blocked_signal,
         }
 
     def load_spread_history(self, spreads: List[float]) -> None:
@@ -466,3 +496,4 @@ class SignalGenerator:
         self.current_position = "NONE"
         self.last_stats_update = None
         self._stats_initialized = False
+        self.last_blocked_signal = None

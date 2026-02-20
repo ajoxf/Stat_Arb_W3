@@ -371,16 +371,34 @@ class TradingEngine:
         """Open a new position."""
         if self.state.current_position != "NONE":
             logger.warning("Already in position, ignoring entry signal")
+            self.signal_generator.last_blocked_signal = {
+                'timestamp': datetime.utcnow().isoformat(),
+                'would_be_signal': signal.signal_type,
+                'zscore': round(signal.zscore, 4),
+                'reason': f"Already in {self.state.current_position} position",
+            }
             return
 
         # Check post-stop-loss cooldown
         if self._stop_loss_cooldown_until and datetime.utcnow() < self._stop_loss_cooldown_until:
             remaining = (self._stop_loss_cooldown_until - datetime.utcnow()).total_seconds()
             logger.debug("Stop-loss cooldown active, %.0fs remaining", remaining)
+            self.signal_generator.last_blocked_signal = {
+                'timestamp': datetime.utcnow().isoformat(),
+                'would_be_signal': signal.signal_type,
+                'zscore': round(signal.zscore, 4),
+                'reason': f"Stop-loss cooldown ({int(remaining)}s remaining)",
+            }
             return
 
         if not self.spot_tick or not self.futures_tick:
             logger.warning("No tick data available")
+            self.signal_generator.last_blocked_signal = {
+                'timestamp': datetime.utcnow().isoformat(),
+                'would_be_signal': signal.signal_type,
+                'zscore': round(signal.zscore, 4),
+                'reason': "No price data available",
+            }
             return
 
         position_type = signal.signal_type  # LONG or SHORT
