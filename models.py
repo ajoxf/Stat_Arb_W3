@@ -99,6 +99,10 @@ class TradingConfig:
     taker_fee_bps: float = 5.0   # Market orders - typically 0.05%
     maker_fee_bps: float = 2.0   # Limit orders - typically 0.02% (or rebate)
 
+    # Safety settings
+    entry_cooldown_seconds: int = 60  # Minimum seconds between trades (prevents rapid re-entry)
+    verify_exchange_position: bool = True  # Check exchange for existing positions before entry
+
     # Legacy field - now computed from taker/maker fees based on order mode
     estimated_costs_bps: float = 10.0  # Kept for backward compatibility
 
@@ -131,6 +135,8 @@ class TradingConfig:
             'taker_fee_bps': self.taker_fee_bps,
             'maker_fee_bps': self.maker_fee_bps,
             'estimated_costs_bps': self.estimated_costs_bps,
+            'entry_cooldown_seconds': self.entry_cooldown_seconds,
+            'verify_exchange_position': self.verify_exchange_position,
         }
 
     @classmethod

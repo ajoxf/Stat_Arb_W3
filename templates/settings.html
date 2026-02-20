@@ -237,6 +237,28 @@
                         <strong>Recommended:</strong> Limit for entries (save fees), Market for exits (avoid slippage).
                     </div>
 
+                    <hr class="my-4" style="border-color: var(--border-color);">
+
+                    <!-- Safety Settings -->
+                    <div class="row mb-4">
+                        <div class="col-12">
+                            <h6 class="text-secondary mb-3"><i class="bi bi-shield-check me-2"></i>Safety Settings</h6>
+                            <small class="text-secondary d-block mb-3">Prevents duplicate orders and runaway positions.</small>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">Entry Cooldown (seconds)</label>
+                            <input type="number" class="form-control" id="entry_cooldown_seconds" name="entry_cooldown_seconds" value="{{ config.entry_cooldown_seconds }}" min="0" max="3600">
+                            <small class="text-secondary">Minimum wait time between trades (prevents rapid re-entry)</small>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="form-check form-switch mt-4">
+                                <input class="form-check-input" type="checkbox" id="verify_exchange_position" name="verify_exchange_position" {% if config.verify_exchange_position %}checked{% endif %}>
+                                <label class="form-check-label" for="verify_exchange_position">Verify Exchange Position Before Entry</label>
+                            </div>
+                            <small class="text-secondary">Query exchange for existing positions before placing new orders</small>
+                        </div>
+                    </div>
+
                     <div class="d-flex justify-content-end gap-2">
                         <button type="button" class="btn btn-outline-secondary" onclick="resetForm()">Reset</button>
                         <button type="submit" class="btn btn-primary">
@@ -382,6 +404,8 @@
             exit_execution_mode: document.getElementById('exit_execution_mode').value,
             limit_order_timeout_sec: parseInt(document.getElementById('limit_order_timeout_sec').value),
             limit_order_price_offset_bps: parseFloat(document.getElementById('limit_order_price_offset_bps').value),
+            entry_cooldown_seconds: parseInt(document.getElementById('entry_cooldown_seconds').value),
+            verify_exchange_position: document.getElementById('verify_exchange_position').checked,
         };
 
         fetch('/api/config', {
@@ -430,6 +454,8 @@
                 document.getElementById('exit_execution_mode').value = config.exit_execution_mode || 'MARKET';
                 document.getElementById('limit_order_timeout_sec').value = config.limit_order_timeout_sec;
                 document.getElementById('limit_order_price_offset_bps').value = config.limit_order_price_offset_bps;
+                document.getElementById('entry_cooldown_seconds').value = config.entry_cooldown_seconds || 60;
+                document.getElementById('verify_exchange_position').checked = config.verify_exchange_position !== false;
                 updateLimitSettingsVisibility();
             });
     }

@@ -79,6 +79,9 @@ class TradingEngine:
         self._stop_loss_cooldown_sec = 60
         self._stop_loss_cooldown_until: Optional[datetime] = None
 
+        # General entry cooldown: prevent rapid re-entry after any trade
+        self._entry_cooldown_until: Optional[datetime] = None
+
         # Execution lock to prevent new trades while one is being executed
         self._executing_trade = False
 
@@ -442,6 +445,31 @@ class TradingEngine:
             }
             return
 
+        # Check general entry cooldown (prevents rapid re-entry after any trade)
+        if self._entry_cooldown_until and datetime.utcnow() < self._entry_cooldown_until:
+            remaining = (self._entry_cooldown_until - datetime.utcnow()).total_seconds()
+            logger.debug("Entry cooldown active, %.0fs remaining", remaining)
+            self.signal_generator.last_blocked_signal = {
+                'timestamp': datetime.utcnow().isoformat(),
+                'would_be_signal': signal.signal_type,
+                'zscore': round(signal.zscore, 4),
+                'reason': f"Entry cooldown ({int(remaining)}s remaining)",
+            }
+            return
+
+        # SAFETY: Verify no existing position on exchange before entering
+        if self.config.verify_exchange_position and not self.state.paper_trading:
+            existing_position = await self._check_exchange_position()
+            if existing_position:
+                logger.warning("Exchange has existing position! Blocking entry. Position: %s", existing_position)
+                self.signal_generator.last_blocked_signal = {
+                    'timestamp': datetime.utcnow().isoformat(),
+                    'would_be_signal': signal.signal_type,
+                    'zscore': round(signal.zscore, 4),
+                    'reason': f"Exchange already has position: {existing_position}",
+                }
+                return
+
         if not self.spot_tick or not self.futures_tick:
             logger.warning("No tick data available")
             self.signal_generator.last_blocked_signal = {
@@ -555,8 +583,46 @@ class TradingEngine:
             self._stop_loss_cooldown_until = datetime.utcnow() + timedelta(seconds=self._stop_loss_cooldown_sec)
             logger.info("Stop-loss cooldown active for %ds", self._stop_loss_cooldown_sec)
 
+        # Apply general entry cooldown after any trade
+        from datetime import timedelta
+        cooldown_sec = getattr(self.config, 'entry_cooldown_seconds', 60)
+        if cooldown_sec > 0:
+            self._entry_cooldown_until = datetime.utcnow() + timedelta(seconds=cooldown_sec)
+            logger.info("Entry cooldown active for %ds", cooldown_sec)
+
         if self.on_trade:
             self.on_trade(trade)
+
+    async def _check_exchange_position(self) -> Optional[str]:
+        """
+        Check if there's an existing position on the exchange.
+
+        Returns a description of the position if one exists, None otherwise.
+        This prevents duplicate entries when engine state is out of sync.
+        """
+        try:
+            existing_positions = []
+
+            # Check futures positions
+            if self.futures_adapter and hasattr(self.futures_adapter, 'get_positions'):
+                positions = await self.futures_adapter.get_positions(self.config.futures_symbol)
+                for pos in positions:
+                    if pos.quantity > 0:
+                        existing_positions.append(f"Futures {pos.side} {pos.quantity:.6f}")
+
+            # Check spot balance (simplified - just check if we have the asset)
+            # Note: For spot, we'd need to track what was bought for arbitrage vs held
+            # For now, we focus on futures positions which are clearer indicators
+
+            if existing_positions:
+                return ", ".join(existing_positions)
+
+            return None
+
+        except Exception as e:
+            logger.warning("Error checking exchange positions: %s", e)
+            # On error, allow the trade but log warning
+            return None
 
     async def _verify_leverage_settings(self) -> bool:
         """
