@@ -87,7 +87,10 @@ class TradingConfig:
     algo_enabled: bool = False
 
     # Order execution mode: "MARKET" or "LIMIT"
-    order_execution_mode: str = "MARKET"
+    # Separate modes for entries vs exits to optimize fee/slippage tradeoff
+    order_execution_mode: str = "MARKET"  # Legacy field, kept for backward compatibility
+    entry_execution_mode: str = "LIMIT"   # Entries: LIMIT for maker fees (less urgent)
+    exit_execution_mode: str = "MARKET"   # Exits: MARKET for speed (avoid slippage)
     # Limit order settings
     limit_order_timeout_sec: int = 30  # Max time to wait for fill
     limit_order_price_offset_bps: float = 1.0  # Offset from best bid/ask in basis points
@@ -121,6 +124,8 @@ class TradingConfig:
             'paper_trading': self.paper_trading,
             'algo_enabled': self.algo_enabled,
             'order_execution_mode': self.order_execution_mode,
+            'entry_execution_mode': self.entry_execution_mode,
+            'exit_execution_mode': self.exit_execution_mode,
             'limit_order_timeout_sec': self.limit_order_timeout_sec,
             'limit_order_price_offset_bps': self.limit_order_price_offset_bps,
             'taker_fee_bps': self.taker_fee_bps,

@@ -199,35 +199,42 @@
                     <hr class="my-4" style="border-color: var(--border-color);">
 
                     <!-- Order Execution -->
-                    <div class="row mb-4">
+                    <div class="row mb-3">
                         <div class="col-12">
                             <h6 class="text-secondary mb-3">Order Execution</h6>
                         </div>
-                        <div class="col-md-4">
-                            <label class="form-label">Execution Mode</label>
-                            <select class="form-select" id="order_execution_mode" name="order_execution_mode">
-                                <option value="MARKET" {% if config.order_execution_mode == 'MARKET' %}selected{% endif %}>Market Orders</option>
-                                <option value="LIMIT" {% if config.order_execution_mode == 'LIMIT' %}selected{% endif %}>Pegged Limit Orders</option>
+                        <div class="col-md-3">
+                            <label class="form-label">Entry Mode</label>
+                            <select class="form-select" id="entry_execution_mode" name="entry_execution_mode" onchange="updateLimitSettingsVisibility()">
+                                <option value="MARKET" {% if config.entry_execution_mode == 'MARKET' %}selected{% endif %}>Market</option>
+                                <option value="LIMIT" {% if config.entry_execution_mode == 'LIMIT' %}selected{% endif %}>Limit (Maker)</option>
                             </select>
-                            <small class="text-secondary">Market = immediate fill, higher cost<br>Limit = better price, may not fill</small>
+                            <small class="text-secondary">Opening new positions</small>
                         </div>
-                        <div class="col-md-4" id="limit-timeout-group">
-                            <label class="form-label">Limit Order Timeout (sec)</label>
+                        <div class="col-md-3">
+                            <label class="form-label">Exit Mode</label>
+                            <select class="form-select" id="exit_execution_mode" name="exit_execution_mode" onchange="updateLimitSettingsVisibility()">
+                                <option value="MARKET" {% if config.exit_execution_mode == 'MARKET' %}selected{% endif %}>Market</option>
+                                <option value="LIMIT" {% if config.exit_execution_mode == 'LIMIT' %}selected{% endif %}>Limit (Maker)</option>
+                            </select>
+                            <small class="text-secondary">Closing positions</small>
+                        </div>
+                        <div class="col-md-3" id="limit-timeout-group">
+                            <label class="form-label">Limit Timeout (sec)</label>
                             <input type="number" class="form-control" id="limit_order_timeout_sec" name="limit_order_timeout_sec" value="{{ config.limit_order_timeout_sec }}" min="5" max="300">
-                            <small class="text-secondary">Max time to wait for limit fill</small>
+                            <small class="text-secondary">Max wait for fill</small>
                         </div>
-                        <div class="col-md-4" id="limit-offset-group">
+                        <div class="col-md-3" id="limit-offset-group">
                             <label class="form-label">Price Offset (bps)</label>
                             <input type="number" class="form-control" id="limit_order_price_offset_bps" name="limit_order_price_offset_bps" value="{{ config.limit_order_price_offset_bps }}" step="0.5" min="0" max="10">
-                            <small class="text-secondary">0 = passive, higher = faster fills</small>
+                            <small class="text-secondary">0 = passive, higher = faster</small>
                         </div>
                     </div>
 
-                    <div class="alert alert-info" id="limit-order-info" style="display: {% if config.order_execution_mode == 'LIMIT' %}block{% else %}none{% endif %};">
+                    <div class="alert alert-info" id="limit-order-info" style="display: {% if config.entry_execution_mode == 'LIMIT' or config.exit_execution_mode == 'LIMIT' %}block{% else %}none{% endif %};">
                         <i class="bi bi-info-circle me-2"></i>
-                        <strong>Pegged Limit Orders:</strong> Uses POST_ONLY orders (maker fees guaranteed).
-                        Price Offset improves your bid/ask to increase fill probability - POST_ONLY ensures you never pay taker fees.
-                        Orders are re-priced every 1 second if price moves &gt;0.05%. Timeout triggers cancel and leg risk handling.
+                        <strong>Limit Orders:</strong> Uses POST_ONLY (maker fees guaranteed).
+                        <strong>Recommended:</strong> Limit for entries (save fees), Market for exits (avoid slippage).
                     </div>
 
                     <div class="d-flex justify-content-end gap-2">
@@ -333,19 +340,19 @@
         }
     });
 
-    // Toggle limit order settings visibility
-    function updateLimitOrderVisibility() {
-        const mode = document.getElementById('order_execution_mode').value;
-        const isLimit = mode === 'LIMIT';
-        document.getElementById('limit-timeout-group').style.opacity = isLimit ? '1' : '0.5';
-        document.getElementById('limit-offset-group').style.opacity = isLimit ? '1' : '0.5';
-        document.getElementById('limit_order_timeout_sec').disabled = !isLimit;
-        document.getElementById('limit_order_price_offset_bps').disabled = !isLimit;
-        document.getElementById('limit-order-info').style.display = isLimit ? 'block' : 'none';
+    // Toggle limit order settings visibility based on entry/exit modes
+    function updateLimitSettingsVisibility() {
+        const entryMode = document.getElementById('entry_execution_mode').value;
+        const exitMode = document.getElementById('exit_execution_mode').value;
+        const anyLimit = entryMode === 'LIMIT' || exitMode === 'LIMIT';
+        document.getElementById('limit-timeout-group').style.opacity = anyLimit ? '1' : '0.5';
+        document.getElementById('limit-offset-group').style.opacity = anyLimit ? '1' : '0.5';
+        document.getElementById('limit_order_timeout_sec').disabled = !anyLimit;
+        document.getElementById('limit_order_price_offset_bps').disabled = !anyLimit;
+        document.getElementById('limit-order-info').style.display = anyLimit ? 'block' : 'none';
     }
 
-    document.getElementById('order_execution_mode').addEventListener('change', updateLimitOrderVisibility);
-    updateLimitOrderVisibility(); // Initial state
+    updateLimitSettingsVisibility(); // Initial state
 
     // Form submission
     document.getElementById('config-form').addEventListener('submit', function(e) {
@@ -371,7 +378,8 @@
             taker_fee_bps: parseFloat(document.getElementById('taker_fee_bps').value),
             maker_fee_bps: parseFloat(document.getElementById('maker_fee_bps').value),
             paper_trading: document.getElementById('paper_trading').checked,
-            order_execution_mode: document.getElementById('order_execution_mode').value,
+            entry_execution_mode: document.getElementById('entry_execution_mode').value,
+            exit_execution_mode: document.getElementById('exit_execution_mode').value,
             limit_order_timeout_sec: parseInt(document.getElementById('limit_order_timeout_sec').value),
             limit_order_price_offset_bps: parseFloat(document.getElementById('limit_order_price_offset_bps').value),
         };
@@ -418,10 +426,11 @@
                 document.getElementById('taker_fee_bps').value = config.taker_fee_bps || 5.0;
                 document.getElementById('maker_fee_bps').value = config.maker_fee_bps || 2.0;
                 document.getElementById('paper_trading').checked = config.paper_trading;
-                document.getElementById('order_execution_mode').value = config.order_execution_mode;
+                document.getElementById('entry_execution_mode').value = config.entry_execution_mode || 'LIMIT';
+                document.getElementById('exit_execution_mode').value = config.exit_execution_mode || 'MARKET';
                 document.getElementById('limit_order_timeout_sec').value = config.limit_order_timeout_sec;
                 document.getElementById('limit_order_price_offset_bps').value = config.limit_order_price_offset_bps;
-                updateLimitOrderVisibility();
+                updateLimitSettingsVisibility();
             });
     }
 

@@ -240,12 +240,19 @@ class OrderExecutor:
         spot_tick: MarketTick,
         futures_tick: MarketTick,
     ) -> SpreadOrder:
-        """Execute a spread order using configured mode."""
+        """Execute a spread order using configured mode (different for entry vs exit)."""
         self._executing = True
         self.active_order = spread_order
 
         try:
-            if self.config.order_execution_mode == "MARKET":
+            # Use different execution modes for entries vs exits
+            # This allows maker fees on entries and fast execution on exits
+            if spread_order.is_entry:
+                execution_mode = getattr(self.config, 'entry_execution_mode', self.config.order_execution_mode)
+            else:
+                execution_mode = getattr(self.config, 'exit_execution_mode', self.config.order_execution_mode)
+
+            if execution_mode == "MARKET":
                 return await self._execute_market(spread_order)
             else:
                 return await self._execute_limit(spread_order, spot_tick, futures_tick)
