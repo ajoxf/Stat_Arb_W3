@@ -796,6 +796,30 @@ def close_current_position():
     return jsonify({'success': False, 'error': 'No price data available'}), 400
 
 
+@app.route('/api/exchange-orders', methods=['GET'])
+def get_exchange_orders():
+    """Fetch real order history from the exchange (OKX)."""
+    limit = request.args.get('limit', 50, type=int)
+
+    adapter = engine.futures_adapter or engine.spot_adapter
+    if not adapter or not hasattr(adapter, 'get_order_history'):
+        return jsonify({'orders': [], 'error': 'No adapter available'})
+
+    async def fetch_orders():
+        return await adapter.get_order_history(limit=limit)
+
+    if loop:
+        try:
+            future = asyncio.run_coroutine_threadsafe(fetch_orders(), loop)
+            orders = future.result(timeout=15)
+            return jsonify({'orders': orders})
+        except Exception as e:
+            logger.error("Error fetching exchange orders: %s", e)
+            return jsonify({'orders': [], 'error': str(e)})
+
+    return jsonify({'orders': [], 'error': 'Event loop not running'})
+
+
 @app.route('/api/active-orders', methods=['GET'])
 def get_active_orders():
     """Get currently active/pending orders."""

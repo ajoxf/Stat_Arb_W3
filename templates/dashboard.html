@@ -479,6 +479,49 @@
         </div>
     </div>
 </div>
+
+<!-- Exchange Order Log (full width) -->
+<div class="row mt-3">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header py-1 d-flex justify-content-between align-items-center">
+                <small><i class="bi bi-receipt me-2"></i>Exchange Order Log <span class="badge bg-secondary ms-1" id="exchange-order-badge">OKX</span></small>
+                <button class="btn btn-sm btn-outline-secondary py-0" onclick="refreshExchangeOrders()" style="font-size: 0.65rem;">
+                    <i class="bi bi-arrow-clockwise"></i> Refresh
+                </button>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive" style="max-height: 280px; overflow-y: auto;">
+                    <table class="table table-sm table-striped table-hover mb-0" style="font-size: 0.72rem;">
+                        <thead class="sticky-top" style="background: var(--bg-secondary);">
+                            <tr>
+                                <th>Time</th>
+                                <th>Symbol</th>
+                                <th>Type</th>
+                                <th>Side</th>
+                                <th>Pos Side</th>
+                                <th>Order Type</th>
+                                <th>Qty</th>
+                                <th>Fill Qty</th>
+                                <th>Fill Price</th>
+                                <th>Leverage</th>
+                                <th>Fee</th>
+                                <th>P&L</th>
+                                <th>Status</th>
+                                <th>Order ID</th>
+                            </tr>
+                        </thead>
+                        <tbody id="exchange-orders-table">
+                            <tr>
+                                <td colspan="14" class="text-center text-secondary py-3">Click Refresh to load exchange orders</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
 {% endblock %}
 
 {% block scripts %}
@@ -1220,6 +1263,54 @@
             }
         })
         .catch(err => showToast('Error: ' + err, 'error'));
+    }
+
+    // ========== Exchange Order Log ==========
+    function refreshExchangeOrders() {
+        const tbody = document.getElementById('exchange-orders-table');
+        tbody.innerHTML = '<tr><td colspan="14" class="text-center text-secondary py-2"><i class="bi bi-hourglass-split me-1"></i>Loading...</td></tr>';
+
+        fetch('/api/exchange-orders?limit=100')
+            .then(r => r.json())
+            .then(data => {
+                const orders = data.orders || [];
+                if (orders.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="14" class="text-center text-secondary py-3">No orders found</td></tr>';
+                    return;
+                }
+
+                tbody.innerHTML = '';
+                orders.forEach(o => {
+                    const sideClass = o.side === 'buy' ? 'text-success' : 'text-danger';
+                    const stateClass = o.state === 'filled' ? 'text-success' : (o.state === 'cancelled' ? 'text-secondary' : 'text-warning');
+                    const pnlClass = o.pnl > 0 ? 'text-success' : (o.pnl < 0 ? 'text-danger' : '');
+                    const feeClass = o.fee < 0 ? 'text-danger' : '';
+                    const time = o.filled_at ? new Date(parseInt(o.filled_at)).toLocaleTimeString() : '-';
+                    const date = o.filled_at ? new Date(parseInt(o.filled_at)).toLocaleDateString() : '';
+
+                    const tr = document.createElement('tr');
+                    tr.innerHTML = `
+                        <td title="${date}">${time}</td>
+                        <td>${o.symbol}</td>
+                        <td><span class="badge bg-secondary" style="font-size:0.6rem">${o.inst_type}</span></td>
+                        <td class="${sideClass} fw-bold">${o.side.toUpperCase()}</td>
+                        <td class="text-secondary">${o.pos_side || '-'}</td>
+                        <td>${o.order_type}</td>
+                        <td>${o.quantity}</td>
+                        <td>${o.fill_qty || '-'}</td>
+                        <td>${o.fill_price > 0 ? '$' + o.fill_price.toLocaleString() : '-'}</td>
+                        <td>${o.leverage ? o.leverage + 'x' : '-'}</td>
+                        <td class="${feeClass}">${o.fee !== 0 ? o.fee.toFixed(4) + ' ' + o.fee_ccy : '-'}</td>
+                        <td class="${pnlClass}">${o.pnl !== 0 ? '$' + o.pnl.toFixed(4) : '-'}</td>
+                        <td class="${stateClass}">${o.state}</td>
+                        <td><code style="font-size:0.6rem">${o.order_id.slice(-8)}</code></td>
+                    `;
+                    tbody.appendChild(tr);
+                });
+            })
+            .catch(err => {
+                tbody.innerHTML = `<tr><td colspan="14" class="text-center text-danger py-3">Error: ${err}</td></tr>`;
+            });
     }
 </script>
 {% endblock %}

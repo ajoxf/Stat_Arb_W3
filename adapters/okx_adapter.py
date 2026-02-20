@@ -443,19 +443,28 @@ class OKXAdapter(ExchangeAdapter):
 
             if pos_result and pos_result.get("code") == "0" and pos_result.get("data"):
                 p = pos_result["data"][0]
+
+                def safe_float(val, default=0.0):
+                    """Convert to float safely, handling empty strings from OKX."""
+                    try:
+                        return float(val) if val not in (None, '', 'None') else default
+                    except (ValueError, TypeError):
+                        return default
+
+                liq_px = p.get("liqPx")
                 return {
                     "symbol": symbol,
                     "side": pos.side,
                     "quantity": pos.quantity,
                     "entry_price": pos.entry_price,
                     "mark_price": mark_price,
-                    "liquidation_price": float(p.get("liqPx", 0)) if p.get("liqPx") else None,
-                    "margin": float(p.get("margin", 0)),
-                    "margin_ratio": float(p.get("mgnRatio", 0)) * 100,  # Convert to percentage
+                    "liquidation_price": safe_float(liq_px) if liq_px not in (None, '', 'None') else None,
+                    "margin": safe_float(p.get("margin")),
+                    "margin_ratio": safe_float(p.get("mgnRatio")) * 100,
                     "unrealized_pnl": pos.unrealized_pnl,
                     "leverage": pos.leverage,
-                    "imr": float(p.get("imr", 0)),  # Initial margin for this position
-                    "mmr": float(p.get("mmr", 0)),  # Maintenance margin for this position
+                    "imr": safe_float(p.get("imr")),
+                    "mmr": safe_float(p.get("mmr")),
                 }
 
         except Exception as e:
@@ -575,6 +584,55 @@ class OKXAdapter(ExchangeAdapter):
             logger.error("Error getting leverage for %s: %s", symbol, e)
 
         return None
+
+    async def get_order_history(self, symbol: Optional[str] = None, limit: int = 50) -> List[Dict[str, Any]]:
+        """
+        Fetch recent order history from OKX.
+
+        Returns filled and cancelled orders for both SPOT and SWAP.
+        """
+        orders = []
+
+        inst_types = ["SPOT", "SWAP"]
+        for inst_type in inst_types:
+            params: Dict[str, Any] = {"instType": inst_type, "limit": str(limit)}
+            if symbol:
+                params["instId"] = symbol
+
+            result = await self._request("GET", "/api/v5/trade/orders-history", params=params)
+
+            if result and result.get("code") == "0" and result.get("data"):
+                for o in result["data"]:
+                    try:
+                        fee = o.get("fee", "0") or "0"
+                        fill_px = o.get("fillPx", "") or o.get("avgPx", "") or "0"
+                        fill_sz = o.get("fillSz", "") or o.get("accFillSz", "") or "0"
+                        orders.append({
+                            "order_id":    o.get("ordId", ""),
+                            "symbol":      o.get("instId", ""),
+                            "inst_type":   inst_type,
+                            "side":        o.get("side", ""),       # buy / sell
+                            "pos_side":    o.get("posSide", ""),    # long / short / net
+                            "order_type":  o.get("ordType", ""),    # market / limit
+                            "state":       o.get("state", ""),      # filled / cancelled / live
+                            "quantity":    float(o.get("sz", 0) or 0),
+                            "fill_qty":    float(fill_sz),
+                            "fill_price":  float(fill_px),
+                            "fee":         float(fee),
+                            "fee_ccy":     o.get("feeCcy", ""),
+                            "leverage":    o.get("lever", ""),
+                            "pnl":         float(o.get("pnl", 0) or 0),
+                            "created_at":  o.get("cTime", ""),
+                            "filled_at":   o.get("uTime", ""),
+                            "td_mode":     o.get("tdMode", ""),     # cash / cross / isolated
+                        })
+                    except (ValueError, TypeError) as e:
+                        logger.debug("Skipping order record due to parse error: %s", e)
+                        continue
+
+        # Sort by creation time descending
+        orders.sort(key=lambda x: x["created_at"], reverse=True)
+        return orders[:limit]
 
     async def get_account_config(self) -> Optional[Dict[str, Any]]:
         """
