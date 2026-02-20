@@ -74,9 +74,10 @@ class SpreadOrder:
 
     @property
     def is_failed(self) -> bool:
-        """Check if either leg failed."""
-        return (self.spot_leg.status == LegStatus.FAILED or
-                self.futures_leg.status == LegStatus.FAILED)
+        """Check if either leg failed or was cancelled (POST_ONLY rejection)."""
+        failed_states = (LegStatus.FAILED, LegStatus.CANCELLED)
+        return (self.spot_leg.status in failed_states or
+                self.futures_leg.status in failed_states)
 
     @property
     def has_partial_fill(self) -> bool:
@@ -84,6 +85,22 @@ class SpreadOrder:
         spot_filled = self.spot_leg.status in (LegStatus.FILLED, LegStatus.PARTIAL)
         futures_filled = self.futures_leg.status in (LegStatus.FILLED, LegStatus.PARTIAL)
         return spot_filled != futures_filled
+
+    @property
+    def has_orphan_risk(self) -> bool:
+        """
+        Check if one leg failed/cancelled while the other filled.
+        This is a critical leg risk situation requiring immediate action.
+        """
+        failed_states = (LegStatus.FAILED, LegStatus.CANCELLED)
+        filled_states = (LegStatus.FILLED, LegStatus.PARTIAL)
+
+        spot_failed = self.spot_leg.status in failed_states
+        futures_failed = self.futures_leg.status in failed_states
+        spot_filled = self.spot_leg.status in filled_states
+        futures_filled = self.futures_leg.status in filled_states
+
+        return (spot_failed and futures_filled) or (futures_failed and spot_filled)
 
 
 class OrderExecutor:
@@ -362,9 +379,12 @@ class OrderExecutor:
                 if spot_change_pct > amend_threshold or futures_change_pct > amend_threshold:
                     await self._amend_limit_orders(spread_order)
 
-        # Handle partial fills
-        if spread_order.has_partial_fill:
-            logger.warning("PARTIAL FILL after limit execution - Leg risk!")
+        # Handle partial fills or orphan risk (one leg filled, other cancelled/failed)
+        if spread_order.has_partial_fill or spread_order.has_orphan_risk:
+            if spread_order.has_orphan_risk:
+                logger.error("ORPHAN RISK: One leg filled while other was cancelled/failed!")
+            else:
+                logger.warning("PARTIAL FILL after limit execution - Leg risk!")
             await self._handle_leg_risk(spread_order)
 
         if spread_order.is_complete and self.on_fill:
@@ -427,7 +447,7 @@ class OrderExecutor:
         # Use POST_ONLY to ensure maker execution (order rejected if it would cross spread)
         order_type = "POST_ONLY"
 
-        # Place spot limit order
+        # Place spot limit order first
         spot_result = await self.spot_adapter.place_order(
             symbol=spread_order.spot_leg.symbol,
             side=spread_order.spot_leg.side,
@@ -445,6 +465,8 @@ class OrderExecutor:
         else:
             spread_order.spot_leg.status = LegStatus.FAILED
             logger.error("Failed to place spot limit order: %s", spot_result.error)
+            # Don't place futures if spot failed immediately
+            return
 
         # Place futures limit order
         futures_result = await self.futures_adapter.place_order(
@@ -464,6 +486,22 @@ class OrderExecutor:
         else:
             spread_order.futures_leg.status = LegStatus.FAILED
             logger.error("Failed to place futures limit order: %s", futures_result.error)
+            # Futures failed - cancel spot to prevent orphan
+            logger.warning("Cancelling spot order since futures placement failed")
+            try:
+                await self.spot_adapter.cancel_order(
+                    spread_order.spot_leg.symbol,
+                    spread_order.spot_leg.order_id,
+                )
+                spread_order.spot_leg.status = LegStatus.CANCELLED
+            except Exception as e:
+                logger.error("Failed to cancel spot after futures failure: %s", e)
+            return
+
+        # CRITICAL: Immediately check if either order was cancelled by exchange (POST_ONLY rejection)
+        # OKX may accept the order but immediately cancel it if it would cross the spread
+        await asyncio.sleep(0.1)  # Brief delay for exchange to process
+        await self._check_order_status(spread_order)
 
     async def _amend_limit_orders(self, spread_order: SpreadOrder) -> None:
         """
@@ -577,7 +615,7 @@ class OrderExecutor:
                         spread_order.spot_leg.filled_price = status["filled_price"]
                     elif status["state"] == "canceled":
                         spread_order.spot_leg.status = LegStatus.CANCELLED
-                        logger.warning("Spot leg was cancelled externally")
+                        logger.warning("Spot leg was cancelled (POST_ONLY rejected or external)")
             except Exception as e:
                 logger.error("Error checking spot order status: %s", e)
 
@@ -601,9 +639,72 @@ class OrderExecutor:
                         spread_order.futures_leg.filled_price = status["filled_price"]
                     elif status["state"] == "canceled":
                         spread_order.futures_leg.status = LegStatus.CANCELLED
-                        logger.warning("Futures leg was cancelled externally")
+                        logger.warning("Futures leg was cancelled (POST_ONLY rejected or external)")
             except Exception as e:
                 logger.error("Error checking futures order status: %s", e)
+
+        # CRITICAL: If one leg is cancelled and other is still OPEN, cancel the other immediately
+        # This prevents orphan positions from POST_ONLY rejections
+        await self._cancel_if_one_leg_failed(spread_order)
+
+    async def _cancel_if_one_leg_failed(self, spread_order: SpreadOrder) -> None:
+        """
+        Cancel the remaining open leg if one leg was cancelled/failed.
+
+        This is CRITICAL for preventing orphan positions when POST_ONLY orders
+        are rejected by the exchange (cancelled because they would cross the spread).
+        """
+        failed_states = (LegStatus.FAILED, LegStatus.CANCELLED)
+
+        # If spot failed but futures is still open, cancel futures
+        if spread_order.spot_leg.status in failed_states and spread_order.futures_leg.status == LegStatus.OPEN:
+            logger.warning("Spot leg failed/cancelled - cancelling futures leg to prevent orphan")
+            try:
+                cancelled = await self.futures_adapter.cancel_order(
+                    spread_order.futures_leg.symbol,
+                    spread_order.futures_leg.order_id,
+                )
+                if cancelled:
+                    spread_order.futures_leg.status = LegStatus.CANCELLED
+                    logger.info("Futures leg cancelled successfully - no orphan")
+                else:
+                    # Check if it filled while we tried to cancel
+                    status = await self.futures_adapter.get_order_status(
+                        spread_order.futures_leg.symbol,
+                        spread_order.futures_leg.order_id
+                    )
+                    if status and status["state"] == "filled":
+                        spread_order.futures_leg.status = LegStatus.FILLED
+                        spread_order.futures_leg.filled_qty = status["filled_qty"]
+                        spread_order.futures_leg.filled_price = status["filled_price"]
+                        logger.error("ORPHAN: Futures filled while spot was cancelled - LEG RISK!")
+            except Exception as e:
+                logger.error("Error cancelling futures after spot failure: %s", e)
+
+        # If futures failed but spot is still open, cancel spot
+        if spread_order.futures_leg.status in failed_states and spread_order.spot_leg.status == LegStatus.OPEN:
+            logger.warning("Futures leg failed/cancelled - cancelling spot leg to prevent orphan")
+            try:
+                cancelled = await self.spot_adapter.cancel_order(
+                    spread_order.spot_leg.symbol,
+                    spread_order.spot_leg.order_id,
+                )
+                if cancelled:
+                    spread_order.spot_leg.status = LegStatus.CANCELLED
+                    logger.info("Spot leg cancelled successfully - no orphan")
+                else:
+                    # Check if it filled while we tried to cancel
+                    status = await self.spot_adapter.get_order_status(
+                        spread_order.spot_leg.symbol,
+                        spread_order.spot_leg.order_id
+                    )
+                    if status and status["state"] == "filled":
+                        spread_order.spot_leg.status = LegStatus.FILLED
+                        spread_order.spot_leg.filled_qty = status["filled_qty"]
+                        spread_order.spot_leg.filled_price = status["filled_price"]
+                        logger.error("ORPHAN: Spot filled while futures was cancelled - LEG RISK!")
+            except Exception as e:
+                logger.error("Error cancelling spot after futures failure: %s", e)
 
     async def _handle_timeout(self, spread_order: SpreadOrder) -> None:
         """Handle timeout - cancel unfilled orders and close any partial fills."""
@@ -638,28 +739,44 @@ class OrderExecutor:
         """
         Handle leg risk when one leg is filled but the other isn't.
 
+        This handles:
+        - Partial fills (one leg FILLED, other PARTIAL or not filled)
+        - Orphan risk (one leg FILLED, other CANCELLED/FAILED from POST_ONLY rejection)
+
         Strategy: Market-close the filled leg to eliminate directional exposure.
         """
-        logger.warning("Handling leg risk - closing partial position with market order")
+        logger.warning("Handling leg risk - closing orphan position with market order")
 
-        spot_filled = spread_order.spot_leg.status == LegStatus.FILLED
-        futures_filled = spread_order.futures_leg.status == LegStatus.FILLED
+        filled_states = (LegStatus.FILLED, LegStatus.PARTIAL)
+        failed_states = (LegStatus.FAILED, LegStatus.CANCELLED, LegStatus.OPEN, LegStatus.PENDING)
 
-        if spot_filled and not futures_filled:
+        spot_filled = spread_order.spot_leg.status in filled_states and spread_order.spot_leg.filled_qty > 0
+        futures_filled = spread_order.futures_leg.status in filled_states and spread_order.futures_leg.filled_qty > 0
+        spot_failed = spread_order.spot_leg.status in failed_states or spread_order.spot_leg.filled_qty == 0
+        futures_failed = spread_order.futures_leg.status in failed_states or spread_order.futures_leg.filled_qty == 0
+
+        if spot_filled and futures_failed:
             # Spot filled, futures didn't - close spot position
             close_side = "SELL" if spread_order.spot_leg.side == "BUY" else "BUY"
+            logger.warning("Closing orphan SPOT position: %s %.6f @ market",
+                          close_side, spread_order.spot_leg.filled_qty)
             result = await self.spot_adapter.place_order(
                 symbol=spread_order.spot_leg.symbol,
                 side=close_side,
                 order_type="MARKET",
                 quantity=spread_order.spot_leg.filled_qty,
             )
-            logger.info("Closed spot leg to handle leg risk: %s", result)
+            if result.success:
+                logger.info("Successfully closed orphan spot leg: order_id=%s", result.order_id)
+            else:
+                logger.error("Failed to close orphan spot leg: %s", result.error)
 
-        elif futures_filled and not spot_filled:
+        elif futures_filled and spot_failed:
             # Futures filled, spot didn't - close futures position
             # IMPORTANT: Use SAME pos_side as entry to close the position
             close_side = "SELL" if spread_order.futures_leg.side == "BUY" else "BUY"
+            logger.warning("Closing orphan FUTURES position: %s %.6f @ market (pos_side=%s)",
+                          close_side, spread_order.futures_leg.filled_qty, spread_order.futures_leg.pos_side)
             result = await self.futures_adapter.place_order(
                 symbol=spread_order.futures_leg.symbol,
                 side=close_side,
@@ -668,10 +785,13 @@ class OrderExecutor:
                 pos_side=spread_order.futures_leg.pos_side,  # Same pos_side to close!
                 reduce_only=True,
             )
-            logger.info("Closed futures leg to handle leg risk: %s", result)
+            if result.success:
+                logger.info("Successfully closed orphan futures leg: order_id=%s", result.order_id)
+            else:
+                logger.error("Failed to close orphan futures leg: %s", result.error)
 
         if self.on_error:
-            self.on_error("Leg risk occurred - partial position closed with market order")
+            self.on_error("Leg risk occurred - orphan position closed with market order")
 
     def _update_leg_from_result(self, leg: LegOrder, result: OrderResult) -> None:
         """Update leg status from order result."""
