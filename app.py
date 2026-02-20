@@ -623,17 +623,37 @@ def get_account_info():
     account_data['configured_spot_leverage'] = config.spot_leverage
     account_data['configured_futures_leverage'] = config.futures_leverage
 
-    # Set actual leverage - prefer exchange data, fallback to configured
-    # For spot: Use configured if exchange doesn't report (e.g., margin trading enabled)
+    # Set actual leverage - prefer exchange data, use sensible defaults
+    # For spot: Default to 1x (cash trading) unless a margin position reports leverage
     if 'actual_spot_leverage' not in account_data:
-        # No spot position found - use configured leverage
-        # This allows VIP/margin accounts to work with their configured leverage
-        account_data['actual_spot_leverage'] = config.spot_leverage
-        account_data['spot_leverage_source'] = 'configured'
+        # No spot margin position found - use 1x for cash trading
+        # VIP/margin accounts with active positions will get leverage from position data
+        account_data['actual_spot_leverage'] = 1
+        account_data['spot_leverage_source'] = 'cash'  # Cash spot = no leverage
 
+    # For futures: Check if we need to fetch leverage from exchange settings
     if 'actual_futures_leverage' not in account_data:
-        account_data['actual_futures_leverage'] = config.futures_leverage
-        account_data['futures_leverage_source'] = 'configured'
+        # Try to get leverage setting from exchange for the futures symbol
+        try:
+            async def fetch_futures_leverage():
+                adapter = engine.futures_adapter or engine.spot_adapter
+                if adapter and hasattr(adapter, 'get_leverage_info'):
+                    return await adapter.get_leverage_info(config.futures_symbol)
+                return None
+
+            if loop:
+                lev_future = asyncio.run_coroutine_threadsafe(fetch_futures_leverage(), loop)
+                lev_info = lev_future.result(timeout=5)
+                if lev_info and lev_info.get('leverage'):
+                    account_data['actual_futures_leverage'] = lev_info['leverage']
+                    account_data['futures_leverage_source'] = 'exchange'
+                else:
+                    account_data['actual_futures_leverage'] = config.futures_leverage
+                    account_data['futures_leverage_source'] = 'configured'
+        except Exception as lev_err:
+            logger.debug("Could not fetch futures leverage: %s", lev_err)
+            account_data['actual_futures_leverage'] = config.futures_leverage
+            account_data['futures_leverage_source'] = 'configured'
 
     # Calculate daily P&L from trades
     stats = db.get_trade_statistics()

@@ -873,22 +873,34 @@
         let messages = [];
 
         // Show source of leverage data
-        const spotSource = window.spotLeverageSource || 'configured';
+        const spotSource = window.spotLeverageSource || 'cash';
         const futSource = window.futuresLeverageSource || 'configured';
 
-        // Add warning if actual differs from configured (only if from exchange)
+        // Add warning if actual differs from configured
+        // For spot: Show warning if from exchange (margin position) and differs
         if (actualSpotLeverage !== configuredSpotLeverage && spotSource === 'exchange') {
             messages.push(`Spot: ${actualSpotLeverage}x (exchange) vs ${configuredSpotLeverage}x (configured)`);
         }
+        // For futures: Show warning if from exchange and differs from configured
         if (actualFuturesLeverage !== configuredFuturesLeverage && futSource === 'exchange') {
             messages.push(`Futures: ${actualFuturesLeverage}x (exchange) vs ${configuredFuturesLeverage}x (configured)`);
         }
 
-        // Show info about leverage source when no position open yet
-        if (messages.length === 0 && (spotSource === 'configured' || futSource === 'configured')) {
+        // Show info about leverage source
+        if (messages.length === 0) {
             const sourceInfo = [];
-            if (spotSource === 'configured') sourceInfo.push(`Spot: ${actualSpotLeverage}x (from settings)`);
-            if (futSource === 'configured') sourceInfo.push(`Futures: ${actualFuturesLeverage}x (from settings)`);
+            // Spot: 'cash' = no leverage (1x), 'configured' = from settings, 'exchange' = from position
+            if (spotSource === 'cash') {
+                sourceInfo.push(`Spot: 1x (cash)`);
+            } else if (spotSource === 'configured') {
+                sourceInfo.push(`Spot: ${actualSpotLeverage}x (settings)`);
+            }
+            // Futures: show source
+            if (futSource === 'configured') {
+                sourceInfo.push(`Futures: ${actualFuturesLeverage}x (settings)`);
+            } else if (futSource === 'exchange') {
+                sourceInfo.push(`Futures: ${actualFuturesLeverage}x (exchange)`);
+            }
             if (sourceInfo.length > 0) {
                 warningText.innerHTML = '<i class="bi bi-info-circle"></i> ' + sourceInfo.join(', ');
                 warningEl.style.display = 'block';

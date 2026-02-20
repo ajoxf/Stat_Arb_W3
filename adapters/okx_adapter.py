@@ -470,6 +470,34 @@ class OKXAdapter(ExchangeAdapter):
             logger.exception("Error fetching OKX positions")
             return []
 
+    async def get_leverage_info(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """Get leverage setting for a specific instrument."""
+        try:
+            # Determine margin mode from symbol
+            mgn_mode = "cross"  # Default to cross margin
+
+            params = {
+                "instId": symbol,
+                "mgnMode": mgn_mode,
+            }
+
+            result = await self._request("GET", "/api/v5/account/leverage-info", params=params)
+
+            if result and result.get("code") == "0" and result.get("data"):
+                data = result["data"][0]
+                return {
+                    "symbol": data.get("instId", symbol),
+                    "leverage": float(data.get("lever", 1)),
+                    "margin_mode": data.get("mgnMode", "cross"),
+                    "pos_side": data.get("posSide", ""),
+                }
+
+            return None
+
+        except Exception as e:
+            logger.warning("Error fetching leverage info for %s: %s", symbol, e)
+            return None
+
     async def close_position(self, symbol: str) -> OrderResult:
         """Close an open position."""
         try:
