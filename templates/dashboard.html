@@ -464,13 +464,13 @@
                         <tr>
                             <td style="padding: 2px;">Spot</td>
                             <td style="padding: 2px;" class="text-end" id="spot-position-value">-</td>
-                            <td style="padding: 2px;" class="text-center" id="spot-leverage">1x</td>
+                            <td style="padding: 2px;" class="text-center" id="pos-spot-leverage">1x</td>
                             <td style="padding: 2px;" class="text-end" id="spot-margin-used">-</td>
                         </tr>
                         <tr>
                             <td style="padding: 2px;">Futures</td>
                             <td style="padding: 2px;" class="text-end" id="futures-position-value">-</td>
-                            <td style="padding: 2px;" class="text-center" id="futures-leverage">1x</td>
+                            <td style="padding: 2px;" class="text-center" id="pos-futures-leverage">1x</td>
                             <td style="padding: 2px;" class="text-end" id="futures-margin-used">-</td>
                         </tr>
                         <tr style="border-top: 1px solid var(--border-color);">
@@ -479,6 +479,9 @@
                         </tr>
                     </tbody>
                 </table>
+                <div id="leverage-warning" class="text-warning mt-1" style="font-size: 0.65rem; display: none;">
+                    <i class="bi bi-exclamation-triangle"></i> <span id="leverage-warning-text"></span>
+                </div>
             </div>
         </div>
 
@@ -730,8 +733,12 @@
         entryFuturesPrice: 0,
         notionalUsd: 0
     };
-    const spotLeverage = {{ config.spot_leverage }};
-    const futuresLeverage = {{ config.futures_leverage }};
+    // Configured leverage (from settings)
+    const configuredSpotLeverage = {{ config.spot_leverage }};
+    const configuredFuturesLeverage = {{ config.futures_leverage }};
+    // Actual leverage (from exchange) - updated from API
+    let actualSpotLeverage = 1;  // Spot on OKX is typically 1x (cash)
+    let actualFuturesLeverage = {{ config.futures_leverage }};  // Will be updated from API
 
     // Socket event handlers
     socket.on('tick', function(data) {
@@ -844,21 +851,40 @@
         const spotValue = qty * spotPrice;
         const futuresValue = qty * futuresPrice;
 
-        // Calculate margin used (value / leverage)
-        const spotMargin = spotValue / spotLeverage;
-        const futuresMargin = futuresValue / futuresLeverage;
+        // Calculate margin used with ACTUAL exchange leverage (not configured)
+        const spotMargin = spotValue / actualSpotLeverage;
+        const futuresMargin = futuresValue / actualFuturesLeverage;
         const totalMargin = spotMargin + futuresMargin;
 
-        // Update display
+        // Update display with actual leverage from exchange
         document.getElementById('spot-position-value').textContent = '$' + spotValue.toFixed(2);
-        document.getElementById('spot-leverage').textContent = spotLeverage + 'x';
+        document.getElementById('pos-spot-leverage').textContent = actualSpotLeverage + 'x';
         document.getElementById('spot-margin-used').textContent = '$' + spotMargin.toFixed(2);
 
         document.getElementById('futures-position-value').textContent = '$' + futuresValue.toFixed(2);
-        document.getElementById('futures-leverage').textContent = futuresLeverage + 'x';
+        document.getElementById('pos-futures-leverage').textContent = actualFuturesLeverage + 'x';
         document.getElementById('futures-margin-used').textContent = '$' + futuresMargin.toFixed(2);
 
         document.getElementById('total-margin-used').textContent = '$' + totalMargin.toFixed(2);
+
+        // Show warning if actual leverage differs from configured
+        const warningEl = document.getElementById('leverage-warning');
+        const warningText = document.getElementById('leverage-warning-text');
+        let warnings = [];
+
+        if (actualSpotLeverage !== configuredSpotLeverage) {
+            warnings.push(`Spot: ${actualSpotLeverage}x actual vs ${configuredSpotLeverage}x configured`);
+        }
+        if (actualFuturesLeverage !== configuredFuturesLeverage) {
+            warnings.push(`Futures: ${actualFuturesLeverage}x actual vs ${configuredFuturesLeverage}x configured`);
+        }
+
+        if (warnings.length > 0) {
+            warningText.textContent = warnings.join(', ');
+            warningEl.style.display = 'block';
+        } else {
+            warningEl.style.display = 'none';
+        }
     }
 
     function updatePriceWithColor(elementId, value, direction) {
@@ -1314,6 +1340,22 @@
 
                 updateElement('mark-price', data.mark_price ? '$' + data.mark_price.toFixed(2) : '-');
                 updateElement('liq-price', data.liquidation_price ? '$' + data.liquidation_price.toFixed(2) : '-');
+
+                // Update actual leverage from exchange (for accurate margin calculations)
+                if (data.actual_spot_leverage !== undefined) {
+                    actualSpotLeverage = data.actual_spot_leverage;
+                }
+                if (data.actual_futures_leverage !== undefined) {
+                    actualFuturesLeverage = data.actual_futures_leverage;
+                }
+                // Also check positions array for actual leverage
+                if (data.positions && data.positions.length > 0) {
+                    data.positions.forEach(pos => {
+                        if (pos.symbol && (pos.symbol.includes('SWAP') || pos.symbol.includes('PERP'))) {
+                            actualFuturesLeverage = pos.leverage || actualFuturesLeverage;
+                        }
+                    });
+                }
             })
             .catch(err => console.log('Account info error:', err));
     }

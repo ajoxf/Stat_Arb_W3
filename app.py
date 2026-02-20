@@ -590,8 +590,35 @@ def get_account_info():
                 except Exception as config_err:
                     logger.warning("Error fetching account config: %s", config_err)
 
+                # Fetch actual position leverage from exchange
+                try:
+                    async def fetch_positions():
+                        if hasattr(adapter, 'get_positions'):
+                            return await adapter.get_positions()
+                        return []
+
+                    pos_future = asyncio.run_coroutine_threadsafe(fetch_positions(), loop)
+                    positions = pos_future.result(timeout=10)
+
+                    # Add actual leverage info from positions
+                    account_data['positions'] = []
+                    for pos in positions:
+                        pos_data = pos.to_dict()
+                        account_data['positions'].append(pos_data)
+                        # Track futures leverage specifically
+                        if 'SWAP' in pos.symbol or 'PERP' in pos.symbol:
+                            account_data['actual_futures_leverage'] = pos.leverage
+                except Exception as pos_err:
+                    logger.warning("Error fetching positions: %s", pos_err)
+
         except Exception as e:
             logger.warning("Error fetching account info: %s", e)
+
+    # Add configured leverage for comparison
+    account_data['configured_spot_leverage'] = config.spot_leverage
+    account_data['configured_futures_leverage'] = config.futures_leverage
+    # Note: Spot on OKX is typically 1x (cash trading) unless using margin trading
+    account_data['actual_spot_leverage'] = 1  # OKX spot is cash-based, no leverage
 
     # Calculate daily P&L from trades
     stats = db.get_trade_statistics()
