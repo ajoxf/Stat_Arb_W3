@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import Optional, List, Dict, Any
 from contextlib import contextmanager
 
-from models import TradingConfig, Exchange, Trade, SDTouchEvent
+from models import TradingConfig, Exchange, Trade, SDTouchEvent, User, UserOKXKeys
 
 logger = logging.getLogger(__name__)
 
@@ -199,7 +199,58 @@ class DatabaseManager:
             if cursor.fetchone()[0] == 0:
                 cursor.execute("INSERT INTO trading_config (id) VALUES (1)")
 
+            # ---------------------------------------------------------------
+            # SaaS: Users
+            # ---------------------------------------------------------------
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    email TEXT UNIQUE NOT NULL,
+                    username TEXT UNIQUE NOT NULL,
+                    password_hash TEXT NOT NULL,
+                    is_admin INTEGER DEFAULT 0,
+                    is_active INTEGER DEFAULT 1,
+                    subscription_status TEXT DEFAULT 'trial',
+                    subscription_tier TEXT DEFAULT 'basic',
+                    trial_ends_at TEXT,
+                    stripe_customer_id TEXT DEFAULT '',
+                    stripe_subscription_id TEXT DEFAULT '',
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    last_login TEXT
+                )
+            """)
+
+            # SaaS: Per-user OKX API keys (encrypted at rest)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS user_okx_keys (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    is_demo INTEGER DEFAULT 1,
+                    api_key_enc TEXT DEFAULT '',
+                    secret_key_enc TEXT DEFAULT '',
+                    passphrase_enc TEXT DEFAULT '',
+                    is_active INTEGER DEFAULT 0,
+                    verified_at TEXT,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+            # SaaS: Per-user audit log
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS audit_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER REFERENCES users(id),
+                    action TEXT NOT NULL,
+                    details TEXT DEFAULT '',
+                    ip_address TEXT DEFAULT '',
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+            # ---------------------------------------------------------------
             # Migrations: Add new columns if they don't exist
+            # ---------------------------------------------------------------
             cursor.execute("PRAGMA table_info(trading_config)")
             existing_columns = {row[1] for row in cursor.fetchall()}
 
@@ -211,6 +262,20 @@ class DatabaseManager:
                 cursor.execute("ALTER TABLE trading_config ADD COLUMN spot_leverage INTEGER DEFAULT 1")
             if 'futures_leverage' not in existing_columns:
                 cursor.execute("ALTER TABLE trading_config ADD COLUMN futures_leverage INTEGER DEFAULT 1")
+            if 'user_id' not in existing_columns:
+                cursor.execute("ALTER TABLE trading_config ADD COLUMN user_id INTEGER DEFAULT 0")
+
+            # Migrate trades table: add user_id if missing
+            cursor.execute("PRAGMA table_info(trades)")
+            trade_cols = {row[1] for row in cursor.fetchall()}
+            if 'user_id' not in trade_cols:
+                cursor.execute("ALTER TABLE trades ADD COLUMN user_id INTEGER DEFAULT 0")
+
+            # Migrate spread_history: add user_id if missing
+            cursor.execute("PRAGMA table_info(spread_history)")
+            spread_cols = {row[1] for row in cursor.fetchall()}
+            if 'user_id' not in spread_cols:
+                cursor.execute("ALTER TABLE spread_history ADD COLUMN user_id INTEGER DEFAULT 0")
 
             logger.info("Database initialized: %s", self.db_path)
 
@@ -827,3 +892,205 @@ class DatabaseManager:
             """, (datetime.utcnow().isoformat(), exit_reason, trade_id))
             logger.info("Manually closed trade ID %d", trade_id)
             return True
+
+    # =========================================================================
+    # SaaS: User Management Methods
+    # =========================================================================
+
+    def _row_to_user(self, row) -> User:
+        """Convert a DB row to a User object."""
+        return User(
+            id=row["id"],
+            email=row["email"],
+            username=row["username"],
+            password_hash=row["password_hash"],
+            is_admin=bool(row["is_admin"]),
+            _is_active=bool(row["is_active"]),
+            subscription_status=row["subscription_status"] or "trial",
+            subscription_tier=row["subscription_tier"] or "basic",
+            trial_ends_at=datetime.fromisoformat(row["trial_ends_at"]) if row["trial_ends_at"] else None,
+            stripe_customer_id=row["stripe_customer_id"] or "",
+            stripe_subscription_id=row["stripe_subscription_id"] or "",
+            created_at=datetime.fromisoformat(row["created_at"]) if row["created_at"] else None,
+            last_login=datetime.fromisoformat(row["last_login"]) if row["last_login"] else None,
+        )
+
+    def create_user(self, email: str, username: str, password_hash: str, is_admin: bool = False) -> int:
+        """Create a new user. Returns the new user ID."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            # Set trial expiry 14 days from now
+            trial_ends_at = datetime.utcnow().replace(microsecond=0).isoformat()
+            # We'll add 14 days in Python
+            from datetime import timedelta
+            trial_end = (datetime.utcnow() + timedelta(days=14)).isoformat()
+            cursor.execute("""
+                INSERT INTO users (email, username, password_hash, is_admin, trial_ends_at)
+                VALUES (?, ?, ?, ?, ?)
+            """, (email.lower().strip(), username.strip(), password_hash, int(is_admin), trial_end))
+            user_id = cursor.lastrowid
+            logger.info("Created user id=%d email=%s", user_id, email)
+            return user_id
+
+    def get_user_by_id(self, user_id: int) -> Optional[User]:
+        """Get user by primary key."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM users WHERE id = ?", (user_id,))
+            row = cursor.fetchone()
+            return self._row_to_user(row) if row else None
+
+    def get_user_by_email(self, email: str) -> Optional[User]:
+        """Get user by email address."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM users WHERE email = ?", (email.lower().strip(),))
+            row = cursor.fetchone()
+            return self._row_to_user(row) if row else None
+
+    def get_user_by_username(self, username: str) -> Optional[User]:
+        """Get user by username."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM users WHERE username = ?", (username.strip(),))
+            row = cursor.fetchone()
+            return self._row_to_user(row) if row else None
+
+    def get_all_users(self) -> List[User]:
+        """Get all users (admin use)."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM users ORDER BY created_at DESC")
+            return [self._row_to_user(r) for r in cursor.fetchall()]
+
+    def update_last_login(self, user_id: int) -> None:
+        """Record login timestamp."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE users SET last_login = ? WHERE id = ?",
+                (datetime.utcnow().isoformat(), user_id)
+            )
+
+    def update_user_subscription(
+        self,
+        user_id: int,
+        status: str,
+        tier: str = "basic",
+        stripe_customer_id: str = "",
+        stripe_subscription_id: str = "",
+    ) -> None:
+        """Update a user's subscription info."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE users SET
+                    subscription_status = ?,
+                    subscription_tier = ?,
+                    stripe_customer_id = ?,
+                    stripe_subscription_id = ?
+                WHERE id = ?
+            """, (status, tier, stripe_customer_id, stripe_subscription_id, user_id))
+
+    def count_users(self) -> int:
+        """Return total number of registered users."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM users")
+            return cursor.fetchone()[0]
+
+    # =========================================================================
+    # SaaS: Per-User OKX API Key Methods
+    # =========================================================================
+
+    def _row_to_okx_keys(self, row) -> UserOKXKeys:
+        return UserOKXKeys(
+            id=row["id"],
+            user_id=row["user_id"],
+            is_demo=bool(row["is_demo"]),
+            api_key_enc=row["api_key_enc"] or "",
+            secret_key_enc=row["secret_key_enc"] or "",
+            passphrase_enc=row["passphrase_enc"] or "",
+            is_active=bool(row["is_active"]),
+            verified_at=datetime.fromisoformat(row["verified_at"]) if row["verified_at"] else None,
+            created_at=datetime.fromisoformat(row["created_at"]) if row["created_at"] else None,
+            updated_at=datetime.fromisoformat(row["updated_at"]) if row["updated_at"] else None,
+        )
+
+    def get_user_okx_keys(self, user_id: int) -> Optional[UserOKXKeys]:
+        """Get the OKX API keys for a user (returns None if not set)."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM user_okx_keys WHERE user_id = ? LIMIT 1",
+                (user_id,)
+            )
+            row = cursor.fetchone()
+            return self._row_to_okx_keys(row) if row else None
+
+    def save_user_okx_keys(
+        self,
+        user_id: int,
+        is_demo: bool,
+        api_key_enc: str,
+        secret_key_enc: str,
+        passphrase_enc: str,
+        is_active: bool = False,
+        verified_at: Optional[datetime] = None,
+    ) -> int:
+        """Upsert OKX API keys for a user. Returns record ID."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            now = datetime.utcnow().isoformat()
+            verified_str = verified_at.isoformat() if verified_at else None
+
+            # Check if record already exists
+            cursor.execute("SELECT id FROM user_okx_keys WHERE user_id = ?", (user_id,))
+            existing = cursor.fetchone()
+
+            if existing:
+                cursor.execute("""
+                    UPDATE user_okx_keys SET
+                        is_demo = ?,
+                        api_key_enc = ?,
+                        secret_key_enc = ?,
+                        passphrase_enc = ?,
+                        is_active = ?,
+                        verified_at = ?,
+                        updated_at = ?
+                    WHERE user_id = ?
+                """, (
+                    int(is_demo), api_key_enc, secret_key_enc, passphrase_enc,
+                    int(is_active), verified_str, now, user_id
+                ))
+                return existing["id"]
+            else:
+                cursor.execute("""
+                    INSERT INTO user_okx_keys (
+                        user_id, is_demo, api_key_enc, secret_key_enc,
+                        passphrase_enc, is_active, verified_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    user_id, int(is_demo), api_key_enc, secret_key_enc,
+                    passphrase_enc, int(is_active), verified_str
+                ))
+                return cursor.lastrowid
+
+    def delete_user_okx_keys(self, user_id: int) -> None:
+        """Remove OKX API keys for a user."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM user_okx_keys WHERE user_id = ?", (user_id,))
+
+    # =========================================================================
+    # SaaS: Audit Log
+    # =========================================================================
+
+    def audit(self, user_id: Optional[int], action: str, details: str = "", ip: str = "") -> None:
+        """Write an audit log entry."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO audit_log (user_id, action, details, ip_address)
+                VALUES (?, ?, ?, ?)
+            """, (user_id, action, details, ip))

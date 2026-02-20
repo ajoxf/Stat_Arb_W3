@@ -338,14 +338,60 @@
                         </a>
                     </li>
                 </ul>
-                <div class="d-flex align-items-center">
-                    <span class="me-3 text-secondary" id="connection-status">
+                <div class="d-flex align-items-center gap-3">
+                    <span class="text-secondary" id="connection-status">
                         <i class="bi bi-circle-fill me-1 status-disconnected"></i>Connecting...
                     </span>
-                    <div class="form-check form-switch">
+                    <div class="form-check form-switch mb-0">
                         <input class="form-check-input algo-switch" type="checkbox" id="algoSwitch">
                         <label class="form-check-label text-secondary" for="algoSwitch">Algo</label>
                     </div>
+                    {% if current_user and current_user.is_authenticated %}
+                    <div class="dropdown">
+                        <button class="btn btn-sm btn-outline-secondary dropdown-toggle d-flex align-items-center gap-1"
+                                data-bs-toggle="dropdown">
+                            <i class="bi bi-person-circle"></i>
+                            <span class="d-none d-md-inline">{{ current_user.username }}</span>
+                        </button>
+                        <ul class="dropdown-menu dropdown-menu-end shadow-sm" style="min-width:180px;">
+                            <li class="px-3 py-2 border-bottom">
+                                <div class="small fw-semibold">{{ current_user.username }}</div>
+                                <div class="text-muted" style="font-size:.75rem;">{{ current_user.email }}</div>
+                                <div class="mt-1">
+                                    {% if current_user.subscription_status == 'active' %}
+                                        <span class="badge bg-success" style="font-size:.7rem;">Active</span>
+                                    {% elif current_user.subscription_status == 'trial' %}
+                                        <span class="badge bg-info" style="font-size:.7rem;">Trial</span>
+                                    {% else %}
+                                        <span class="badge bg-secondary" style="font-size:.7rem;">{{ current_user.subscription_status }}</span>
+                                    {% endif %}
+                                    <span class="ms-1 text-muted" style="font-size:.7rem;">{{ current_user.subscription_tier }}</span>
+                                </div>
+                            </li>
+                            {% if current_user.is_admin %}
+                            <li>
+                                <a class="dropdown-item small py-2" href="/admin">
+                                    <i class="bi bi-shield-lock me-2 text-warning"></i>Admin Dashboard
+                                </a>
+                            </li>
+                            <li><hr class="dropdown-divider my-1"></li>
+                            {% endif %}
+                            <li>
+                                <a class="dropdown-item small py-2" href="/billing">
+                                    <i class="bi bi-credit-card me-2"></i>Billing
+                                </a>
+                            </li>
+                            <li><hr class="dropdown-divider my-1"></li>
+                            <li>
+                                <a class="dropdown-item small py-2 text-danger" href="/auth/logout">
+                                    <i class="bi bi-box-arrow-right me-2"></i>Sign Out
+                                </a>
+                            </li>
+                        </ul>
+                    </div>
+                    {% else %}
+                    <a href="/auth/login" class="btn btn-sm btn-outline-secondary">Sign In</a>
+                    {% endif %}
                 </div>
             </div>
         </div>

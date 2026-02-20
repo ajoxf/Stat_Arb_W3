@@ -13,14 +13,18 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from flask import Flask, render_template, jsonify, request, redirect, url_for
-from flask_socketio import SocketIO, emit
+from flask_socketio import SocketIO, emit, join_room
+from flask_login import LoginManager, login_required, current_user
 from dotenv import load_dotenv
 
 from models import TradingConfig, Exchange, Trade, MarketTick, Signal, CRYPTO_ASSETS
 from core.signals import SignalGenerator
 from core.trading_engine import TradingEngine
+from core.engine_manager import EngineManager
 from database.manager import DatabaseManager
 from adapters import OKXAdapter, BinanceAdapter, BybitAdapter, OKXWebSocketManager
+from auth import auth_bp, init_auth
+from crypto_utils import encrypt, decrypt
 
 # Load environment variables
 load_dotenv()
@@ -47,6 +51,27 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
 # Initialize database
 db = DatabaseManager(os.getenv('DATABASE_PATH', 'trading.db'))
 
+# ── Flask-Login ────────────────────────────────────────────────────────────
+login_manager = LoginManager(app)
+login_manager.login_view = 'auth.login_page'
+login_manager.login_message = 'Please sign in to access the trading platform.'
+login_manager.login_message_category = 'info'
+
+@login_manager.user_loader
+def load_user(user_id: str):
+    try:
+        return db.get_user_by_id(int(user_id))
+    except Exception:
+        return None
+
+# Register auth blueprint and inject DB
+app.register_blueprint(auth_bp)
+init_auth(db)
+
+# ── Per-user Engine Manager ────────────────────────────────────────────────
+engine_mgr = EngineManager()
+
+# ── Legacy single-user globals (kept for backwards compat during migration) ─
 # Initialize trading engine
 config = db.get_config()
 engine = TradingEngine(config)
@@ -267,6 +292,7 @@ def index():
 
 
 @app.route('/dashboard')
+@login_required
 def dashboard():
     """Main trading dashboard."""
     config = db.get_config()
@@ -278,6 +304,7 @@ def dashboard():
 
 
 @app.route('/settings')
+@login_required
 def settings():
     """Configuration page."""
     config = db.get_config()
@@ -287,6 +314,7 @@ def settings():
 
 
 @app.route('/setup')
+@login_required
 def setup():
     """Exchange management page."""
     exchanges = db.get_exchanges()
@@ -294,6 +322,7 @@ def setup():
 
 
 @app.route('/analysis')
+@login_required
 def analysis():
     """SD touch analysis page."""
     config = db.get_config()
@@ -1688,6 +1717,310 @@ def reset_all():
     })
 
 
+# =============================================================================
+# OKX API Key Management  (per-user, encrypted at rest)
+# =============================================================================
+
+@app.route('/api/okx-keys', methods=['GET'])
+@login_required
+def get_okx_keys():
+    """Return masked status of current user's OKX API keys."""
+    keys = db.get_user_okx_keys(current_user.id)
+    if not keys:
+        return jsonify({'has_api_key': False, 'has_secret_key': False,
+                        'has_passphrase': False, 'is_demo': True, 'is_active': False})
+    return jsonify(keys.to_dict_masked())
+
+
+@app.route('/api/okx-keys', methods=['POST'])
+@login_required
+def save_okx_keys():
+    """
+    Save (or update) the current user's OKX API keys.
+    Accepts partial updates: only supplied fields are changed.
+    Keys are Fernet-encrypted before storing.
+    """
+    data = request.json or {}
+    is_demo = data.get('is_demo', True)
+
+    existing = db.get_user_okx_keys(current_user.id)
+
+    # Helper: use new value if provided, else keep existing encrypted value
+    def pick(field_enc: str, new_val: str) -> str:
+        if new_val:
+            return encrypt(new_val)
+        return getattr(existing, field_enc, '') if existing else ''
+
+    api_key_enc = pick('api_key_enc', data.get('api_key', ''))
+    secret_key_enc = pick('secret_key_enc', data.get('secret_key', ''))
+    passphrase_enc = pick('passphrase_enc', data.get('passphrase', ''))
+
+    if not any([api_key_enc, secret_key_enc, passphrase_enc]):
+        return jsonify({'success': False, 'error': 'No key data provided'}), 400
+
+    db.save_user_okx_keys(
+        user_id=current_user.id,
+        is_demo=is_demo,
+        api_key_enc=api_key_enc,
+        secret_key_enc=secret_key_enc,
+        passphrase_enc=passphrase_enc,
+        is_active=False,   # not verified yet
+    )
+    db.audit(current_user.id, 'SAVE_OKX_KEYS', ip=request.remote_addr)
+    logger.info("User %d saved OKX API keys (is_demo=%s)", current_user.id, is_demo)
+    return jsonify({'success': True})
+
+
+@app.route('/api/okx-keys', methods=['DELETE'])
+@login_required
+def delete_okx_keys():
+    """Delete the current user's OKX API keys."""
+    db.delete_user_okx_keys(current_user.id)
+    # Also stop the user's engine
+    engine_mgr.stop(current_user.id)
+    db.audit(current_user.id, 'DELETE_OKX_KEYS', ip=request.remote_addr)
+    return jsonify({'success': True})
+
+
+@app.route('/api/okx-keys/test', methods=['POST'])
+@login_required
+def test_okx_keys():
+    """
+    Test the current user's stored OKX API keys by making a real API call.
+    On success, marks the keys as active and loads them into the user's engine.
+    """
+    keys = db.get_user_okx_keys(current_user.id)
+    if not keys:
+        return jsonify({'success': False, 'error': 'No API keys saved. Please save keys first.'}), 400
+
+    api_key = decrypt(keys.api_key_enc)
+    secret_key = decrypt(keys.secret_key_enc)
+    passphrase = decrypt(keys.passphrase_enc)
+
+    if not api_key or not secret_key:
+        return jsonify({'success': False, 'error': 'API key or secret key is empty.'}), 400
+
+    adapter = OKXAdapter(
+        api_key=api_key,
+        secret_key=secret_key,
+        passphrase=passphrase,
+        is_testnet=keys.is_demo,
+    )
+
+    async def _test():
+        connected = await adapter.connect()
+        if not connected:
+            return False, adapter.last_error, None
+        try:
+            account = await adapter.get_account_info()
+            return True, None, account
+        finally:
+            await adapter.disconnect()
+
+    try:
+        # Use the global loop if available, else create a temporary one
+        if loop:
+            future = asyncio.run_coroutine_threadsafe(_test(), loop)
+            success, error, account = future.result(timeout=30)
+        else:
+            success, error, account = asyncio.run(_test())
+    except Exception as exc:
+        logger.error("OKX key test failed for user %d: %s", current_user.id, exc)
+        return jsonify({'success': False, 'error': str(exc)}), 500
+
+    if success:
+        # Mark keys as verified
+        from datetime import datetime as _dt
+        db.save_user_okx_keys(
+            user_id=current_user.id,
+            is_demo=keys.is_demo,
+            api_key_enc=keys.api_key_enc,
+            secret_key_enc=keys.secret_key_enc,
+            passphrase_enc=keys.passphrase_enc,
+            is_active=True,
+            verified_at=_dt.utcnow(),
+        )
+        db.audit(current_user.id, 'TEST_OKX_KEYS_OK', ip=request.remote_addr)
+        logger.info("OKX keys verified for user %d (demo=%s)", current_user.id, keys.is_demo)
+
+        # Reload adapters into the global engine (single-user MVP)
+        global engine
+        new_spot = OKXAdapter(api_key=api_key, secret_key=secret_key,
+                              passphrase=passphrase, is_testnet=keys.is_demo)
+        new_fut = OKXAdapter(api_key=api_key, secret_key=secret_key,
+                             passphrase=passphrase, is_testnet=keys.is_demo)
+        engine.set_adapters(new_spot, new_fut)
+
+        return jsonify({
+            'success': True,
+            'account': account.to_dict() if account else {},
+        })
+    else:
+        db.audit(current_user.id, 'TEST_OKX_KEYS_FAIL',
+                 details=error or '', ip=request.remote_addr)
+        return jsonify({'success': False, 'error': error or 'Connection failed'})
+
+
+# =============================================================================
+# Admin Routes
+# =============================================================================
+
+def admin_required(f):
+    """Decorator: requires authenticated admin user."""
+    from functools import wraps
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not current_user.is_authenticated:
+            return redirect(url_for('auth.login_page'))
+        if not current_user.is_admin:
+            return jsonify({'success': False, 'error': 'Admin access required'}), 403
+        return f(*args, **kwargs)
+    return decorated
+
+
+@app.route('/admin')
+@admin_required
+def admin_dashboard():
+    """Admin dashboard with user management."""
+    users = db.get_all_users()
+    active_engines = sum(
+        1 for uid in range(10000)   # rough scan – in prod use engine_mgr
+        if engine_mgr.get(uid) is not None and engine_mgr.get(uid).started
+    )
+    return render_template('admin/dashboard.html', users=users, active_engines=active_engines)
+
+
+@app.route('/admin/api/users/<int:user_id>/subscription', methods=['POST'])
+@admin_required
+def admin_set_subscription(user_id: int):
+    """Admin: update a user's subscription status."""
+    data = request.json or {}
+    status = data.get('status', 'active')
+    tier = data.get('tier', 'basic')
+    db.update_user_subscription(user_id, status, tier)
+    db.audit(current_user.id, 'ADMIN_SET_SUBSCRIPTION',
+             details=f"user_id={user_id} status={status}", ip=request.remote_addr)
+    return jsonify({'success': True})
+
+
+@app.route('/admin/api/users/<int:user_id>', methods=['DELETE'])
+@admin_required
+def admin_delete_user(user_id: int):
+    """Admin: delete a user account."""
+    if user_id == current_user.id:
+        return jsonify({'success': False, 'error': 'Cannot delete your own account'}), 400
+    # Stop any running engine
+    engine_mgr.stop(user_id)
+    # Delete from DB (CASCADE will remove OKX keys etc.)
+    with db._get_connection() as conn:
+        conn.cursor().execute("DELETE FROM users WHERE id = ?", (user_id,))
+    db.audit(current_user.id, 'ADMIN_DELETE_USER',
+             details=f"deleted user_id={user_id}", ip=request.remote_addr)
+    return jsonify({'success': True})
+
+
+# =============================================================================
+# Stripe / Billing Routes
+# =============================================================================
+
+@app.route('/billing')
+@login_required
+def billing_page():
+    """Subscription management page."""
+    import stripe as stripe_lib
+    stripe_key = os.getenv('STRIPE_SECRET_KEY', '')
+    stripe_pub_key = os.getenv('STRIPE_PUBLISHABLE_KEY', '')
+    price_id = os.getenv('STRIPE_PRICE_ID', '')
+    return render_template('billing.html',
+                           stripe_pub_key=stripe_pub_key,
+                           price_id=price_id,
+                           user=current_user)
+
+
+@app.route('/api/billing/create-checkout', methods=['POST'])
+@login_required
+def create_checkout_session():
+    """Create a Stripe Checkout session for subscription."""
+    import stripe as stripe_lib
+    stripe_key = os.getenv('STRIPE_SECRET_KEY', '')
+    price_id = os.getenv('STRIPE_PRICE_ID', '')
+
+    if not stripe_key or not price_id:
+        return jsonify({'success': False, 'error': 'Stripe not configured'}), 503
+
+    try:
+        stripe_lib.api_key = stripe_key
+        session = stripe_lib.checkout.Session.create(
+            customer_email=current_user.email,
+            mode='subscription',
+            line_items=[{'price': price_id, 'quantity': 1}],
+            success_url=request.host_url + 'billing?success=1',
+            cancel_url=request.host_url + 'billing?cancelled=1',
+            metadata={'user_id': current_user.id},
+        )
+        return jsonify({'success': True, 'url': session.url})
+    except Exception as exc:
+        logger.error("Stripe checkout error: %s", exc)
+        return jsonify({'success': False, 'error': str(exc)}), 500
+
+
+@app.route('/api/billing/webhook', methods=['POST'])
+def stripe_webhook():
+    """Handle Stripe webhook events."""
+    import stripe as stripe_lib
+    stripe_key = os.getenv('STRIPE_SECRET_KEY', '')
+    webhook_secret = os.getenv('STRIPE_WEBHOOK_SECRET', '')
+
+    if not stripe_key:
+        return '', 400
+
+    stripe_lib.api_key = stripe_key
+    payload = request.get_data(as_text=True)
+    sig = request.headers.get('Stripe-Signature', '')
+
+    try:
+        if webhook_secret:
+            event = stripe_lib.Webhook.construct_event(payload, sig, webhook_secret)
+        else:
+            event = stripe_lib.Event.construct_from(
+                stripe_lib.util.convert_to_stripe_object(
+                    stripe_lib.util.json.loads(payload)
+                ), stripe_lib.api_key
+            )
+    except Exception as exc:
+        logger.warning("Stripe webhook error: %s", exc)
+        return '', 400
+
+    etype = event['type']
+    data = event['data']['object']
+
+    if etype == 'checkout.session.completed':
+        user_id = int(data.get('metadata', {}).get('user_id', 0))
+        if user_id:
+            db.update_user_subscription(
+                user_id,
+                status='active',
+                stripe_customer_id=data.get('customer', ''),
+                stripe_subscription_id=data.get('subscription', ''),
+            )
+            logger.info("Subscription activated for user_id=%d", user_id)
+
+    elif etype in ('customer.subscription.deleted', 'customer.subscription.paused'):
+        sub_id = data.get('id', '')
+        # Find user by subscription id and update status
+        with db._get_connection() as conn:
+            conn.cursor().execute(
+                "UPDATE users SET subscription_status = 'cancelled' WHERE stripe_subscription_id = ?",
+                (sub_id,)
+            )
+        logger.info("Subscription cancelled: %s", sub_id)
+
+    return '', 200
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+
 def create_adapter(exchange: Exchange, is_futures: bool = False):
     """Create exchange adapter based on type."""
     if exchange.exchange_type.lower() == 'okx':
@@ -1719,6 +2052,9 @@ def create_adapter(exchange: Exchange, is_futures: bool = False):
 def handle_connect():
     """Handle client connection."""
     logger.debug("Client connected")
+    # Put this socket into the user's private room for isolated events
+    if current_user and current_user.is_authenticated:
+        join_room(f"user_{current_user.id}")
     emit('status', engine.get_status())
 
 

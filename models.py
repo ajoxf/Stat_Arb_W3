@@ -7,6 +7,27 @@ from typing import Optional, Dict, Any, List
 from enum import Enum
 from datetime import datetime
 
+# ---------------------------------------------------------------------------
+# Flask-Login integration mixin (avoids importing Flask-Login at module level)
+# ---------------------------------------------------------------------------
+
+class UserMixin:
+    """Minimal Flask-Login UserMixin compatible base."""
+    @property
+    def is_active(self):
+        return True
+
+    @property
+    def is_authenticated(self):
+        return True
+
+    @property
+    def is_anonymous(self):
+        return False
+
+    def get_id(self):
+        return str(self.id)
+
 
 class SignalType(Enum):
     """Trading signal types."""
@@ -524,3 +545,75 @@ def get_symbols_for_asset(asset: str, exchange_type: str) -> tuple:
         raise ValueError(f"Unknown exchange type: {exchange_type}")
 
     return config[spot_key], config[futures_key]
+
+
+# ---------------------------------------------------------------------------
+# SaaS User & Subscription models
+# ---------------------------------------------------------------------------
+
+@dataclass
+class User(UserMixin):
+    """Platform user account."""
+    id: Optional[int] = None
+    email: str = ""
+    username: str = ""
+    password_hash: str = ""
+    is_admin: bool = False
+    # Subscription
+    subscription_status: str = "trial"   # trial | active | cancelled | expired
+    subscription_tier: str = "basic"     # basic | pro
+    trial_ends_at: Optional[datetime] = None
+    stripe_customer_id: str = ""
+    stripe_subscription_id: str = ""
+    # Timestamps
+    created_at: Optional[datetime] = None
+    last_login: Optional[datetime] = None
+
+    # Override UserMixin.is_active as a plain attribute (not property)
+    _is_active: bool = True
+
+    @property
+    def is_active(self):   # type: ignore[override]
+        return self._is_active
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            'id': self.id,
+            'email': self.email,
+            'username': self.username,
+            'is_admin': self.is_admin,
+            'subscription_status': self.subscription_status,
+            'subscription_tier': self.subscription_tier,
+            'trial_ends_at': self.trial_ends_at.isoformat() if self.trial_ends_at else None,
+            'stripe_customer_id': self.stripe_customer_id,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'last_login': self.last_login.isoformat() if self.last_login else None,
+        }
+
+
+@dataclass
+class UserOKXKeys:
+    """Per-user OKX API credentials (stored encrypted)."""
+    id: Optional[int] = None
+    user_id: int = 0
+    is_demo: bool = True          # OKX demo trading mode
+    api_key_enc: str = ""         # Fernet-encrypted
+    secret_key_enc: str = ""      # Fernet-encrypted
+    passphrase_enc: str = ""      # Fernet-encrypted
+    is_active: bool = False
+    verified_at: Optional[datetime] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    def to_dict_masked(self) -> Dict[str, Any]:
+        """Return dict with secrets masked (safe for API responses)."""
+        return {
+            'id': self.id,
+            'user_id': self.user_id,
+            'is_demo': self.is_demo,
+            'has_api_key': bool(self.api_key_enc),
+            'has_secret_key': bool(self.secret_key_enc),
+            'has_passphrase': bool(self.passphrase_enc),
+            'is_active': self.is_active,
+            'verified_at': self.verified_at.isoformat() if self.verified_at else None,
+        }

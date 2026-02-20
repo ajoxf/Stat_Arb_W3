@@ -1,0 +1,147 @@
+{% extends "base.html" %}
+
+{% block title %}Billing - Nexus{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-lg-7">
+
+        {% if request.args.get('success') %}
+        <div class="alert alert-success">
+            <i class="bi bi-check-circle-fill me-2"></i>
+            <strong>Subscription activated!</strong> Welcome aboard. Your trading bot is ready.
+        </div>
+        {% elif request.args.get('cancelled') %}
+        <div class="alert alert-warning">
+            <i class="bi bi-exclamation-triangle me-2"></i>
+            Checkout cancelled. You can subscribe anytime.
+        </div>
+        {% endif %}
+
+        <!-- Current Plan -->
+        <div class="card mb-4">
+            <div class="card-header">
+                <i class="bi bi-credit-card me-2"></i>Current Plan
+            </div>
+            <div class="card-body">
+                <div class="row align-items-center">
+                    <div class="col">
+                        <h5 class="mb-1">
+                            {% if current_user.subscription_status == 'active' %}
+                                <span class="badge bg-success me-2">Active</span>
+                            {% elif current_user.subscription_status == 'trial' %}
+                                <span class="badge bg-info me-2">Free Trial</span>
+                            {% elif current_user.subscription_status == 'cancelled' %}
+                                <span class="badge bg-secondary me-2">Cancelled</span>
+                            {% else %}
+                                <span class="badge bg-danger me-2">Expired</span>
+                            {% endif %}
+                            {{ (current_user.subscription_tier or 'basic')|title }} Plan
+                        </h5>
+                        {% if current_user.subscription_status == 'trial' and current_user.trial_ends_at %}
+                        <small class="text-muted">
+                            <i class="bi bi-calendar me-1"></i>
+                            Trial ends: {{ current_user.trial_ends_at.strftime('%B %d, %Y') }}
+                        </small>
+                        {% endif %}
+                    </div>
+                    <div class="col-auto">
+                        {% if current_user.subscription_status != 'active' %}
+                        <button class="btn btn-primary" onclick="startCheckout()">
+                            <i class="bi bi-lightning me-1"></i>Upgrade Now
+                        </button>
+                        {% else %}
+                        <span class="text-muted small"><i class="bi bi-check-circle-fill text-success me-1"></i>Subscribed</span>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Pricing -->
+        <div class="card mb-4">
+            <div class="card-header">
+                <i class="bi bi-tag me-2"></i>Plans
+            </div>
+            <div class="card-body">
+                <div class="row g-3">
+                    <div class="col-md-6">
+                        <div class="card border {% if current_user.subscription_status == 'trial' %}border-info{% else %}border-0{% endif %} h-100">
+                            <div class="card-body text-center p-4">
+                                <h6 class="text-muted mb-2">FREE TRIAL</h6>
+                                <div class="display-6 fw-bold mb-1">$0</div>
+                                <small class="text-muted">14 days</small>
+                                <hr>
+                                <ul class="list-unstyled text-start small">
+                                    <li class="mb-1"><i class="bi bi-check text-success me-2"></i>Full access to all features</li>
+                                    <li class="mb-1"><i class="bi bi-check text-success me-2"></i>Live & demo trading</li>
+                                    <li class="mb-1"><i class="bi bi-check text-success me-2"></i>Real-time signals</li>
+                                    <li class="mb-1"><i class="bi bi-check text-success me-2"></i>Trade journal</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="card border {% if current_user.subscription_status == 'active' %}border-success{% else %}border-primary{% endif %} h-100">
+                            <div class="card-body text-center p-4">
+                                <span class="badge bg-primary mb-2">MOST POPULAR</span>
+                                <h6 class="text-muted mb-2">BASIC PLAN</h6>
+                                <div class="display-6 fw-bold mb-1">$49</div>
+                                <small class="text-muted">per month</small>
+                                <hr>
+                                <ul class="list-unstyled text-start small">
+                                    <li class="mb-1"><i class="bi bi-check text-success me-2"></i>Everything in trial</li>
+                                    <li class="mb-1"><i class="bi bi-check text-success me-2"></i>24/7 bot operation</li>
+                                    <li class="mb-1"><i class="bi bi-check text-success me-2"></i>Priority support</li>
+                                    <li class="mb-1"><i class="bi bi-check text-success me-2"></i>Advanced analytics</li>
+                                </ul>
+                                {% if current_user.subscription_status != 'active' %}
+                                <button class="btn btn-primary w-100 mt-2" onclick="startCheckout()">
+                                    Subscribe — $49/mo
+                                </button>
+                                {% else %}
+                                <button class="btn btn-outline-secondary w-100 mt-2" disabled>Current Plan</button>
+                                {% endif %}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Security note -->
+        <div class="alert alert-light border">
+            <i class="bi bi-shield-lock me-2 text-primary"></i>
+            <strong>Secure payments</strong> powered by Stripe.
+            Your card details are never stored on our servers.
+        </div>
+
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function startCheckout() {
+    const btn = event.target;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Redirecting...';
+
+    try {
+        const resp = await fetch('/api/billing/create-checkout', { method: 'POST' });
+        const data = await resp.json();
+        if (data.success && data.url) {
+            window.location.href = data.url;
+        } else {
+            alert('Error: ' + (data.error || 'Checkout not available. Please contact support.'));
+            btn.disabled = false;
+            btn.innerHTML = 'Subscribe — $49/mo';
+        }
+    } catch (err) {
+        alert('Network error: ' + err.message);
+        btn.disabled = false;
+        btn.innerHTML = 'Subscribe — $49/mo';
+    }
+}
+</script>
+{% endblock %}

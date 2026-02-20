@@ -428,14 +428,14 @@
                     </div>
 
                     <!-- Connection Status -->
-                    <div class="card bg-dark mb-3" id="api-status-card" style="display: none;">
+                    <div class="card border mb-3" id="api-status-card" style="display: none; background: var(--bg-tertiary);">
                         <div class="card-body py-3">
-                            <div class="d-flex align-items-center justify-content-between">
-                                <div>
-                                    <span id="api-status-icon" class="me-2"></span>
+                            <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
+                                <div class="d-flex align-items-center gap-2">
+                                    <span id="api-status-icon"></span>
                                     <span id="api-status-text"></span>
                                 </div>
-                                <div id="api-status-details" class="text-muted small"></div>
+                                <div id="api-status-details" class="text-muted small font-monospace"></div>
                             </div>
                         </div>
                     </div>
@@ -454,9 +454,10 @@
 
                 <!-- How to Create API Key Guide -->
                 <div class="accordion" id="apiGuideAccordion">
-                    <div class="accordion-item bg-dark">
+                    <div class="accordion-item" style="background: var(--bg-tertiary); border-color: var(--border-color);">
                         <h2 class="accordion-header">
-                            <button class="accordion-button collapsed bg-dark text-light" type="button"
+                            <button class="accordion-button collapsed" type="button"
+                                    style="background: var(--bg-tertiary); color: var(--text-primary);"
                                     data-bs-toggle="collapse" data-bs-target="#apiGuideCollapse">
                                 <i class="bi bi-question-circle me-2"></i>How to Create OKX API Keys
                             </button>
@@ -756,6 +757,155 @@
     // Check for existing test positions on page load
     document.addEventListener('DOMContentLoaded', function() {
         fetchTestOrderStatus();
+        loadExistingApiKeys();
     });
+
+    // ========== OKX API Key Management ==========
+
+    function toggleSecretVisibility() {
+        const input = document.getElementById('okx_secret_key');
+        const icon = document.getElementById('secret-toggle-icon');
+        if (input.type === 'password') {
+            input.type = 'text';
+            icon.className = 'bi bi-eye-slash';
+        } else {
+            input.type = 'password';
+            icon.className = 'bi bi-eye';
+        }
+    }
+
+    function togglePassphraseVisibility() {
+        const input = document.getElementById('okx_passphrase');
+        const icon = document.getElementById('passphrase-toggle-icon');
+        if (input.type === 'password') {
+            input.type = 'text';
+            icon.className = 'bi bi-eye-slash';
+        } else {
+            input.type = 'password';
+            icon.className = 'bi bi-eye';
+        }
+    }
+
+    function loadExistingApiKeys() {
+        fetch('/api/okx-keys')
+            .then(r => r.json())
+            .then(data => {
+                if (data.has_api_key) {
+                    // Indicate that keys are already stored (don't reveal values)
+                    document.getElementById('okx_api_key').placeholder = '●●●●●●●●  (saved — enter to replace)';
+                    document.getElementById('okx_secret_key').placeholder = '●●●●●●●●  (saved — enter to replace)';
+                    document.getElementById('okx_passphrase').placeholder = '●●●●●●●●  (saved — enter to replace)';
+                    document.getElementById('api_demo_mode').checked = data.is_demo;
+                    showApiStatus(data.is_active ? 'connected' : 'saved', data.is_active
+                        ? 'API keys saved and verified'
+                        : 'API keys saved (not yet verified)');
+                }
+            })
+            .catch(err => console.warn('Could not load API key status:', err));
+    }
+
+    function showApiStatus(state, message, details) {
+        const card = document.getElementById('api-status-card');
+        const icon = document.getElementById('api-status-icon');
+        const text = document.getElementById('api-status-text');
+        const detailEl = document.getElementById('api-status-details');
+
+        card.style.display = 'block';
+        detailEl.textContent = details || '';
+
+        if (state === 'connected') {
+            icon.innerHTML = '<i class="bi bi-check-circle-fill text-success"></i>';
+            text.innerHTML = '<span class="text-success fw-semibold">' + message + '</span>';
+        } else if (state === 'error') {
+            icon.innerHTML = '<i class="bi bi-x-circle-fill text-danger"></i>';
+            text.innerHTML = '<span class="text-danger">' + message + '</span>';
+        } else if (state === 'testing') {
+            icon.innerHTML = '<span class="spinner-border spinner-border-sm text-info" role="status"></span>';
+            text.innerHTML = '<span class="text-info">' + message + '</span>';
+        } else {
+            icon.innerHTML = '<i class="bi bi-info-circle-fill text-secondary"></i>';
+            text.innerHTML = '<span class="text-secondary">' + message + '</span>';
+        }
+    }
+
+    // Save API Keys
+    document.getElementById('api-keys-form').addEventListener('submit', function(e) {
+        e.preventDefault();
+        const apiKey = document.getElementById('okx_api_key').value.trim();
+        const secretKey = document.getElementById('okx_secret_key').value;
+        const passphrase = document.getElementById('okx_passphrase').value;
+        const isDemo = document.getElementById('api_demo_mode').checked;
+
+        // Only send non-empty values (empty = keep existing)
+        const payload = { is_demo: isDemo };
+        if (apiKey) payload.api_key = apiKey;
+        if (secretKey) payload.secret_key = secretKey;
+        if (passphrase) payload.passphrase = passphrase;
+
+        if (!apiKey && !secretKey && !passphrase) {
+            showToast('Enter at least one field to update', 'warning');
+            return;
+        }
+
+        const submitBtn = this.querySelector('[type="submit"]');
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Saving...';
+
+        fetch('/api/okx-keys', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        })
+        .then(r => r.json())
+        .then(data => {
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = '<i class="bi bi-save me-1"></i>Save API Keys';
+            if (data.success) {
+                showToast('API keys saved securely', 'success');
+                showApiStatus('saved', 'API keys saved. Click "Test Connection" to verify.');
+                // Clear fields after save
+                document.getElementById('okx_api_key').value = '';
+                document.getElementById('okx_secret_key').value = '';
+                document.getElementById('okx_passphrase').value = '';
+                loadExistingApiKeys();
+            } else {
+                showToast('Error: ' + (data.error || 'Save failed'), 'danger');
+            }
+        })
+        .catch(err => {
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = '<i class="bi bi-save me-1"></i>Save API Keys';
+            showToast('Network error: ' + err.message, 'danger');
+        });
+    });
+
+    // Test API Connection
+    function testApiConnection() {
+        showApiStatus('testing', 'Connecting to OKX...');
+        const btn = document.querySelector('[onclick="testApiConnection()"]');
+        btn.disabled = true;
+
+        fetch('/api/okx-keys/test', { method: 'POST' })
+            .then(r => r.json())
+            .then(data => {
+                btn.disabled = false;
+                if (data.success) {
+                    const acct = data.account || {};
+                    const details = acct.uid
+                        ? `UID: ${acct.uid} | Balance: $${(acct.balance_usd || 0).toFixed(2)}`
+                        : '';
+                    showApiStatus('connected', 'Connected successfully!', details);
+                    showToast('OKX connection successful', 'success');
+                } else {
+                    showApiStatus('error', 'Connection failed: ' + (data.error || 'Unknown error'));
+                    showToast('Connection failed: ' + (data.error || 'Unknown error'), 'danger');
+                }
+            })
+            .catch(err => {
+                btn.disabled = false;
+                showApiStatus('error', 'Network error: ' + err.message);
+                showToast('Network error: ' + err.message, 'danger');
+            });
+    }
 </script>
 {% endblock %}

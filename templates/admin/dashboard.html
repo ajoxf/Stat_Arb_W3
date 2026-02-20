@@ -1,0 +1,195 @@
+{% extends "base.html" %}
+
+{% block title %}Admin Dashboard - Nexus{% endblock %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col">
+        <h4 class="mb-0"><i class="bi bi-shield-lock me-2 text-warning"></i>Admin Dashboard</h4>
+        <small class="text-muted">Platform management and monitoring</small>
+    </div>
+</div>
+
+<!-- Summary Cards -->
+<div class="row g-3 mb-4">
+    <div class="col-md-3">
+        <div class="card">
+            <div class="card-body metric-card">
+                <div class="metric-value text-primary">{{ users|length }}</div>
+                <div class="metric-label">Total Users</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card">
+            <div class="card-body metric-card">
+                <div class="metric-value text-success">{{ users|selectattr('subscription_status', 'equalto', 'active')|list|length }}</div>
+                <div class="metric-label">Active Subscribers</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card">
+            <div class="card-body metric-card">
+                <div class="metric-value text-info">{{ users|selectattr('subscription_status', 'equalto', 'trial')|list|length }}</div>
+                <div class="metric-label">On Trial</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card">
+            <div class="card-body metric-card">
+                <div class="metric-value text-warning">{{ active_engines }}</div>
+                <div class="metric-label">Running Engines</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Users Table -->
+<div class="card">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-people me-2"></i>User Accounts</span>
+        <span class="badge bg-secondary">{{ users|length }} users</span>
+    </div>
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-hover mb-0">
+                <thead>
+                    <tr class="text-secondary small">
+                        <th class="ps-3">ID</th>
+                        <th>User</th>
+                        <th>Email</th>
+                        <th>Status</th>
+                        <th>Tier</th>
+                        <th>Trial Ends</th>
+                        <th>Last Login</th>
+                        <th>Joined</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                {% for user in users %}
+                <tr>
+                    <td class="ps-3 text-muted small">{{ user.id }}</td>
+                    <td>
+                        <span class="fw-semibold">{{ user.username }}</span>
+                        {% if user.is_admin %}<span class="badge bg-warning ms-1 small">Admin</span>{% endif %}
+                    </td>
+                    <td class="text-muted small">{{ user.email }}</td>
+                    <td>
+                        {% if user.subscription_status == 'active' %}
+                            <span class="badge bg-success">Active</span>
+                        {% elif user.subscription_status == 'trial' %}
+                            <span class="badge bg-info">Trial</span>
+                        {% elif user.subscription_status == 'cancelled' %}
+                            <span class="badge bg-secondary">Cancelled</span>
+                        {% elif user.subscription_status == 'expired' %}
+                            <span class="badge bg-danger">Expired</span>
+                        {% else %}
+                            <span class="badge bg-secondary">{{ user.subscription_status }}</span>
+                        {% endif %}
+                    </td>
+                    <td class="small">{{ user.subscription_tier or 'basic' }}</td>
+                    <td class="small text-muted">
+                        {% if user.trial_ends_at %}
+                            {{ user.trial_ends_at.strftime('%Y-%m-%d') if user.trial_ends_at else '-' }}
+                        {% else %}-{% endif %}
+                    </td>
+                    <td class="small text-muted">
+                        {% if user.last_login %}
+                            {{ user.last_login.strftime('%Y-%m-%d %H:%M') }}
+                        {% else %}Never{% endif %}
+                    </td>
+                    <td class="small text-muted">
+                        {{ user.created_at.strftime('%Y-%m-%d') if user.created_at else '-' }}
+                    </td>
+                    <td>
+                        <div class="dropdown">
+                            <button class="btn btn-sm btn-outline-secondary dropdown-toggle py-0 px-2"
+                                    data-bs-toggle="dropdown">
+                                <i class="bi bi-three-dots"></i>
+                            </button>
+                            <ul class="dropdown-menu dropdown-menu-end">
+                                <li>
+                                    <button class="dropdown-item small"
+                                            onclick="activateUser({{ user.id }})">
+                                        <i class="bi bi-check-circle me-2 text-success"></i>Activate Subscription
+                                    </button>
+                                </li>
+                                <li>
+                                    <button class="dropdown-item small"
+                                            onclick="cancelUser({{ user.id }})">
+                                        <i class="bi bi-x-circle me-2 text-danger"></i>Cancel Subscription
+                                    </button>
+                                </li>
+                                <li><hr class="dropdown-divider"></li>
+                                <li>
+                                    <button class="dropdown-item small text-danger"
+                                            onclick="deleteUser({{ user.id }}, '{{ user.username }}')">
+                                        <i class="bi bi-trash me-2"></i>Delete User
+                                    </button>
+                                </li>
+                            </ul>
+                        </div>
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="9" class="text-center text-muted py-4">No users yet</td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function activateUser(userId) {
+    if (!confirm('Activate subscription for this user?')) return;
+    const resp = await fetch('/admin/api/users/' + userId + '/subscription', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'active', tier: 'basic' })
+    });
+    const data = await resp.json();
+    if (data.success) {
+        showToast('Subscription activated', 'success');
+        setTimeout(() => location.reload(), 1000);
+    } else {
+        showToast('Error: ' + data.error, 'danger');
+    }
+}
+
+async function cancelUser(userId) {
+    if (!confirm('Cancel subscription for this user?')) return;
+    const resp = await fetch('/admin/api/users/' + userId + '/subscription', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'cancelled' })
+    });
+    const data = await resp.json();
+    if (data.success) {
+        showToast('Subscription cancelled', 'success');
+        setTimeout(() => location.reload(), 1000);
+    } else {
+        showToast('Error: ' + data.error, 'danger');
+    }
+}
+
+async function deleteUser(userId, username) {
+    if (!confirm(`Delete user "${username}"? This cannot be undone.`)) return;
+    const resp = await fetch('/admin/api/users/' + userId, { method: 'DELETE' });
+    const data = await resp.json();
+    if (data.success) {
+        showToast('User deleted', 'success');
+        setTimeout(() => location.reload(), 1000);
+    } else {
+        showToast('Error: ' + data.error, 'danger');
+    }
+}
+</script>
+{% endblock %}
