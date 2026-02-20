@@ -841,12 +841,13 @@ class OKXAdapter(ExchangeAdapter):
 
         return None
 
-    async def get_spot_balances(self) -> Dict[str, float]:
+    async def get_spot_balances(self, include_frozen: bool = True) -> Dict[str, Dict[str, float]]:
         """
         Get all spot balances from trading account.
 
         Returns:
-            Dict mapping currency to available balance (e.g., {'BTC': 0.25, 'USDT': 1000})
+            Dict mapping currency to balance details:
+            {'BTC': {'available': 0.1, 'frozen': 0.15, 'total': 0.25, 'equity': 0.25}}
         """
         balances = {}
         try:
@@ -857,26 +858,40 @@ class OKXAdapter(ExchangeAdapter):
                 for detail in data.get("details", []):
                     ccy = detail.get("ccy", "")
                     avail = float(detail.get("availBal", 0) or 0)
-                    if avail > 0:
-                        balances[ccy] = avail
+                    frozen = float(detail.get("frozenBal", 0) or 0)
+                    cash_bal = float(detail.get("cashBal", 0) or 0)
+                    eq = float(detail.get("eq", 0) or 0)
+
+                    # Include if there's any balance (available or frozen)
+                    total = avail + frozen
+                    if total > 0.00000001 or cash_bal > 0.00000001:  # Filter out true dust
+                        balances[ccy] = {
+                            'available': avail,
+                            'frozen': frozen,
+                            'total': cash_bal if cash_bal > 0 else total,
+                            'equity': eq,
+                        }
+                        if ccy not in ('USDT', 'USDC'):
+                            logger.debug("Balance %s: avail=%.8f, frozen=%.8f, total=%.8f, eq=%.8f",
+                                        ccy, avail, frozen, cash_bal, eq)
 
         except Exception as e:
             logger.error("Error fetching spot balances: %s", e)
 
         return balances
 
-    async def get_asset_balance(self, currency: str) -> float:
+    async def get_asset_balance(self, currency: str) -> Dict[str, float]:
         """
-        Get available balance for a specific currency.
+        Get balance info for a specific currency.
 
         Args:
             currency: Currency code (e.g., 'BTC', 'USDT')
 
         Returns:
-            Available balance or 0 if none
+            Dict with 'available', 'frozen', 'total', 'equity'
         """
         balances = await self.get_spot_balances()
-        return balances.get(currency, 0.0)
+        return balances.get(currency, {'available': 0, 'frozen': 0, 'total': 0, 'equity': 0})
 
     async def sell_spot_to_usdt(self, currency: str, quantity: float = None) -> OrderResult:
         """
@@ -884,17 +899,27 @@ class OKXAdapter(ExchangeAdapter):
 
         Args:
             currency: Currency to sell (e.g., 'BTC')
-            quantity: Amount to sell (if None, sells entire balance)
+            quantity: Amount to sell (if None, sells entire available balance)
 
         Returns:
             OrderResult with success/failure info
         """
         try:
             # Get current balance if quantity not specified
-            if quantity is None:
-                quantity = await self.get_asset_balance(currency)
+            bal_info = await self.get_asset_balance(currency)
+            available = bal_info.get('available', 0)
+            frozen = bal_info.get('frozen', 0)
+            total = bal_info.get('total', 0)
 
-            if quantity <= 0:
+            if quantity is None:
+                quantity = available
+
+            if quantity <= 0.00000001:  # Essentially zero
+                if frozen > 0.00000001:
+                    return OrderResult(
+                        success=False,
+                        error=f"No available {currency} to sell. {frozen:.6f} is frozen (used as margin). Close positions first."
+                    )
                 return OrderResult(success=True, error=f"No {currency} balance to sell")
 
             symbol = f"{currency}-USDT"

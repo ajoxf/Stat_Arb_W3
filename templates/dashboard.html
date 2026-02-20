@@ -1360,11 +1360,28 @@
             .then(data => {
                 const warningEl = document.getElementById('orphan-warning');
                 const detailsEl = document.getElementById('orphan-details');
+                const sellBtn = document.querySelector('#orphan-warning button.btn-warning');
 
                 if (data.has_orphan && data.holdings.length > 0) {
                     const orphan = data.holdings.find(h => h.is_orphan);
                     if (orphan) {
-                        detailsEl.textContent = `You have ${orphan.amount.toFixed(6)} ${orphan.currency} (~$${orphan.usd_value.toFixed(2)}) in your spot wallet without an active position.`;
+                        let msg = `You have ${orphan.total.toFixed(6)} ${orphan.currency} (~$${orphan.usd_value.toFixed(2)}) in your spot wallet without an active position.`;
+
+                        // Check if frozen (can't sell)
+                        if (orphan.frozen > 0.00000001 && orphan.available < 0.00000001) {
+                            msg += ` (FROZEN - used as margin collateral. Close futures positions first.)`;
+                            if (sellBtn) {
+                                sellBtn.disabled = true;
+                                sellBtn.innerHTML = '<i class="bi bi-lock me-1"></i>Frozen';
+                            }
+                        } else if (orphan.available > 0.00000001) {
+                            if (sellBtn) {
+                                sellBtn.disabled = false;
+                                sellBtn.innerHTML = '<i class="bi bi-cash-coin me-1"></i>Sell to USDT';
+                            }
+                        }
+
+                        detailsEl.textContent = msg;
                         warningEl.classList.remove('d-none');
                     }
                 } else {
