@@ -274,12 +274,24 @@ class OKXAdapter(ExchangeAdapter):
                 order_id = order_info.get("ordId", "")
                 logger.info("Order placed successfully: %s %s %s qty=%s, order_id=%s",
                            side, order_type, symbol, sz, order_id)
-                return OrderResult(
-                    success=True,
-                    order_id=order_id,
-                    filled_qty=quantity,  # Return original quantity in base currency
-                    filled_price=price or 0,
-                )
+
+                # For MARKET orders, assume immediate fill
+                # For LIMIT orders, return 0 filled until confirmed via get_order_status
+                if order_type == "MARKET":
+                    return OrderResult(
+                        success=True,
+                        order_id=order_id,
+                        filled_qty=quantity,  # Market orders fill immediately
+                        filled_price=price or 0,
+                    )
+                else:
+                    # Limit order - don't assume fill, let caller check status
+                    return OrderResult(
+                        success=True,
+                        order_id=order_id,
+                        filled_qty=0,  # Not filled yet - must check status
+                        filled_price=0,
+                    )
             else:
                 # Log full error details
                 error = result.get("msg", "Unknown error") if result else "No response"
@@ -310,6 +322,115 @@ class OKXAdapter(ExchangeAdapter):
         except Exception as e:
             logger.exception("Error canceling OKX order")
             return False
+
+    async def get_order_status(self, symbol: str, order_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Get the status of a specific order.
+
+        Returns:
+            Dict with order status info including:
+            - state: 'live', 'partially_filled', 'filled', 'canceled'
+            - filled_qty: Amount filled
+            - filled_price: Average fill price
+            - remaining_qty: Unfilled amount
+        """
+        try:
+            result = await self._request(
+                "GET",
+                "/api/v5/trade/order",
+                params={"instId": symbol, "ordId": order_id},
+            )
+
+            if result and result.get("code") == "0" and result.get("data"):
+                o = result["data"][0]
+                sz = float(o.get("sz", 0) or 0)
+                fill_sz = float(o.get("fillSz", 0) or o.get("accFillSz", 0) or 0)
+                fill_px = float(o.get("fillPx", 0) or o.get("avgPx", 0) or 0)
+                state = o.get("state", "")
+
+                return {
+                    "order_id": order_id,
+                    "symbol": symbol,
+                    "state": state,  # live, partially_filled, filled, canceled
+                    "quantity": sz,
+                    "filled_qty": fill_sz,
+                    "filled_price": fill_px,
+                    "remaining_qty": sz - fill_sz,
+                    "side": o.get("side", ""),
+                    "order_type": o.get("ordType", ""),
+                }
+            else:
+                # Order might not exist (already cancelled or never placed)
+                logger.warning("Could not fetch order status for %s: %s",
+                             order_id, result.get("msg") if result else "No response")
+                return None
+
+        except Exception as e:
+            logger.error("Error fetching order status: %s", e)
+            return None
+
+    async def get_pending_orders(self, symbol: Optional[str] = None, inst_type: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        Get all pending (open) orders.
+
+        Args:
+            symbol: Optional specific symbol to filter
+            inst_type: Optional instrument type ('SPOT', 'SWAP')
+
+        Returns:
+            List of pending orders
+        """
+        try:
+            params: Dict[str, Any] = {}
+            if symbol:
+                params["instId"] = symbol
+            if inst_type:
+                params["instType"] = inst_type
+
+            result = await self._request("GET", "/api/v5/trade/orders-pending", params=params)
+
+            orders = []
+            if result and result.get("code") == "0" and result.get("data"):
+                for o in result["data"]:
+                    orders.append({
+                        "order_id": o.get("ordId", ""),
+                        "symbol": o.get("instId", ""),
+                        "side": o.get("side", ""),
+                        "order_type": o.get("ordType", ""),
+                        "quantity": float(o.get("sz", 0) or 0),
+                        "price": float(o.get("px", 0) or 0),
+                        "filled_qty": float(o.get("fillSz", 0) or 0),
+                        "state": o.get("state", ""),
+                        "created_at": o.get("cTime", ""),
+                    })
+            return orders
+
+        except Exception as e:
+            logger.error("Error fetching pending orders: %s", e)
+            return []
+
+    async def cancel_all_orders(self, symbol: Optional[str] = None, inst_type: Optional[str] = None) -> int:
+        """
+        Cancel all pending orders for a symbol or instrument type.
+
+        Returns:
+            Number of orders cancelled
+        """
+        try:
+            pending = await self.get_pending_orders(symbol, inst_type)
+            cancelled = 0
+
+            for order in pending:
+                success = await self.cancel_order(order["symbol"], order["order_id"])
+                if success:
+                    cancelled += 1
+                    logger.info("Cancelled orphan order: %s on %s", order["order_id"], order["symbol"])
+
+            return cancelled
+
+        except Exception as e:
+            logger.error("Error cancelling all orders: %s", e)
+            return 0
 
     async def get_positions(self, symbol: Optional[str] = None) -> List[Position]:
         """Get open positions."""

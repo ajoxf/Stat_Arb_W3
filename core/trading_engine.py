@@ -79,6 +79,9 @@ class TradingEngine:
         self._stop_loss_cooldown_sec = 60
         self._stop_loss_cooldown_until: Optional[datetime] = None
 
+        # Execution lock to prevent new trades while one is being executed
+        self._executing_trade = False
+
         # Tick interval in seconds
         self.tick_interval = 0.5  # 500ms
 
@@ -104,6 +107,40 @@ class TradingEngine:
         logger.debug("Trading config updated: asset=%s, paper=%s, algo=%s, exec_mode=%s",
                      config.asset, config.paper_trading, config.algo_enabled,
                      config.order_execution_mode)
+
+    async def _cleanup_orphan_orders(self) -> None:
+        """
+        Cancel any pending orders from previous sessions.
+
+        This prevents orphan orders from accumulating if the app crashes or restarts.
+        """
+        if self.state.paper_trading:
+            return  # No cleanup needed for paper trading
+
+        try:
+            cancelled_count = 0
+
+            # Clean up spot orders
+            if self.spot_adapter and hasattr(self.spot_adapter, 'cancel_all_orders'):
+                count = await self.spot_adapter.cancel_all_orders(
+                    symbol=self.config.spot_symbol,
+                    inst_type="SPOT"
+                )
+                cancelled_count += count
+
+            # Clean up futures orders
+            if self.futures_adapter and hasattr(self.futures_adapter, 'cancel_all_orders'):
+                count = await self.futures_adapter.cancel_all_orders(
+                    symbol=self.config.futures_symbol,
+                    inst_type="SWAP"
+                )
+                cancelled_count += count
+
+            if cancelled_count > 0:
+                logger.info("Cleaned up %d orphan orders from previous session", cancelled_count)
+
+        except Exception as e:
+            logger.error("Error cleaning up orphan orders: %s", e)
 
     async def _apply_leverage_settings(self) -> None:
         """Apply leverage settings to exchange."""
@@ -184,6 +221,9 @@ class TradingEngine:
 
         logger.info("Starting trading engine for %s (websocket=%s)",
                     self.config.asset, self._use_websocket)
+
+        # Clean up any orphan orders from previous sessions
+        await self._cleanup_orphan_orders()
 
         # Apply pending leverage settings (deferred from set_adapters)
         if self._pending_leverage_setup:
@@ -379,6 +419,17 @@ class TradingEngine:
             }
             return
 
+        # Check if already executing a trade (prevents duplicate orders)
+        if self._executing_trade:
+            logger.debug("Trade execution in progress, ignoring signal")
+            self.signal_generator.last_blocked_signal = {
+                'timestamp': datetime.utcnow().isoformat(),
+                'would_be_signal': signal.signal_type,
+                'zscore': round(signal.zscore, 4),
+                'reason': "Trade execution already in progress",
+            }
+            return
+
         # Check post-stop-loss cooldown
         if self._stop_loss_cooldown_until and datetime.utcnow() < self._stop_loss_cooldown_until:
             remaining = (self._stop_loss_cooldown_until - datetime.utcnow()).total_seconds()
@@ -425,9 +476,13 @@ class TradingEngine:
 
         # Execute orders if not paper trading
         if not self.state.paper_trading:
-            success = await self._execute_entry_orders(trade, signal)
-            if not success:
-                return
+            self._executing_trade = True
+            try:
+                success = await self._execute_entry_orders(trade, signal)
+                if not success:
+                    return
+            finally:
+                self._executing_trade = False
 
         self.open_trade = trade
         self.state.current_position = position_type
@@ -480,7 +535,11 @@ class TradingEngine:
 
         # Execute orders if not paper trading
         if not self.state.paper_trading:
-            await self._execute_exit_orders(trade, signal)
+            self._executing_trade = True
+            try:
+                await self._execute_exit_orders(trade, signal)
+            finally:
+                self._executing_trade = False
 
         logger.info("Closed %s position: pnl=$%.2f (%.2f%%), reason=%s, zscore=%.4f",
                     trade.position_type, pnl, pnl_percent, signal.signal_type, signal.zscore)
@@ -499,6 +558,42 @@ class TradingEngine:
         if self.on_trade:
             self.on_trade(trade)
 
+    async def _verify_leverage_settings(self) -> bool:
+        """
+        Verify that leverage settings on the exchange match our config.
+
+        Returns True if leverage is correct or was successfully corrected.
+        """
+        if not self.futures_adapter:
+            return True
+
+        try:
+            # Check current leverage on futures
+            if hasattr(self.futures_adapter, 'get_leverage'):
+                current_leverage = await self.futures_adapter.get_leverage(self.config.futures_symbol)
+                if current_leverage is not None and current_leverage != self.config.futures_leverage:
+                    logger.warning("Leverage mismatch: exchange=%dx, config=%dx. Attempting to correct...",
+                                 current_leverage, self.config.futures_leverage)
+                    # Try to set correct leverage
+                    success = await self.futures_adapter.set_leverage(
+                        self.config.futures_symbol,
+                        self.config.futures_leverage
+                    )
+                    if success:
+                        logger.info("Leverage corrected to %dx", self.config.futures_leverage)
+                    else:
+                        logger.error("Failed to correct leverage - trading with %dx instead of %dx",
+                                   current_leverage, self.config.futures_leverage)
+                        # Return False to block trading if leverage mismatch is critical
+                        # For now, we'll warn but continue
+                        return True
+                else:
+                    logger.debug("Leverage verified: %dx", self.config.futures_leverage)
+            return True
+        except Exception as e:
+            logger.error("Error verifying leverage: %s", e)
+            return True  # Don't block trading on verification error
+
     async def _execute_entry_orders(self, trade: Trade, signal: Signal) -> bool:
         """Execute entry orders on exchanges using the order executor."""
         if not self.order_executor:
@@ -508,6 +603,9 @@ class TradingEngine:
         if not self.spot_tick or not self.futures_tick:
             logger.error("No tick data available for order execution")
             return False
+
+        # Verify leverage settings before trading
+        await self._verify_leverage_settings()
 
         try:
             spread_order = await self.order_executor.execute_entry(
@@ -602,6 +700,7 @@ class TradingEngine:
             'open_trade': self.open_trade.to_dict() if self.open_trade else None,
             'sl_cooldown_remaining': sl_cooldown_remaining,
             'sl_cooldown_sec': self._stop_loss_cooldown_sec,
+            'executing_trade': self._executing_trade,
         }
 
     def get_spread_history(self, n: int = 100) -> List[float]:
@@ -620,4 +719,5 @@ class TradingEngine:
         self.spot_tick = None
         self.futures_tick = None
         self._stop_loss_cooldown_until = None
+        self._executing_trade = False
         logger.debug("Engine reset")

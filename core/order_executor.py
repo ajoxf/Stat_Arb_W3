@@ -435,57 +435,144 @@ class OrderExecutor:
             logger.error("Failed to place futures limit order: %s", futures_result.error)
 
     async def _amend_limit_orders(self, spread_order: SpreadOrder) -> None:
-        """Amend (update price of) existing limit orders."""
+        """
+        Amend (update price of) existing limit orders.
+
+        IMPORTANT: Only place new order if cancel succeeds to prevent duplicate orders.
+        """
         # Amend spot order if still open
         if spread_order.spot_leg.status == LegStatus.OPEN:
             try:
-                # Cancel and replace (some exchanges support amend, but cancel/replace is universal)
-                await self.spot_adapter.cancel_order(
+                # First check if already filled before attempting cancel
+                status = await self.spot_adapter.get_order_status(
                     spread_order.spot_leg.symbol,
-                    spread_order.spot_leg.order_id,
+                    spread_order.spot_leg.order_id
                 )
-                result = await self.spot_adapter.place_order(
-                    symbol=spread_order.spot_leg.symbol,
-                    side=spread_order.spot_leg.side,
-                    order_type="LIMIT",
-                    quantity=spread_order.spot_leg.quantity - spread_order.spot_leg.filled_qty,
-                    price=spread_order.spot_leg.target_price,
-                    pos_side=spread_order.spot_leg.pos_side,
-                )
-                if result.success:
-                    spread_order.spot_leg.order_id = result.order_id
+                if status and status["state"] == "filled":
+                    spread_order.spot_leg.status = LegStatus.FILLED
+                    spread_order.spot_leg.filled_qty = status["filled_qty"]
+                    spread_order.spot_leg.filled_price = status["filled_price"]
+                    logger.info("Spot leg already filled during amend check")
+                elif status and status["state"] in ("live", "partially_filled"):
+                    # Cancel and replace
+                    cancel_success = await self.spot_adapter.cancel_order(
+                        spread_order.spot_leg.symbol,
+                        spread_order.spot_leg.order_id,
+                    )
+                    if cancel_success:
+                        remaining_qty = spread_order.spot_leg.quantity - spread_order.spot_leg.filled_qty
+                        if remaining_qty > 0:
+                            result = await self.spot_adapter.place_order(
+                                symbol=spread_order.spot_leg.symbol,
+                                side=spread_order.spot_leg.side,
+                                order_type="LIMIT",
+                                quantity=remaining_qty,
+                                price=spread_order.spot_leg.target_price,
+                                pos_side=spread_order.spot_leg.pos_side,
+                            )
+                            if result.success:
+                                spread_order.spot_leg.order_id = result.order_id
+                                logger.debug("Spot order amended: new_id=%s, price=%.2f",
+                                           result.order_id, spread_order.spot_leg.target_price)
+                            else:
+                                logger.error("Failed to place new spot order after cancel: %s", result.error)
+                                spread_order.spot_leg.status = LegStatus.FAILED
+                    else:
+                        logger.warning("Failed to cancel spot order for amend - skipping to avoid duplicates")
             except Exception as e:
                 logger.error("Failed to amend spot order: %s", e)
 
         # Amend futures order if still open
         if spread_order.futures_leg.status == LegStatus.OPEN:
             try:
-                await self.futures_adapter.cancel_order(
+                # First check if already filled before attempting cancel
+                status = await self.futures_adapter.get_order_status(
                     spread_order.futures_leg.symbol,
-                    spread_order.futures_leg.order_id,
+                    spread_order.futures_leg.order_id
                 )
-                result = await self.futures_adapter.place_order(
-                    symbol=spread_order.futures_leg.symbol,
-                    side=spread_order.futures_leg.side,
-                    order_type="LIMIT",
-                    quantity=spread_order.futures_leg.quantity - spread_order.futures_leg.filled_qty,
-                    price=spread_order.futures_leg.target_price,
-                    pos_side=spread_order.futures_leg.pos_side,  # Keep same pos_side
-                )
-                if result.success:
-                    spread_order.futures_leg.order_id = result.order_id
+                if status and status["state"] == "filled":
+                    spread_order.futures_leg.status = LegStatus.FILLED
+                    spread_order.futures_leg.filled_qty = status["filled_qty"]
+                    spread_order.futures_leg.filled_price = status["filled_price"]
+                    logger.info("Futures leg already filled during amend check")
+                elif status and status["state"] in ("live", "partially_filled"):
+                    # Cancel and replace
+                    cancel_success = await self.futures_adapter.cancel_order(
+                        spread_order.futures_leg.symbol,
+                        spread_order.futures_leg.order_id,
+                    )
+                    if cancel_success:
+                        remaining_qty = spread_order.futures_leg.quantity - spread_order.futures_leg.filled_qty
+                        if remaining_qty > 0:
+                            result = await self.futures_adapter.place_order(
+                                symbol=spread_order.futures_leg.symbol,
+                                side=spread_order.futures_leg.side,
+                                order_type="LIMIT",
+                                quantity=remaining_qty,
+                                price=spread_order.futures_leg.target_price,
+                                pos_side=spread_order.futures_leg.pos_side,
+                            )
+                            if result.success:
+                                spread_order.futures_leg.order_id = result.order_id
+                                logger.debug("Futures order amended: new_id=%s, price=%.2f",
+                                           result.order_id, spread_order.futures_leg.target_price)
+                            else:
+                                logger.error("Failed to place new futures order after cancel: %s", result.error)
+                                spread_order.futures_leg.status = LegStatus.FAILED
+                    else:
+                        logger.warning("Failed to cancel futures order for amend - skipping to avoid duplicates")
             except Exception as e:
                 logger.error("Failed to amend futures order: %s", e)
 
     async def _check_order_status(self, spread_order: SpreadOrder) -> None:
-        """Check the fill status of both legs."""
-        # For now, we rely on the order result from place_order
-        # In a production system, you'd query order status from the exchange
-        # This is a simplified implementation
+        """Check the fill status of both legs by querying the exchange."""
+        # Check spot leg
+        if spread_order.spot_leg.status == LegStatus.OPEN and spread_order.spot_leg.order_id:
+            try:
+                status = await self.spot_adapter.get_order_status(
+                    spread_order.spot_leg.symbol,
+                    spread_order.spot_leg.order_id
+                )
+                if status:
+                    if status["state"] == "filled":
+                        spread_order.spot_leg.status = LegStatus.FILLED
+                        spread_order.spot_leg.filled_qty = status["filled_qty"]
+                        spread_order.spot_leg.filled_price = status["filled_price"]
+                        logger.info("Spot leg filled: qty=%.6f @ %.2f",
+                                   status["filled_qty"], status["filled_price"])
+                    elif status["state"] == "partially_filled":
+                        spread_order.spot_leg.status = LegStatus.PARTIAL
+                        spread_order.spot_leg.filled_qty = status["filled_qty"]
+                        spread_order.spot_leg.filled_price = status["filled_price"]
+                    elif status["state"] == "canceled":
+                        spread_order.spot_leg.status = LegStatus.CANCELLED
+                        logger.warning("Spot leg was cancelled externally")
+            except Exception as e:
+                logger.error("Error checking spot order status: %s", e)
 
-        # Check if orders were filled by attempting to get positions
-        # (This is a workaround - proper implementation would use order status API)
-        pass
+        # Check futures leg
+        if spread_order.futures_leg.status == LegStatus.OPEN and spread_order.futures_leg.order_id:
+            try:
+                status = await self.futures_adapter.get_order_status(
+                    spread_order.futures_leg.symbol,
+                    spread_order.futures_leg.order_id
+                )
+                if status:
+                    if status["state"] == "filled":
+                        spread_order.futures_leg.status = LegStatus.FILLED
+                        spread_order.futures_leg.filled_qty = status["filled_qty"]
+                        spread_order.futures_leg.filled_price = status["filled_price"]
+                        logger.info("Futures leg filled: qty=%.6f @ %.2f",
+                                   status["filled_qty"], status["filled_price"])
+                    elif status["state"] == "partially_filled":
+                        spread_order.futures_leg.status = LegStatus.PARTIAL
+                        spread_order.futures_leg.filled_qty = status["filled_qty"]
+                        spread_order.futures_leg.filled_price = status["filled_price"]
+                    elif status["state"] == "canceled":
+                        spread_order.futures_leg.status = LegStatus.CANCELLED
+                        logger.warning("Futures leg was cancelled externally")
+            except Exception as e:
+                logger.error("Error checking futures order status: %s", e)
 
     async def _handle_timeout(self, spread_order: SpreadOrder) -> None:
         """Handle timeout - cancel unfilled orders and close any partial fills."""
