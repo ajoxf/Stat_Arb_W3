@@ -334,6 +334,15 @@ class OKXAdapter(ExchangeAdapter):
             if inst_type == "SPOT" and okx_ord_type == "market" and side.upper() == "BUY":
                 order_data["tgtCcy"] = "base_ccy"
 
+            # Cross-margin SPOT orders require ccy = margin currency (quote currency).
+            # OKX rejects cross-margin spot orders with "Parameter ccy can not be empty"
+            # if this is omitted (applies to both BUY and SELL directions).
+            if inst_type == "SPOT" and td_mode == "cross":
+                symbol_parts = symbol.split("-")
+                # BTC-USDT → quote = USDT; guard against malformed symbols
+                if len(symbol_parts) >= 2:
+                    order_data["ccy"] = symbol_parts[1]
+
             # Handle position side for long/short mode accounts (required for SWAP)
             if inst_type == "SWAP":
                 if pos_side:
