@@ -1090,12 +1090,22 @@ class TradingEngine:
         return self.signal_generator.get_zscore_history(n)
 
     def reset(self) -> None:
-        """Reset engine state."""
+        """Reset engine state (preserves running status)."""
+        # Preserve running state
+        was_running = self.state.is_running
+        algo_was_enabled = self.state.algo_enabled
+
         self.signal_generator.reset()
         self.state = EngineState(paper_trading=self.config.paper_trading)
+
+        # Restore running state
+        self.state.is_running = was_running
+        self.state.algo_enabled = algo_was_enabled
+
         self.open_trade = None
         self.spot_tick = None
         self.futures_tick = None
         self._stop_loss_cooldown_until = None
         self._executing_trade = False
-        logger.debug("Engine reset")
+        self._tick_fail_count = 0  # Reset tick failure counter too
+        logger.info("Engine reset (running=%s, algo=%s)", was_running, algo_was_enabled)
