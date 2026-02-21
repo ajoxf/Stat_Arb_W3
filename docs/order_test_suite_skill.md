@@ -1156,6 +1156,53 @@ market order).
 
 ---
 
+### Bug 3 — `fillSz` vs `accFillSz` in `get_order_status` (pf-1/pf-3 recovery under-sells)
+
+**Symptom:** After a `pf-1` or `pf-3` partial-fill test (SPOT BUY recovery), the
+exchange shows a residual LONG spot position (e.g. 0.00941 BTC) even though the
+scenario reported PASS.  The recovery sold only a fraction of what was bought (e.g.
+0.003666 BTC instead of 0.00941 BTC).
+
+**Root cause:** OKX's `GET /api/v5/trade/order` response has two distinct fill-size
+fields:
+
+| Field | Meaning |
+|-------|---------|
+| `fillSz` | **Last** fill tranche size only |
+| `accFillSz` | **Accumulated** fill size (total across all tranches) |
+
+The original code:
+```python
+fill_sz = float(o.get("fillSz", 0) or o.get("accFillSz", 0) or 0)
+```
+tried `fillSz` first.  For a cross-margin SPOT MARKET BUY that was matched in
+multiple tranches (e.g. 0.00574865 BTC + 0.00366627 BTC = 0.00941492 BTC total),
+`fillSz` = **0.00366627** (last tranche only) — non-zero, so the fallback to
+`accFillSz` never ran.  The recovery SELL was sized at 0.00366627 BTC, leaving the
+remaining 0.00574865 BTC as an orphan.
+
+**Fix:** Swap the priority — use `accFillSz` (total) first, fall back to `fillSz`
+(single-tranche orders where `accFillSz` may be absent/zero):
+
+```python
+# WRONG (fillSz = last tranche only; accFillSz = total):
+fill_sz = float(o.get("fillSz", 0) or o.get("accFillSz", 0) or 0)
+
+# CORRECT:
+fill_sz = float(o.get("accFillSz", 0) or o.get("fillSz", 0) or 0)
+```
+
+**When this matters:** Any order that is matched across multiple liquidity tranches.
+MARKET orders on high-liquidity pairs usually fill in one tranche (so both fields
+are equal), but cross-margin SPOT MARKET BUY orders with `sz` in USDT can span
+multiple tranches on OKX.
+
+**Does not affect:** LIMIT orders (where `fillSz` correctly captures the last
+partial fill for status-checking purposes, and the suite only uses `accFillSz` for
+final close sizing).  However, swapping the priority is safe for all order types.
+
+---
+
 ## 22. Porting to Another Exchange
 
 ### Step 1: Implement the adapter interface

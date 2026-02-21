@@ -450,7 +450,7 @@ class OKXAdapter(ExchangeAdapter):
             if result and result.get("code") == "0" and result.get("data"):
                 o = result["data"][0]
                 sz = float(o.get("sz", 0) or 0)
-                fill_sz = float(o.get("fillSz", 0) or o.get("accFillSz", 0) or 0)
+                fill_sz = float(o.get("accFillSz", 0) or o.get("fillSz", 0) or 0)
                 fill_px = float(o.get("fillPx", 0) or o.get("avgPx", 0) or 0)
                 state = o.get("state", "")
 
