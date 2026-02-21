@@ -2238,15 +2238,14 @@ async def run_test_suite():
 
         scenario['status'] = 'running'
         _test_suite_state['current'] = idx + 1
-        socketio.emit('test_suite_update', _test_suite_state)
-        logger.info("[TEST SUITE] %d/%d  %s  [%s]",
-                    idx + 1, len(scenarios), scenario['label'], scen_mode)
-
         order_type   = scenario['order_type']
         cancel_test  = scenario['cancel_test']
         scen_mode    = scenario.get('forced_mode') or order_mode  # per-scenario override
         scenario['mode'] = scen_mode  # ensure Mode column is always populated
         inter_pause  = 5 if scen_mode == 'MARKET' else 20
+        socketio.emit('test_suite_update', _test_suite_state)
+        logger.info("[TEST SUITE] %d/%d  %s  [%s]",
+                    idx + 1, len(scenarios), scenario['label'], scen_mode)
 
         # ── PARTIAL-FILL RECOVERY TEST ─────────────────────────────────────
         # Places one leg at MARKET (fills), skips the other (simulated failure),
