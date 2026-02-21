@@ -1876,7 +1876,7 @@ async def _suite_open_order(order_type: str, quantity: float):
     Returns (list_of_leg_tuples, error_str).  error_str is None on success.
     Each leg tuple: (market_type, side, entry_price, OrderResult, qty, pos_side)
     """
-    order_mode = config.order_execution_mode
+    order_mode = config.entry_execution_mode  # Use entry mode (LIMIT/MARKET) for opening legs
 
     def calc_limit_price(side: str, tick) -> float:
         offset_bps = config.limit_order_price_offset_bps / 10000
@@ -1982,7 +1982,7 @@ async def _suite_close_position(pos_id: str):
                 return True, "already cancelled"
 
     # Place closing order
-    order_mode       = config.order_execution_mode
+    order_mode       = config.exit_execution_mode  # Use exit mode for closing legs
     close_lp: Optional[float] = None
     if order_mode == "LIMIT":
         tick        = engine.spot_tick if market_type == "SPOT" else engine.futures_tick
@@ -2028,7 +2028,7 @@ async def run_test_suite():
     _test_suite_running = True
     _test_suite_cancel  = False
 
-    order_mode     = config.order_execution_mode
+    order_mode     = config.entry_execution_mode  # Use entry mode for the suite
     limit_timeout  = config.limit_order_timeout_sec
     inter_pause    = 30 if order_mode == "MARKET" else 20  # seconds between scenarios
 
@@ -2052,7 +2052,11 @@ async def run_test_suite():
     socketio.emit('test_suite_update', _test_suite_state)
 
     spot_price = engine.spot_tick.mid if engine.spot_tick else 65000.0
-    quantity   = 100.0 / spot_price   # $100 notional
+    # Ensure quantity is large enough for at least 1 futures contract.
+    # BTC-USDT-SWAP ctVal = 0.01 BTC → $100 notional at $98k is only 0.1 contracts (below min 1).
+    futures_info = await engine.futures_adapter.get_symbol_info(config.futures_symbol) if engine.futures_adapter else None
+    ct_val = futures_info.get("contract_val", 0.01) if futures_info else 0.01
+    quantity = max(100.0 / spot_price, ct_val)  # at least 1 contract worth of BTC
 
     for idx, scenario in enumerate(scenarios):
         if _test_suite_cancel:
@@ -2196,6 +2200,38 @@ def stop_test_suite():
 def get_test_suite_status():
     """Return the current test suite state."""
     return jsonify(_test_suite_state)
+
+
+@app.route('/api/test-suite/download-csv', methods=['GET'])
+def download_test_suite_csv():
+    """Download the last test suite results as a CSV file."""
+    import csv, io
+    scenarios = _test_suite_state.get('scenarios', [])
+    if not scenarios:
+        return jsonify({'error': 'No test results available yet'}), 404
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(['#', 'Scenario', 'Mode', 'Type', 'Cancel Test', 'Status', 'Detail'])
+    for i, s in enumerate(scenarios, 1):
+        writer.writerow([
+            i,
+            s.get('label', ''),
+            s.get('mode', ''),
+            s.get('order_type', ''),
+            'yes' if s.get('cancel_test') else 'no',
+            s.get('status', ''),
+            s.get('detail', ''),
+        ])
+
+    from flask import Response
+    ts = _test_suite_state.get('start_time', 'unknown')
+    filename = f"test_suite_{ts[:10] if ts else 'results'}.csv"
+    return Response(
+        output.getvalue(),
+        mimetype='text/csv',
+        headers={'Content-Disposition': f'attachment; filename="{filename}"'},
+    )
 
 
 @app.route('/api/reset-trades', methods=['POST'])

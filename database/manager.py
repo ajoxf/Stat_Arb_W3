@@ -220,6 +220,18 @@ class DatabaseManager:
                 cursor.execute("ALTER TABLE trading_config ADD COLUMN verify_exchange_position INTEGER DEFAULT 1")
             if 'orphan_recovery_timeout_sec' not in existing_columns:
                 cursor.execute("ALTER TABLE trading_config ADD COLUMN orphan_recovery_timeout_sec INTEGER DEFAULT 60")
+            if 'entry_execution_mode' not in existing_columns:
+                cursor.execute("ALTER TABLE trading_config ADD COLUMN entry_execution_mode TEXT DEFAULT 'LIMIT'")
+            if 'exit_execution_mode' not in existing_columns:
+                cursor.execute("ALTER TABLE trading_config ADD COLUMN exit_execution_mode TEXT DEFAULT 'MARKET'")
+            if 'spot_maker_fee_bps' not in existing_columns:
+                cursor.execute("ALTER TABLE trading_config ADD COLUMN spot_maker_fee_bps REAL DEFAULT 8.0")
+            if 'spot_taker_fee_bps' not in existing_columns:
+                cursor.execute("ALTER TABLE trading_config ADD COLUMN spot_taker_fee_bps REAL DEFAULT 10.0")
+            if 'futures_maker_fee_bps' not in existing_columns:
+                cursor.execute("ALTER TABLE trading_config ADD COLUMN futures_maker_fee_bps REAL DEFAULT 2.0")
+            if 'futures_taker_fee_bps' not in existing_columns:
+                cursor.execute("ALTER TABLE trading_config ADD COLUMN futures_taker_fee_bps REAL DEFAULT 5.0")
 
             logger.info("Database initialized: %s", self.db_path)
 
@@ -253,10 +265,16 @@ class DatabaseManager:
                     paper_trading=bool(row["paper_trading"]),
                     algo_enabled=bool(row["algo_enabled"]),
                     order_execution_mode=row["order_execution_mode"] if "order_execution_mode" in row.keys() else "MARKET",
+                    entry_execution_mode=row["entry_execution_mode"] if "entry_execution_mode" in row.keys() else "LIMIT",
+                    exit_execution_mode=row["exit_execution_mode"] if "exit_execution_mode" in row.keys() else "MARKET",
                     limit_order_timeout_sec=row["limit_order_timeout_sec"] if "limit_order_timeout_sec" in row.keys() else 30,
                     limit_order_price_offset_bps=row["limit_order_price_offset_bps"] if "limit_order_price_offset_bps" in row.keys() else 1.0,
                     taker_fee_bps=row["taker_fee_bps"] if "taker_fee_bps" in row.keys() else 5.0,
                     maker_fee_bps=row["maker_fee_bps"] if "maker_fee_bps" in row.keys() else 2.0,
+                    spot_maker_fee_bps=row["spot_maker_fee_bps"] if "spot_maker_fee_bps" in row.keys() else 8.0,
+                    spot_taker_fee_bps=row["spot_taker_fee_bps"] if "spot_taker_fee_bps" in row.keys() else 10.0,
+                    futures_maker_fee_bps=row["futures_maker_fee_bps"] if "futures_maker_fee_bps" in row.keys() else 2.0,
+                    futures_taker_fee_bps=row["futures_taker_fee_bps"] if "futures_taker_fee_bps" in row.keys() else 5.0,
                     estimated_costs_bps=row["estimated_costs_bps"],
                     entry_cooldown_seconds=row["entry_cooldown_seconds"] if "entry_cooldown_seconds" in row.keys() else 60,
                     verify_exchange_position=bool(row["verify_exchange_position"]) if "verify_exchange_position" in row.keys() else True,
@@ -290,10 +308,16 @@ class DatabaseManager:
                     paper_trading = ?,
                     algo_enabled = ?,
                     order_execution_mode = ?,
+                    entry_execution_mode = ?,
+                    exit_execution_mode = ?,
                     limit_order_timeout_sec = ?,
                     limit_order_price_offset_bps = ?,
                     taker_fee_bps = ?,
                     maker_fee_bps = ?,
+                    spot_maker_fee_bps = ?,
+                    spot_taker_fee_bps = ?,
+                    futures_maker_fee_bps = ?,
+                    futures_taker_fee_bps = ?,
                     estimated_costs_bps = ?,
                     entry_cooldown_seconds = ?,
                     verify_exchange_position = ?,
@@ -319,10 +343,16 @@ class DatabaseManager:
                 int(config.paper_trading),
                 int(config.algo_enabled),
                 config.order_execution_mode,
+                config.entry_execution_mode,
+                config.exit_execution_mode,
                 config.limit_order_timeout_sec,
                 config.limit_order_price_offset_bps,
                 config.taker_fee_bps,
                 config.maker_fee_bps,
+                config.spot_maker_fee_bps,
+                config.spot_taker_fee_bps,
+                config.futures_maker_fee_bps,
+                config.futures_taker_fee_bps,
                 config.estimated_costs_bps,
                 config.entry_cooldown_seconds,
                 int(config.verify_exchange_position),

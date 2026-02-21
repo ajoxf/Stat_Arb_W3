@@ -391,6 +391,9 @@
                             <button type="button" class="btn btn-outline-danger d-none" id="btn-stop-suite" onclick="stopTestSuite()">
                                 <i class="bi bi-stop-circle me-1"></i>Stop Suite
                             </button>
+                            <a href="/api/test-suite/download-csv" class="btn btn-outline-secondary d-none" id="btn-download-csv" download>
+                                <i class="bi bi-download me-1"></i>Download CSV
+                            </a>
                         </div>
 
                         <!-- Live progress panel (hidden until suite starts) -->
@@ -954,8 +957,10 @@
         document.getElementById('suite-mode-label').textContent     =
             `Mode: ${state.order_mode || ''}  |  ${state.running ? 'running…' : 'complete'}`;
 
-        document.getElementById('btn-run-suite').classList.toggle('d-none',  state.running);
-        document.getElementById('btn-stop-suite').classList.toggle('d-none', !state.running);
+        const hasResults = (state.scenarios && state.scenarios.length > 0);
+        document.getElementById('btn-run-suite').classList.toggle('d-none',   state.running);
+        document.getElementById('btn-stop-suite').classList.toggle('d-none',  !state.running);
+        document.getElementById('btn-download-csv').classList.toggle('d-none', state.running || !hasResults);
 
         renderSuiteTable(state);
 
