@@ -431,12 +431,16 @@ worth of BTC" — a tiny fraction of a cent — not "buy 0.001 BTC".
 **Fix:** Add `"tgtCcy": "base_ccy"` to tell OKX that `sz` is denominated in base currency.
 
 ```python
-# SPOT market BUY only — SELL always interprets sz as base_ccy by default
-if inst_type == "SPOT" and okx_ord_type == "market" and side.upper() == "BUY":
+# Cash mode SPOT market BUY only.
+# Cross-margin (tdMode=cross) rejects tgtCcy with "instrument does not support
+# the tgtCcy parameter" — in cross mode sz for market BUY is already base_ccy.
+if inst_type == "SPOT" and okx_ord_type == "market" and side.upper() == "BUY" and td_mode == "cash":
     order_data["tgtCcy"] = "base_ccy"
 ```
 
-**Applies to:** Both `tdMode=cash` and `tdMode=cross`.
+**Applies to:** `tdMode=cash` **only**.
+**Does NOT apply to:** `tdMode=cross` (cross-margin) — OKX explicitly rejects `tgtCcy`
+there and defaults to `base_ccy` anyway.
 **Does not apply to:** LIMIT orders (where `sz` is always base_ccy), or SELL.
 
 ### 9.2 `ccy` — Cross-Margin SPOT orders

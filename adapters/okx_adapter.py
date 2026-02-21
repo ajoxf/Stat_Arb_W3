@@ -328,10 +328,12 @@ class OKXAdapter(ExchangeAdapter):
             if reduce_only and inst_type == "SWAP":
                 order_data["reduceOnly"] = True
 
-            # For spot market BUY, OKX defaults sz to quote currency (USDT).
-            # tgtCcy=base_ccy tells OKX sz is in base currency (BTC) instead.
-            # Per OKX docs this applies to SPOT Market Orders in both cash and margin mode.
-            if inst_type == "SPOT" and okx_ord_type == "market" and side.upper() == "BUY":
+            # For spot cash-mode (tdMode=cash) market BUY, OKX defaults sz to quote (USDT).
+            # tgtCcy=base_ccy tells OKX that sz is in base currency (BTC) instead.
+            # NOTE: tgtCcy is NOT supported in cross-margin mode (tdMode=cross) — OKX
+            # returns "instrument does not support the tgtCcy parameter" and rejects the order.
+            # In cross-margin mode sz for market BUY defaults to base_ccy already.
+            if inst_type == "SPOT" and okx_ord_type == "market" and side.upper() == "BUY" and td_mode == "cash":
                 order_data["tgtCcy"] = "base_ccy"
 
             # Cross-margin SPOT orders require ccy = margin currency (quote currency).
