@@ -256,14 +256,18 @@ class TradingEngine:
 
         # Log comprehensive startup summary for monitoring
         self._log_startup_summary()
+        print("[DEBUG] After _log_startup_summary", flush=True)
 
         # Clean up any orphan orders from previous sessions
         try:
+            print("[DEBUG] Before cleanup_orphan_orders", flush=True)
             logger.info("Cleaning up orphan orders...")
             await self._cleanup_orphan_orders()
             logger.info("Orphan cleanup complete")
+            print("[DEBUG] After cleanup_orphan_orders", flush=True)
         except Exception as e:
             logger.error("Error during orphan cleanup (continuing): %s", e)
+            print(f"[DEBUG] Cleanup error: {e}", flush=True)
 
         # Apply pending leverage settings (deferred from set_adapters)
         if self._pending_leverage_setup:
@@ -290,9 +294,11 @@ class TradingEngine:
 
         # Start main loop (for REST polling or as a fallback)
         if not self._use_websocket:
+            print("[DEBUG] About to create REST polling task", flush=True)
             logger.info("Creating REST polling task...")
             self._task = asyncio.create_task(self._main_loop())
             logger.info("REST polling task created successfully")
+            print("[DEBUG] REST polling task created", flush=True)
 
     async def stop(self) -> None:
         """Stop the trading engine."""
@@ -995,38 +1001,48 @@ class TradingEngine:
 
     def _log_startup_summary(self) -> None:
         """Log comprehensive startup summary for monitoring and debugging."""
-        cfg = self.config
-        logger.info("=" * 60)
-        logger.info("🚀 TRADING ENGINE STARTUP SUMMARY")
-        logger.info("=" * 60)
-        logger.info("SYMBOLS: spot=%s, futures=%s", cfg.spot_symbol, cfg.futures_symbol)
-        logger.info("MODE: paper=%s, algo=%s", cfg.paper_trading, cfg.algo_enabled)
-        logger.info("POSITION SIZE: $%s (max: $%s)", cfg.position_size_usd, cfg.max_position_size_usd)
-        logger.info("LEVERAGE: spot=%dx, futures=%dx", cfg.spot_leverage, cfg.futures_leverage)
-        logger.info("FEES (bps): spot_maker=%.1f, spot_taker=%.1f, fut_maker=%.1f, fut_taker=%.1f",
-                   getattr(cfg, 'spot_maker_fee_bps', 8),
-                   getattr(cfg, 'spot_taker_fee_bps', 10),
-                   getattr(cfg, 'futures_maker_fee_bps', 2),
-                   getattr(cfg, 'futures_taker_fee_bps', 5))
-        logger.info("EXECUTION: entry=%s, exit=%s",
-                   getattr(cfg, 'entry_execution_mode', 'LIMIT'),
-                   getattr(cfg, 'exit_execution_mode', 'MARKET'))
-        logger.info("TIMEOUTS: limit_order=%ds, orphan_recovery=%ds, entry_cooldown=%ds",
-                   cfg.limit_order_timeout_sec,
-                   getattr(cfg, 'orphan_recovery_timeout_sec', 60),
-                   getattr(cfg, 'entry_cooldown_seconds', 60))
-        logger.info("SIGNALS: z_entry=%.2f, z_exit=%.2f, stop_loss=%.2f",
-                   cfg.z_score_entry_threshold,
-                   cfg.z_score_exit_threshold,
-                   cfg.stop_loss_z_score)
-        logger.info("FILTERS: hurst=%s (threshold=%.2f), std=%s (min=%.1fx)",
-                   cfg.hurst_enabled, cfg.hurst_threshold,
-                   cfg.std_filter_enabled, cfg.min_std_multiple)
-        logger.info("=" * 60)
+        try:
+            cfg = self.config
+            logger.info("=" * 60)
+            logger.info("🚀 TRADING ENGINE STARTUP SUMMARY")
+            logger.info("=" * 60)
+            logger.info("SYMBOLS: spot=%s, futures=%s", cfg.spot_symbol, cfg.futures_symbol)
+            logger.info("MODE: paper=%s, algo=%s", cfg.paper_trading, cfg.algo_enabled)
+            logger.info("POSITION SIZE: $%s (max: $%s)", cfg.position_size_usd, cfg.max_position_size_usd)
+            logger.info("LEVERAGE: spot=%dx, futures=%dx", cfg.spot_leverage, cfg.futures_leverage)
+            logger.info("FEES (bps): spot_maker=%.1f, spot_taker=%.1f, fut_maker=%.1f, fut_taker=%.1f",
+                       getattr(cfg, 'spot_maker_fee_bps', 8),
+                       getattr(cfg, 'spot_taker_fee_bps', 10),
+                       getattr(cfg, 'futures_maker_fee_bps', 2),
+                       getattr(cfg, 'futures_taker_fee_bps', 5))
+            logger.info("EXECUTION: entry=%s, exit=%s",
+                       getattr(cfg, 'entry_execution_mode', 'LIMIT'),
+                       getattr(cfg, 'exit_execution_mode', 'MARKET'))
+            logger.info("TIMEOUTS: limit_order=%ds, orphan_recovery=%ds, entry_cooldown=%ds",
+                       cfg.limit_order_timeout_sec,
+                       getattr(cfg, 'orphan_recovery_timeout_sec', 60),
+                       getattr(cfg, 'entry_cooldown_seconds', 60))
+            logger.info("SIGNALS: z_entry=%.2f, z_exit=%.2f, stop_loss=%.2f",
+                       cfg.z_score_entry_threshold,
+                       cfg.z_score_exit_threshold,
+                       cfg.stop_loss_z_score)
+            logger.info("FILTERS: hurst=%s (threshold=%.2f), std=%s (min=%.1fx)",
+                       cfg.hurst_enabled, cfg.hurst_threshold,
+                       cfg.std_filter_enabled, cfg.min_std_multiple)
+            logger.info("=" * 60)
 
-        # Also log to CSV for easy reference
-        csv_logger = get_trade_logger()
-        csv_logger.log_startup(cfg.to_dict())
+            # Also log to CSV for easy reference
+            try:
+                csv_logger = get_trade_logger()
+                csv_logger.log_startup(cfg.to_dict())
+            except Exception as csv_err:
+                logger.warning("CSV logging failed: %s", csv_err)
+            print("[DEBUG] _log_startup_summary completed successfully", flush=True)
+        except Exception as e:
+            logger.error("Error in startup summary: %s", e)
+            print(f"[DEBUG] _log_startup_summary FAILED: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
 
     async def _execute_exit_orders(self, trade: Trade, signal: Signal) -> bool:
         """Execute exit orders on exchanges using the order executor."""
