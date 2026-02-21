@@ -2,11 +2,6 @@
 Flask web application for the Crypto Statistical Arbitrage Trading System.
 """
 
-# CRITICAL: eventlet monkey-patching must happen before ANY other imports
-# This is required for Flask-SocketIO with eventlet async_mode
-import eventlet
-eventlet.monkey_patch()
-
 import os
 import sys
 import signal
@@ -48,7 +43,7 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = os.getenv('FLASK_SECRET_KEY', 'crypto-arb-secret-key')
 
 # Initialize SocketIO
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
 # Initialize database
 db = DatabaseManager(os.getenv('DATABASE_PATH', 'trading.db'))
@@ -1886,19 +1881,17 @@ if __name__ == '__main__':
     logger.info("Dashboard available at: http://localhost:%d", port)
     logger.info("=" * 50)
 
-    # Suppress HTTP request logs right before starting (must be after Flask/SocketIO init)
+    # Suppress HTTP request logs right before starting
     logging.getLogger('werkzeug').setLevel(logging.ERROR)
     logging.getLogger('engineio').setLevel(logging.ERROR)
     logging.getLogger('socketio').setLevel(logging.ERROR)
-    # Also disable Flask's default request logging
     app.logger.setLevel(logging.WARNING)
-    logging.getLogger('geventwebsocket.handler').setLevel(logging.ERROR)
 
-    # Run Flask app with SocketIO
+    # Run Flask app with SocketIO (threading mode)
     socketio.run(
         app,
         host='0.0.0.0',
         port=port,
-        log_output=False,  # Disable SocketIO's default request logging
-        debug=os.getenv('FLASK_DEBUG', 'false').lower() == 'true'
+        debug=os.getenv('FLASK_DEBUG', 'false').lower() == 'true',
+        allow_unsafe_werkzeug=True  # Required for threading mode in production
     )
