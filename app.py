@@ -1842,9 +1842,11 @@ def get_test_order_status():
 
 _test_suite_cancel: bool = False
 _test_suite_running: bool = False
+_single_running: bool = False          # True while a single-scenario run is in progress
 _test_suite_state: Dict[str, Any] = {
     'running': False, 'current': 0, 'total': 36,
     'pass': 0, 'fail': 0, 'scenarios': [], 'start_time': None, 'order_mode': '',
+    'single_running': False,
 }
 
 # 18 scenarios: 6 order-types × (fill-test, fill-test, cancel-test)
@@ -2219,8 +2221,176 @@ def stop_test_suite():
 
 @app.route('/api/test-suite/status', methods=['GET'])
 def get_test_suite_status():
-    """Return the current test suite state."""
-    return jsonify(_test_suite_state)
+    """Return the current test suite state.
+    If no suite has run yet, pre-populate scenarios so the UI can show Run buttons."""
+    state = dict(_test_suite_state)
+    if not state.get('scenarios'):
+        state['scenarios'] = [
+            {**s, 'status': 'pending', 'detail': '', 'mode': s.get('forced_mode', '')}
+            for s in _SUITE_SCENARIOS
+        ]
+    return jsonify(state)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Single-scenario runner
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def run_single_scenario_task(scenario_id: str):
+    """Run one scenario by ID, emitting live WebSocket updates like the full suite."""
+    global _single_running, _test_suite_state, test_positions
+
+    _single_running = True
+    _test_suite_state['single_running'] = True
+
+    try:
+        scenario_def = next((s for s in _SUITE_SCENARIOS if s['id'] == scenario_id), None)
+        if not scenario_def:
+            logger.error("[SINGLE] Scenario %s not found", scenario_id)
+            return
+
+        # Ensure state has a scenarios list so the UI row can be updated
+        if not _test_suite_state.get('scenarios'):
+            _test_suite_state['scenarios'] = [
+                {**s, 'status': 'pending', 'detail': '', 'mode': s.get('forced_mode', '')}
+                for s in _SUITE_SCENARIOS
+            ]
+
+        scen_idx = next(
+            (i for i, s in enumerate(_test_suite_state['scenarios']) if s['id'] == scenario_id),
+            None,
+        )
+        if scen_idx is None:
+            logger.error("[SINGLE] Scenario %s missing from state list", scenario_id)
+            return
+
+        scenario = _test_suite_state['scenarios'][scen_idx]
+
+        # Quantity: same logic as full suite
+        spot_price = engine.spot_tick.mid if engine.spot_tick else 0
+        if not spot_price:
+            scenario['status'] = 'fail'
+            scenario['detail'] = 'No spot price available'
+            socketio.emit('test_suite_update', _test_suite_state)
+            return
+
+        symbol_info = None
+        if engine.futures_adapter:
+            symbol_info = await engine.futures_adapter.get_symbol_info(config.futures_symbol)
+        ct_val   = float(symbol_info.get('ct_val', 0.01)) if symbol_info else 0.01
+        quantity = max(100.0 / spot_price, ct_val)
+
+        order_mode    = config.entry_execution_mode
+        limit_timeout = config.limit_order_timeout_sec
+        scen_mode     = scenario_def.get('forced_mode') or order_mode
+        cancel_test   = scenario_def.get('cancel_test', False)
+
+        # Mark running
+        scenario['status'] = 'running'
+        scenario['detail'] = ''
+        socketio.emit('test_suite_update', _test_suite_state)
+        logger.info("[SINGLE] %s [%s]", scenario['label'], scen_mode)
+
+        # Open
+        try:
+            legs, open_err = await _suite_open_order(
+                scenario_def['order_type'], quantity, forced_mode=scen_mode,
+            )
+        except Exception as exc:
+            open_err = str(exc)
+            legs = None
+
+        if open_err or not legs:
+            scenario['status'] = 'fail'
+            scenario['detail'] = f"open failed: {open_err}"
+            socketio.emit('test_suite_update', _test_suite_state)
+            return
+
+        # Register positions
+        opened_ids = []
+        for (mtype, side, entry_px, result, qty, ps) in legs:
+            pos_id = str(uuid.uuid4())[:8]
+            test_positions[pos_id] = {
+                'id': pos_id, 'market_type': mtype, 'side': side,
+                'quantity': qty, 'entry_price': entry_px,
+                'order_id': result.order_id,
+                'entry_time': datetime.now(timezone.utc).isoformat(),
+                'pos_side': ps,
+            }
+            opened_ids.append(pos_id)
+
+        oid_short = legs[0][3].order_id[:12] if legs else '?'
+        scenario['detail'] = f"{len(opened_ids)} leg(s) placed  order_id={oid_short}..."
+        socketio.emit('test_suite_update', _test_suite_state)
+
+        # Wait
+        if cancel_test:
+            label = "cancel test" if scen_mode == "LIMIT" else "quick-close"
+            scenario['detail'] += f"  |  {label} – closing in 3 s"
+            socketio.emit('test_suite_update', _test_suite_state)
+            await asyncio.sleep(3)
+        elif scen_mode == "LIMIT":
+            scenario['detail'] += f"  |  waiting {limit_timeout} s for fill…"
+            socketio.emit('test_suite_update', _test_suite_state)
+            await asyncio.sleep(limit_timeout)
+        else:
+            await asyncio.sleep(4)
+
+        # Close
+        close_ok      = True
+        close_details = []
+        for pos_id in opened_ids:
+            try:
+                ok, detail = await _suite_close_position(pos_id)
+                close_details.append(detail)
+                if not ok:
+                    close_ok = False
+            except Exception as exc:
+                close_details.append(str(exc))
+                close_ok = False
+
+        detail_str = "  |  ".join(close_details)
+        if close_ok:
+            scenario['status'] = 'pass'
+            scenario['detail'] = detail_str
+            logger.info("[SINGLE] %s  PASS  %s", scenario['label'], detail_str)
+        else:
+            scenario['status'] = 'fail'
+            scenario['detail'] = detail_str
+            logger.warning("[SINGLE] %s  FAIL  %s", scenario['label'], detail_str)
+
+        socketio.emit('test_suite_update', _test_suite_state)
+
+    finally:
+        _single_running = False
+        _test_suite_state['single_running'] = False
+        socketio.emit('test_suite_update', _test_suite_state)
+
+
+@app.route('/api/test-suite/run-scenario', methods=['POST'])
+def api_run_single_scenario():
+    """Run a single test scenario by ID without starting the full suite."""
+    global _single_running
+    if _test_suite_running:
+        return jsonify({'success': False, 'error': 'Full suite is running'}), 400
+    if _single_running:
+        return jsonify({'success': False, 'error': 'A scenario is already running'}), 400
+    if not engine.spot_adapter:
+        return jsonify({'success': False, 'error': 'No exchange connected'}), 400
+    if not engine.spot_tick or not engine.futures_tick:
+        return jsonify({'success': False, 'error': 'No price data – wait for connection'}), 400
+
+    data        = request.json or {}
+    scenario_id = data.get('scenario_id')
+    if not scenario_id:
+        return jsonify({'success': False, 'error': 'scenario_id required'}), 400
+    if not any(s['id'] == scenario_id for s in _SUITE_SCENARIOS):
+        return jsonify({'success': False, 'error': f'Unknown scenario: {scenario_id}'}), 400
+
+    if loop:
+        asyncio.run_coroutine_threadsafe(run_single_scenario_task(scenario_id), loop)
+        return jsonify({'success': True, 'scenario_id': scenario_id})
+    return jsonify({'success': False, 'error': 'Event loop not running'}), 500
 
 
 @app.route('/api/test-suite/download-csv', methods=['GET'])
