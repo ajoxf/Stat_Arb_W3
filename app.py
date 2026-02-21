@@ -1496,6 +1496,7 @@ def close_test_order():
 
     # Get stored pos_side for futures (critical for long_short_mode!)
     stored_pos_side = pos.get('pos_side')
+    original_order_id = pos.get('order_id')
 
     async def close_position():
         adapter = engine.spot_adapter if market_type == "SPOT" else engine.futures_adapter
@@ -1503,8 +1504,38 @@ def close_test_order():
             return None, f"No {market_type} adapter available"
 
         symbol = config.spot_symbol if market_type == "SPOT" else config.futures_symbol
-        order_type_str = config.order_execution_mode
 
+        # First, check if the original order is still pending (not filled)
+        # If pending, we should CANCEL it, not place an opposite order
+        if original_order_id:
+            order_status = await adapter.get_order_status(symbol, original_order_id)
+            if order_status:
+                state = order_status.get("state", "")
+                filled_qty = order_status.get("filled_qty", 0)
+
+                if state in ("live", "partially_filled") or filled_qty == 0:
+                    # Order is still pending - cancel it instead of placing a close order
+                    logger.info("Original order %s still pending (state=%s, filled=%.6f) - cancelling",
+                               original_order_id, state, filled_qty)
+                    cancelled = await adapter.cancel_order(symbol, original_order_id)
+                    if cancelled:
+                        # Return a "mock" successful result for cancelled order
+                        from models import OrderResult
+                        return OrderResult(success=True, order_id=original_order_id), "cancelled"
+                    else:
+                        return None, f"Failed to cancel pending order {original_order_id}"
+
+                elif state == "filled":
+                    # Order was filled - proceed to place closing order
+                    logger.info("Original order %s was filled - placing close order", original_order_id)
+                else:
+                    # Order was already cancelled or in unknown state
+                    logger.info("Original order %s already in state '%s' - removing position", original_order_id, state)
+                    from models import OrderResult
+                    return OrderResult(success=True, order_id=original_order_id), "already_closed"
+
+        # Place closing order (only if original was filled)
+        order_type_str = config.order_execution_mode
         result = await adapter.place_order(
             symbol=symbol,
             side=close_side,
@@ -1520,12 +1551,36 @@ def close_test_order():
     if loop:
         try:
             future = asyncio.run_coroutine_threadsafe(close_position(), loop)
-            result, error = future.result(timeout=60)
+            result, status_or_error = future.result(timeout=60)
 
-            if error or not result.success:
-                return jsonify({'success': False, 'error': error or 'Close order failed'}), 400
+            if not result or not result.success:
+                return jsonify({'success': False, 'error': status_or_error or 'Close order failed'}), 400
 
-            # Calculate P&L
+            # Handle different close scenarios
+            if status_or_error == "cancelled":
+                # Order was pending and got cancelled - no P&L
+                logger.info("Test position %s cancelled (was pending, never filled)", position_id)
+                del test_positions[position_id]
+                return jsonify({
+                    'success': True,
+                    'pnl_usd': 0,
+                    'close_price': 0,
+                    'order_id': result.order_id,
+                    'message': 'Pending order cancelled (not filled)'
+                })
+            elif status_or_error == "already_closed":
+                # Order was already cancelled/unknown state
+                logger.info("Test position %s was already closed/cancelled", position_id)
+                del test_positions[position_id]
+                return jsonify({
+                    'success': True,
+                    'pnl_usd': 0,
+                    'close_price': 0,
+                    'order_id': result.order_id,
+                    'message': 'Position was already closed'
+                })
+
+            # Normal close - calculate P&L
             entry_price = pos['entry_price']
             if pos['side'] == "BUY":
                 pnl = (current_price - entry_price) * quantity
@@ -1575,6 +1630,7 @@ def close_all_test_orders():
             quantity = pos['quantity']
             current_price = engine.spot_tick.mid if market_type == "SPOT" else engine.futures_tick.mid
             stored_pos_side = pos.get('pos_side')
+            original_order_id = pos.get('order_id')
 
             adapter = engine.spot_adapter if market_type == "SPOT" else engine.futures_adapter
             if not adapter:
@@ -1582,8 +1638,37 @@ def close_all_test_orders():
                 continue
 
             symbol = config.spot_symbol if market_type == "SPOT" else config.futures_symbol
-            order_type_str = config.order_execution_mode
 
+            # Check if original order is still pending - if so, cancel instead of close
+            was_cancelled = False
+            if original_order_id:
+                order_status = await adapter.get_order_status(symbol, original_order_id)
+                if order_status:
+                    state = order_status.get("state", "")
+                    filled_qty = order_status.get("filled_qty", 0)
+
+                    if state in ("live", "partially_filled") or filled_qty == 0:
+                        # Order still pending - cancel it
+                        logger.info("Position %s order still pending - cancelling", pos_id)
+                        cancelled = await adapter.cancel_order(symbol, original_order_id)
+                        if cancelled:
+                            was_cancelled = True
+                            closed += 1
+                            del test_positions[pos_id]
+                            logger.info("Cancelled pending position %s", pos_id)
+                            continue
+                        else:
+                            errors.append(f"{pos_id}: Failed to cancel pending order")
+                            continue
+                    elif state == "canceled":
+                        # Already cancelled
+                        closed += 1
+                        del test_positions[pos_id]
+                        logger.info("Position %s was already cancelled", pos_id)
+                        continue
+
+            # Place closing order (original was filled)
+            order_type_str = config.order_execution_mode
             result = await adapter.place_order(
                 symbol=symbol,
                 side=close_side,
