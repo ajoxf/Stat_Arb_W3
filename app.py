@@ -1608,6 +1608,10 @@ def close_test_order():
                        close_side, market_type, tick.bid, tick.ask,
                        config.limit_order_price_offset_bps, close_limit_price)
 
+        # Cross-margin SPOT MARKET BUY (closing a SELL position) needs sz in USDT.
+        close_notional = round(quantity * current_price, 2) if (
+            market_type == "SPOT" and order_type_str == "MARKET" and close_side == "BUY"
+        ) else None
         result = await adapter.place_order(
             symbol=symbol,
             side=close_side,
@@ -1616,6 +1620,7 @@ def close_test_order():
             price=close_limit_price,
             pos_side=stored_pos_side,  # Use original pos_side for closing!
             reduce_only=True if market_type == "FUTURES" else False,
+            notional_usdt=close_notional,
         )
 
         return result, None if result.success else result.error
@@ -2031,11 +2036,17 @@ async def _suite_close_position(pos_id: str):
         else:
             close_lp = round(max(tick.ask * (1 - offset_bps), tick.bid * (1 + SAFETY)), 2)
 
+    # Cross-margin SPOT MARKET BUY (closing a SELL position) needs sz in USDT.
+    tick = engine.spot_tick if market_type == "SPOT" else engine.futures_tick
+    close_notional = round(quantity * tick.mid, 2) if (
+        market_type == "SPOT" and order_mode == "MARKET" and close_side == "BUY"
+    ) else None
     result = await adapter.place_order(
         symbol=symbol, side=close_side, order_type=order_mode,
         quantity=quantity, price=close_lp,
         pos_side=stored_pos_side,
         reduce_only=(market_type == "FUTURES"),
+        notional_usdt=close_notional,
     )
     if result.success:
         tick        = engine.spot_tick if market_type == "SPOT" else engine.futures_tick
