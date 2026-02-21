@@ -313,6 +313,12 @@ class OKXAdapter(ExchangeAdapter):
             if reduce_only and inst_type == "SWAP":
                 order_data["reduceOnly"] = True
 
+            # For spot market BUY in cash mode, OKX expects sz in quote currency (USDT) by default.
+            # Specify tgtCcy=base_ccy so sz is treated as base currency (BTC), consistent with
+            # how we calculate quantity everywhere else.
+            if inst_type == "SPOT" and okx_ord_type == "market" and side.upper() == "BUY":
+                order_data["tgtCcy"] = "base_ccy"
+
             # Handle position side for long/short mode accounts (required for SWAP)
             if inst_type == "SWAP":
                 if pos_side:
@@ -741,7 +747,7 @@ class OKXAdapter(ExchangeAdapter):
                     "tick_sz": float(tick_sz_str),  # Price tick size
                     "qty_precision": int(lot_sz_str.find("1") - 1) if "." in lot_sz_str else 0,
                     "price_precision": int(tick_sz_str.find("1") - 1) if "." in tick_sz_str else 0,
-                    "contract_val": float(data.get("ctVal", 1)),
+                    "contract_val": float(data.get("ctVal") or 1),
                 }
 
         except Exception as e:
