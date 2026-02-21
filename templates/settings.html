@@ -384,7 +384,7 @@
                             <strong>Run</strong> next to any row to execute a single scenario on demand.
                             LIMIT scenarios are spaced ~20 s apart; MARKET ~5 s apart.
                         </small>
-                        <div class="d-flex gap-2 mb-3">
+                        <div class="d-flex gap-2 mb-3 flex-wrap">
                             <button type="button" class="btn btn-primary" id="btn-run-suite" onclick="startTestSuite()">
                                 <i class="bi bi-play-circle me-1"></i>Run Full Test Suite
                             </button>
@@ -394,6 +394,11 @@
                             <a href="/api/test-suite/download-csv" class="btn btn-outline-secondary d-none" id="btn-download-csv" download>
                                 <i class="bi bi-download me-1"></i>Download CSV
                             </a>
+                            <!-- Shown only when flags are stuck (running=true but no row is active) -->
+                            <button type="button" class="btn btn-outline-warning d-none" id="btn-force-reset"
+                                    onclick="forceResetSuite()" title="Clear stuck running flags without restarting the server">
+                                <i class="bi bi-exclamation-triangle me-1"></i>Force Reset
+                            </button>
                         </div>
 
                         <!-- Scenario panel – visible immediately so Run buttons are always accessible -->
@@ -973,10 +978,15 @@
                                   modeLabel += 'complete';
         document.getElementById('suite-mode-label').textContent = modeLabel;
 
-        const hasResults = (state.scenarios && state.scenarios.some(s => s.status !== 'pending'));
-        document.getElementById('btn-run-suite').classList.toggle('d-none',   state.running);
-        document.getElementById('btn-stop-suite').classList.toggle('d-none',  !state.running);
-        document.getElementById('btn-download-csv').classList.toggle('d-none', anyRunning || !hasResults);
+        const hasResults  = (state.scenarios && state.scenarios.some(s => s.status !== 'pending'));
+        const hasActiveRow = (state.scenarios && state.scenarios.some(s => s.status === 'running'));
+        // Stuck = flags say running but no row is actually active (crashed coroutine)
+        const isStuck     = anyRunning && !hasActiveRow;
+
+        document.getElementById('btn-run-suite').classList.toggle('d-none',    state.running || isStuck);
+        document.getElementById('btn-stop-suite').classList.toggle('d-none',   !state.running || isStuck);
+        document.getElementById('btn-download-csv').classList.toggle('d-none',  anyRunning || !hasResults);
+        document.getElementById('btn-force-reset').classList.toggle('d-none',  !isStuck);
 
         renderSuiteTable(state);
 
@@ -1002,6 +1012,16 @@
         fetch('/api/test-suite/stop', { method: 'POST' })
             .then(r => r.json())
             .then(() => showToast('Stop signal sent – current scenario will finish before stopping', 'warning'));
+    }
+
+    function forceResetSuite() {
+        fetch('/api/test-suite/reset', { method: 'POST' })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) showToast('Suite flags cleared – you can now start a new run', 'success');
+                else showToast('Reset failed: ' + data.error, 'danger');
+            })
+            .catch(e => showToast('Error: ' + e, 'danger'));
     }
 
     function runSingleScenario(scenarioId) {

@@ -2197,6 +2197,7 @@ async def run_test_suite():
                     break
                 await asyncio.sleep(1)
 
+    # ── always reached, even if an exception short-circuits the loop ──────
     _test_suite_state['running']  = False
     _test_suite_running           = False
     socketio.emit('test_suite_update', _test_suite_state)
@@ -2208,6 +2209,10 @@ async def run_test_suite():
 def start_test_suite():
     """Start the full 36-scenario test suite (18 LIMIT + 18 MARKET) in the background."""
     global _test_suite_running
+    # Auto-clear stale flag: coroutine may have crashed without resetting it
+    if _test_suite_running and not _test_suite_state.get('running'):
+        logger.warning("[TEST SUITE] Clearing stale _test_suite_running flag")
+        _test_suite_running = False
     if _test_suite_running:
         return jsonify({'success': False, 'error': 'Suite already running'}), 400
     if not engine.spot_adapter:
@@ -2226,6 +2231,20 @@ def stop_test_suite():
     global _test_suite_cancel
     _test_suite_cancel = True
     return jsonify({'success': True, 'message': 'Stop signal sent'})
+
+
+@app.route('/api/test-suite/reset', methods=['POST'])
+def reset_test_suite():
+    """Force-clear all running flags (use when suite is stuck due to a crash)."""
+    global _test_suite_running, _single_running, _test_suite_cancel
+    _test_suite_running = False
+    _single_running     = False
+    _test_suite_cancel  = False
+    _test_suite_state['running']        = False
+    _test_suite_state['single_running'] = False
+    socketio.emit('test_suite_update', _test_suite_state)
+    logger.warning("[TEST SUITE] Force-reset by user")
+    return jsonify({'success': True, 'message': 'Suite state reset'})
 
 
 @app.route('/api/test-suite/status', methods=['GET'])
