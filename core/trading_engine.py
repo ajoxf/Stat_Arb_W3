@@ -258,12 +258,22 @@ class TradingEngine:
         self._log_startup_summary()
 
         # Clean up any orphan orders from previous sessions
-        await self._cleanup_orphan_orders()
+        try:
+            logger.info("Cleaning up orphan orders...")
+            await self._cleanup_orphan_orders()
+            logger.info("Orphan cleanup complete")
+        except Exception as e:
+            logger.error("Error during orphan cleanup (continuing): %s", e)
 
         # Apply pending leverage settings (deferred from set_adapters)
         if self._pending_leverage_setup:
             self._pending_leverage_setup = False
-            await self._apply_leverage_settings()
+            try:
+                logger.info("Applying leverage settings...")
+                await self._apply_leverage_settings()
+                logger.info("Leverage settings applied")
+            except Exception as e:
+                logger.error("Error applying leverage (continuing): %s", e)
 
         # Start WebSocket if configured
         if self._use_websocket and self.ws_manager:
@@ -280,7 +290,9 @@ class TradingEngine:
 
         # Start main loop (for REST polling or as a fallback)
         if not self._use_websocket:
+            logger.info("Creating REST polling task...")
             self._task = asyncio.create_task(self._main_loop())
+            logger.info("REST polling task created successfully")
 
     async def stop(self) -> None:
         """Stop the trading engine."""

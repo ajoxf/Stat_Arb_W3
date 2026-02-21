@@ -1881,10 +1881,19 @@ if __name__ == '__main__':
     logger.info("Dashboard available at: http://localhost:%d", port)
     logger.info("=" * 50)
 
+    # Suppress HTTP request logs right before starting (must be after Flask/SocketIO init)
+    logging.getLogger('werkzeug').setLevel(logging.ERROR)
+    logging.getLogger('engineio').setLevel(logging.ERROR)
+    logging.getLogger('socketio').setLevel(logging.ERROR)
+    # Also disable Flask's default request logging
+    app.logger.setLevel(logging.WARNING)
+    logging.getLogger('geventwebsocket.handler').setLevel(logging.ERROR)
+
     # Run Flask app with SocketIO
     socketio.run(
         app,
         host='0.0.0.0',
         port=port,
+        log_output=False,  # Disable SocketIO's default request logging
         debug=os.getenv('FLASK_DEBUG', 'false').lower() == 'true'
     )
