@@ -1865,7 +1865,8 @@ _test_suite_state: Dict[str, Any] = {
     'single_running': False,
 }
 
-# 18 scenarios: 6 order-types × (fill-test, fill-test, cancel-test)
+# 36 standard scenarios: 6 order-types × (fill-test, fill-test, cancel-test) × (LIMIT + MARKET)
+# + 4 partial-fill recovery scenarios (always MARKET – simulates one leg filling, other failing)
 _SUITE_SCENARIOS = [
     {'id': '1a', 'label': 'BUY_SPOT #1',         'order_type': 'BUY_SPOT',      'cancel_test': False},
     {'id': '1b', 'label': 'BUY_SPOT #2',         'order_type': 'BUY_SPOT',      'cancel_test': False},
@@ -1904,6 +1905,21 @@ _SUITE_SCENARIOS = [
     {'id': 'm6a', 'label': 'MKT SHORT_SPREAD #1',           'order_type': 'SHORT_SPREAD',  'cancel_test': False, 'forced_mode': 'MARKET'},
     {'id': 'm6b', 'label': 'MKT SHORT_SPREAD #2',           'order_type': 'SHORT_SPREAD',  'cancel_test': False, 'forced_mode': 'MARKET'},
     {'id': 'm6c', 'label': 'MKT SHORT_SPREAD #3 (quick-close)', 'order_type': 'SHORT_SPREAD', 'cancel_test': True, 'forced_mode': 'MARKET'},
+    # ── Partial-fill / leg-failure recovery (4 scenarios, always MARKET) ──────────────────────
+    # Each test: place only the named leg at MARKET (fills), skip the other (simulated failure),
+    # then immediately market-close the filled leg as the recovery action.
+    {'id': 'pf-1', 'label': 'LONG_SPREAD partial: spot fills, futures fails → market-close spot',
+     'order_type': 'LONG_SPREAD',  'cancel_test': False, 'forced_mode': 'MARKET',
+     'partial_fail_test': True, 'filled_leg': 'SPOT'},
+    {'id': 'pf-2', 'label': 'LONG_SPREAD partial: futures fills, spot fails → market-close futures',
+     'order_type': 'LONG_SPREAD',  'cancel_test': False, 'forced_mode': 'MARKET',
+     'partial_fail_test': True, 'filled_leg': 'FUTURES'},
+    {'id': 'pf-3', 'label': 'SHORT_SPREAD partial: spot fills, futures fails → market-close spot',
+     'order_type': 'SHORT_SPREAD', 'cancel_test': False, 'forced_mode': 'MARKET',
+     'partial_fail_test': True, 'filled_leg': 'SPOT'},
+    {'id': 'pf-4', 'label': 'SHORT_SPREAD partial: futures fills, spot fails → market-close futures',
+     'order_type': 'SHORT_SPREAD', 'cancel_test': False, 'forced_mode': 'MARKET',
+     'partial_fail_test': True, 'filled_leg': 'FUTURES'},
 ]
 
 
@@ -2066,9 +2082,110 @@ async def _suite_close_position(pos_id: str):
     return False, result.error
 
 
+async def _suite_partial_fill_test(order_type: str, quantity: float, filled_leg: str) -> tuple[bool, str]:
+    """
+    Simulate a partial spread fill: place ONLY the named leg at MARKET (fills immediately),
+    skip the second leg (simulated failure), then immediately market-close the filled leg
+    as the recovery action.  Verifies the emergency close path works and times each step.
+
+    Returns (success: bool, detail_str: str).
+    detail_str is always self-explanatory — times each sub-step on pass, explains error on fail.
+    """
+    # LONG_SPREAD: buy spot + sell futures.  SHORT_SPREAD: sell spot + buy futures.
+    if order_type == "LONG_SPREAD":
+        spot_side, futures_side = "BUY", "SELL"
+    else:  # SHORT_SPREAD
+        spot_side, futures_side = "SELL", "BUY"
+
+    is_spot_filled = (filled_leg == "SPOT")
+    open_market    = "SPOT"    if is_spot_filled else "FUTURES"
+    open_side      = spot_side if is_spot_filled else futures_side
+    fail_market    = "FUTURES" if is_spot_filled else "SPOT"
+    fail_side      = futures_side if is_spot_filled else spot_side
+
+    adapter  = engine.spot_adapter    if is_spot_filled else engine.futures_adapter
+    symbol   = config.spot_symbol     if is_spot_filled else config.futures_symbol
+    tick     = engine.spot_tick       if is_spot_filled else engine.futures_tick
+
+    # pos_side is only used for futures legs
+    pos_side: Optional[str] = None
+    if not is_spot_filled:
+        pos_side = "long" if futures_side == "BUY" else "short"
+
+    if not adapter or not tick:
+        return False, f"No {open_market} adapter or price data"
+
+    t_total_start = datetime.now(timezone.utc)
+
+    # ── Step 1: Open the filled leg at MARKET ─────────────────────────────────
+    # Cross-margin SPOT MARKET BUY requires sz in USDT notional (not BTC qty).
+    notional = round(quantity * tick.mid, 2) if (is_spot_filled and open_side == "BUY") else None
+
+    t_open_start = datetime.now(timezone.utc)
+    open_result = await adapter.place_order(
+        symbol=symbol, side=open_side, order_type="MARKET",
+        quantity=quantity, pos_side=pos_side, notional_usdt=notional,
+    )
+    t_open_ms = int((datetime.now(timezone.utc) - t_open_start).total_seconds() * 1000)
+
+    if not open_result.success:
+        return False, (
+            f"Leg 1 ({open_market} {open_side} MARKET) FAILED in {t_open_ms}ms: {open_result.error}  |  "
+            f"Leg 2 ({fail_market} {fail_side}) never placed (leg 1 failed first)"
+        )
+
+    oid1_short = (open_result.order_id or "?")[:16]
+
+    # ── Step 2: Wait 1 s then fetch actual filled qty ─────────────────────────
+    await asyncio.sleep(1)
+
+    filled_qty = quantity
+    fill_price = tick.mid
+    if open_result.order_id:
+        status = await adapter.get_order_status(symbol, open_result.order_id)
+        if status:
+            filled_qty = status.get("filled_qty") or quantity
+            fill_price = status.get("filled_price") or tick.mid
+
+    detail = (
+        f"Leg 1 ({open_market} {open_side}) filled {filled_qty:.6f} BTC "
+        f"@ ${fill_price:.2f} in {t_open_ms}ms [oid={oid1_short}…]  |  "
+        f"Leg 2 ({fail_market} {fail_side}) SIMULATED FAILURE — not placed"
+    )
+
+    # ── Step 3: Recovery — market-close the filled leg immediately ────────────
+    close_side     = "SELL" if open_side == "BUY" else "BUY"
+    close_tick     = engine.spot_tick if is_spot_filled else engine.futures_tick
+    # Cross-margin SPOT MARKET BUY (closing a short spot) needs sz in USDT.
+    close_notional = round(filled_qty * close_tick.mid, 2) if (is_spot_filled and close_side == "BUY") else None
+
+    t_close_start = datetime.now(timezone.utc)
+    close_result = await adapter.place_order(
+        symbol=symbol, side=close_side, order_type="MARKET",
+        quantity=filled_qty, pos_side=pos_side,
+        reduce_only=(not is_spot_filled),
+        notional_usdt=close_notional,
+    )
+    t_close_ms = int((datetime.now(timezone.utc) - t_close_start).total_seconds() * 1000)
+    t_total_ms = int((datetime.now(timezone.utc) - t_total_start).total_seconds() * 1000)
+
+    if not close_result.success:
+        return False, (
+            detail + f"  |  Recovery ({open_market} {close_side} MARKET) FAILED in {t_close_ms}ms: "
+            f"{close_result.error}  — ORPHAN RISK: filled leg not closed (taker cost unavoidable)"
+        )
+
+    oid2_short = (close_result.order_id or "?")[:16]
+    detail += (
+        f"  |  Recovery ({open_market} {close_side} MARKET) closed in {t_close_ms}ms "
+        f"[oid={oid2_short}…]  |  Total: {t_total_ms}ms"
+    )
+    return True, detail
+
+
 async def run_test_suite():
     """
-    Full 36-scenario test suite (18 LIMIT + 18 MARKET).
+    Full 40-scenario test suite (18 LIMIT + 18 MARKET + 4 partial-fill recovery).
     Runs entirely in the async event loop so it can await adapter calls without
     blocking Flask.  Emits 'test_suite_update' WebSocket events after every
     state change so the UI stays in sync.
@@ -2130,6 +2247,36 @@ async def run_test_suite():
         scen_mode    = scenario.get('forced_mode') or order_mode  # per-scenario override
         scenario['mode'] = scen_mode  # ensure Mode column is always populated
         inter_pause  = 5 if scen_mode == 'MARKET' else 20
+
+        # ── PARTIAL-FILL RECOVERY TEST ─────────────────────────────────────
+        # Places one leg at MARKET (fills), skips the other (simulated failure),
+        # then immediately market-closes the filled leg — testing the recovery path.
+        if scenario.get('partial_fail_test'):
+            filled_leg = scenario['filled_leg']
+            scenario['detail'] = f"opening {filled_leg} leg at MARKET…"
+            socketio.emit('test_suite_update', _test_suite_state)
+            try:
+                ok, detail = await asyncio.wait_for(
+                    _suite_partial_fill_test(order_type, quantity, filled_leg),
+                    timeout=60.0,
+                )
+            except asyncio.TimeoutError:
+                ok, detail = False, "partial-fill test timed out (>60 s) — exchange unresponsive"
+            except Exception as exc:
+                ok, detail = False, f"unexpected error: {exc}"
+            scenario['status'] = 'pass' if ok else 'fail'
+            scenario['detail'] = detail
+            _test_suite_state['pass' if ok else 'fail'] += 1
+            socketio.emit('test_suite_update', _test_suite_state)
+            logger.info("[TEST SUITE] %s  %s  %s", scenario['label'], scenario['status'].upper(), detail)
+            if idx < len(scenarios) - 1 and not _test_suite_cancel:
+                scenario['detail'] += f"  |  cooling {inter_pause} s…"
+                socketio.emit('test_suite_update', _test_suite_state)
+                for _ in range(inter_pause):
+                    if _test_suite_cancel:
+                        break
+                    await asyncio.sleep(1)
+            continue
 
         # ── OPEN ──────────────────────────────────────────────────────────
         try:

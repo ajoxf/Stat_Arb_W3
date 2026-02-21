@@ -379,7 +379,8 @@
                     <div class="mt-3">
                         <h6 class="text-secondary mb-1"><i class="bi bi-clipboard2-check me-2"></i>Full Order Test Suite</h6>
                         <small class="text-muted d-block mb-3">
-                            36 scenarios: 18 LIMIT (6 order types × 3 attempts) + 18 MARKET (same, forced).
+                            40 scenarios: 18 LIMIT (6 order types × 3 attempts) + 18 MARKET (same, forced)
+                            + 4 partial-fill recovery (one leg fills, other fails → market-close the filled leg).
                             Click <strong>Run Full Test Suite</strong> to run all in sequence, or hit
                             <strong>Run</strong> next to any row to execute a single scenario on demand.
                             LIMIT scenarios are spaced ~20 s apart; MARKET ~5 s apart.
@@ -406,7 +407,7 @@
                             <!-- Header row: counters + progress bar -->
                             <div class="d-flex justify-content-between align-items-center mb-2">
                                 <div class="d-flex gap-3">
-                                    <span class="badge bg-secondary fs-6" id="suite-progress-badge">0 / 36</span>
+                                    <span class="badge bg-secondary fs-6" id="suite-progress-badge">0 / 40</span>
                                     <span class="badge bg-success fs-6" id="suite-pass-badge">0 passed</span>
                                     <span class="badge bg-danger  fs-6" id="suite-fail-badge">0 failed</span>
                                 </div>
@@ -961,7 +962,7 @@
 
     function applySuiteState(state) {
         if (!state) return;
-        const total      = state.total || 36;
+        const total      = state.total || 40;
         const current    = state.current || 0;
         const pct        = Math.round((current / total) * 100);
         const anyRunning = state.running || state.single_running;
