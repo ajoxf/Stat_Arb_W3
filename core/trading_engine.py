@@ -94,6 +94,14 @@ class TradingEngine:
         self._position_verify_interval = 60  # seconds between checks
         self._position_mismatch: Optional[Dict[str, Any]] = None
 
+        # Order execution tracking for pattern detection
+        self._spot_order_attempts = 0
+        self._spot_order_failures = 0
+        self._futures_order_attempts = 0
+        self._futures_order_failures = 0
+        self._last_order_stats_log: Optional[datetime] = None
+        self._order_stats_log_interval = 300  # Log stats every 5 minutes
+
         # Tick interval in seconds
         self.tick_interval = 0.5  # 500ms
 
@@ -244,6 +252,9 @@ class TradingEngine:
 
         logger.info("Starting trading engine for %s (websocket=%s)",
                     self.config.asset, self._use_websocket)
+
+        # Log comprehensive startup summary for monitoring
+        self._log_startup_summary()
 
         # Clean up any orphan orders from previous sessions
         await self._cleanup_orphan_orders()
@@ -802,7 +813,7 @@ class TradingEngine:
                         # For now, we'll warn but continue
                         return True
                 else:
-                    logger.debug("Leverage verified: %dx", self.config.futures_leverage)
+                    logger.info("✅ Leverage verified on exchange: %dx matches config", self.config.futures_leverage)
             return True
         except Exception as e:
             logger.error("Error verifying leverage: %s", e)
@@ -821,6 +832,10 @@ class TradingEngine:
         # Verify leverage settings before trading
         await self._verify_leverage_settings()
 
+        # Track order attempts
+        self._spot_order_attempts += 1
+        self._futures_order_attempts += 1
+
         try:
             spread_order = await self.order_executor.execute_entry(
                 position_type=signal.signal_type,
@@ -835,11 +850,34 @@ class TradingEngine:
                 # Update actual fill prices
                 trade.entry_spot_price = spread_order.spot_leg.filled_price
                 trade.entry_futures_price = spread_order.futures_leg.filled_price
-                logger.info("Entry orders executed: mode=%s, spot_id=%s, futures_id=%s",
+                logger.info("ENTRY SUCCESS: mode=%s, spot_id=%s @ $%.2f, futures_id=%s @ $%.2f",
                             self.config.order_execution_mode,
-                            trade.spot_order_id, trade.futures_order_id)
+                            trade.spot_order_id, trade.entry_spot_price,
+                            trade.futures_order_id, trade.entry_futures_price)
+                # Log periodic stats
+                self._log_order_stats()
                 return True
             else:
+                # Track which leg failed for pattern detection
+                if spread_order:
+                    from core.order_executor import LegStatus
+                    failed_states = (LegStatus.FAILED, LegStatus.CANCELLED)
+                    spot_failed = spread_order.spot_leg.status in failed_states
+                    futures_failed = spread_order.futures_leg.status in failed_states
+
+                    if spot_failed:
+                        self._spot_order_failures += 1
+                        logger.error("SPOT LEG FAILED: status=%s, error=%s",
+                                    spread_order.spot_leg.status.name,
+                                    getattr(spread_order.spot_leg, 'error', 'unknown'))
+                    if futures_failed:
+                        self._futures_order_failures += 1
+                        logger.error("FUTURES LEG FAILED: status=%s",
+                                    spread_order.futures_leg.status.name)
+
+                    # CRITICAL: Detect spot-only failure pattern
+                    self._check_spot_failure_pattern()
+
                 error = "Spread order failed or incomplete"
                 if spread_order and spread_order.has_partial_fill:
                     error = "Spread order had partial fill - leg risk handled"
@@ -851,7 +889,79 @@ class TradingEngine:
             error = f"Error executing entry orders: {str(e)}"
             logger.exception(error)
             self.state.error = error
+            self._spot_order_failures += 1
+            self._futures_order_failures += 1
             return False
+
+    def _check_spot_failure_pattern(self) -> None:
+        """
+        Detect if spot orders are failing repeatedly while futures succeed.
+        This is a CRITICAL pattern that indicates a systematic issue.
+        """
+        if self._spot_order_attempts < 3:
+            return  # Need at least 3 attempts to detect pattern
+
+        spot_fail_rate = self._spot_order_failures / self._spot_order_attempts
+        futures_fail_rate = self._futures_order_failures / self._futures_order_attempts if self._futures_order_attempts > 0 else 0
+
+        # Pattern: Spot failing >50% while futures failing <20%
+        if spot_fail_rate > 0.5 and futures_fail_rate < 0.2:
+            logger.critical(
+                "🚨 SPOT-ONLY FAILURE PATTERN DETECTED! "
+                "Spot: %d/%d failed (%.0f%%), Futures: %d/%d failed (%.0f%%). "
+                "Check spot adapter, symbol config, or exchange permissions.",
+                self._spot_order_failures, self._spot_order_attempts, spot_fail_rate * 100,
+                self._futures_order_failures, self._futures_order_attempts, futures_fail_rate * 100
+            )
+            self.state.error = f"CRITICAL: Spot orders failing {spot_fail_rate*100:.0f}% of the time"
+
+    def _log_order_stats(self) -> None:
+        """Log order execution statistics periodically for monitoring."""
+        now = datetime.utcnow()
+        if self._last_order_stats_log and (now - self._last_order_stats_log).total_seconds() < self._order_stats_log_interval:
+            return
+
+        self._last_order_stats_log = now
+        logger.info(
+            "📊 ORDER STATS: Spot %d/%d (%.0f%% success), Futures %d/%d (%.0f%% success)",
+            self._spot_order_attempts - self._spot_order_failures,
+            self._spot_order_attempts,
+            (1 - self._spot_order_failures / self._spot_order_attempts) * 100 if self._spot_order_attempts > 0 else 100,
+            self._futures_order_attempts - self._futures_order_failures,
+            self._futures_order_attempts,
+            (1 - self._futures_order_failures / self._futures_order_attempts) * 100 if self._futures_order_attempts > 0 else 100
+        )
+
+    def _log_startup_summary(self) -> None:
+        """Log comprehensive startup summary for monitoring and debugging."""
+        cfg = self.config
+        logger.info("=" * 60)
+        logger.info("🚀 TRADING ENGINE STARTUP SUMMARY")
+        logger.info("=" * 60)
+        logger.info("SYMBOLS: spot=%s, futures=%s", cfg.spot_symbol, cfg.futures_symbol)
+        logger.info("MODE: paper=%s, algo=%s", cfg.paper_trading, cfg.algo_enabled)
+        logger.info("POSITION SIZE: $%s (max: $%s)", cfg.position_size_usd, cfg.max_position_size_usd)
+        logger.info("LEVERAGE: spot=%dx, futures=%dx", cfg.spot_leverage, cfg.futures_leverage)
+        logger.info("FEES (bps): spot_maker=%.1f, spot_taker=%.1f, fut_maker=%.1f, fut_taker=%.1f",
+                   getattr(cfg, 'spot_maker_fee_bps', 8),
+                   getattr(cfg, 'spot_taker_fee_bps', 10),
+                   getattr(cfg, 'futures_maker_fee_bps', 2),
+                   getattr(cfg, 'futures_taker_fee_bps', 5))
+        logger.info("EXECUTION: entry=%s, exit=%s",
+                   getattr(cfg, 'entry_execution_mode', 'LIMIT'),
+                   getattr(cfg, 'exit_execution_mode', 'MARKET'))
+        logger.info("TIMEOUTS: limit_order=%ds, orphan_recovery=%ds, entry_cooldown=%ds",
+                   cfg.limit_order_timeout_sec,
+                   getattr(cfg, 'orphan_recovery_timeout_sec', 60),
+                   getattr(cfg, 'entry_cooldown_seconds', 60))
+        logger.info("SIGNALS: z_entry=%.2f, z_exit=%.2f, stop_loss=%.2f",
+                   cfg.z_score_entry_threshold,
+                   cfg.z_score_exit_threshold,
+                   cfg.stop_loss_z_score)
+        logger.info("FILTERS: hurst=%s (threshold=%.2f), std=%s (min=%.1fx)",
+                   cfg.hurst_enabled, cfg.hurst_threshold,
+                   cfg.std_filter_enabled, cfg.min_std_multiple)
+        logger.info("=" * 60)
 
     async def _execute_exit_orders(self, trade: Trade, signal: Signal) -> bool:
         """Execute exit orders on exchanges using the order executor."""

@@ -330,9 +330,13 @@ class OrderExecutor:
         futures_tick: MarketTick,
     ) -> SpreadOrder:
         """Execute spread using pegged limit orders."""
-        logger.info("Executing spread with LIMIT orders: %s %s",
+        timeout_sec = self.config.limit_order_timeout_sec
+        logger.info("LIMIT EXECUTION START: %s %s, timeout=%ds, spot_qty=%.6f, fut_qty=%.6f",
                     spread_order.position_type,
-                    "ENTRY" if spread_order.is_entry else "EXIT")
+                    "ENTRY" if spread_order.is_entry else "EXIT",
+                    timeout_sec,
+                    spread_order.spot_leg.quantity,
+                    spread_order.futures_leg.quantity)
 
         # Calculate initial prices
         self._update_target_prices(spread_order, spot_tick, futures_tick)
