@@ -2039,6 +2039,22 @@ async def _suite_close_position(pos_id: str):
             filled_qty = status.get("filled_qty", 0)
             if state in ("live", "partially_filled") or filled_qty == 0:
                 cancelled = await adapter.cancel_order(symbol, original_oid)
+                # If a partial fill occurred, the already-filled qty is still open on
+                # the exchange.  Market-close it so we don't leave an orphan position.
+                if filled_qty and filled_qty > 0 and state == "partially_filled":
+                    close_tick = engine.spot_tick if market_type == "SPOT" else engine.futures_tick
+                    close_notional = round(filled_qty * close_tick.mid, 2) if (
+                        market_type == "SPOT" and close_side == "BUY"
+                    ) else None
+                    await adapter.place_order(
+                        symbol=symbol, side=close_side, order_type="MARKET",
+                        quantity=filled_qty,
+                        pos_side=stored_pos_side,
+                        reduce_only=(market_type == "FUTURES"),
+                        notional_usdt=close_notional,
+                    )
+                    del test_positions[pos_id]
+                    return True, f"partial fill: cancelled remaining, market-closed {filled_qty:.6f} BTC{elapsed_str}"
                 del test_positions[pos_id]
                 return True, f"cancelled (was pending){elapsed_str}" if cancelled else f"cancel-failed{elapsed_str}"
             elif state == "filled":
