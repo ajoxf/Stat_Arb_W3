@@ -2093,6 +2093,7 @@ async def run_test_suite():
         order_type   = scenario['order_type']
         cancel_test  = scenario['cancel_test']
         scen_mode    = scenario.get('forced_mode') or order_mode  # per-scenario override
+        scenario['mode'] = scen_mode  # ensure Mode column is always populated
         inter_pause  = 5 if scen_mode == 'MARKET' else 20
 
         # ── OPEN ──────────────────────────────────────────────────────────
@@ -2226,7 +2227,7 @@ def get_test_suite_status():
     state = dict(_test_suite_state)
     if not state.get('scenarios'):
         state['scenarios'] = [
-            {**s, 'status': 'pending', 'detail': '', 'mode': s.get('forced_mode', '')}
+            {**s, 'status': 'pending', 'detail': '', 'mode': s.get('forced_mode', config.entry_execution_mode)}
             for s in _SUITE_SCENARIOS
         ]
     return jsonify(state)
@@ -2252,7 +2253,7 @@ async def run_single_scenario_task(scenario_id: str):
         # Ensure state has a scenarios list so the UI row can be updated
         if not _test_suite_state.get('scenarios'):
             _test_suite_state['scenarios'] = [
-                {**s, 'status': 'pending', 'detail': '', 'mode': s.get('forced_mode', '')}
+                {**s, 'status': 'pending', 'detail': '', 'mode': s.get('forced_mode', config.entry_execution_mode)}
                 for s in _SUITE_SCENARIOS
             ]
 
@@ -2283,6 +2284,7 @@ async def run_single_scenario_task(scenario_id: str):
         order_mode    = config.entry_execution_mode
         limit_timeout = config.limit_order_timeout_sec
         scen_mode     = scenario_def.get('forced_mode') or order_mode
+        scenario['mode'] = scen_mode  # ensure Mode column is always populated
         cancel_test   = scenario_def.get('cancel_test', False)
 
         # Mark running
