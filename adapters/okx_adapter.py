@@ -224,11 +224,13 @@ class OKXAdapter(ExchangeAdapter):
             inst_type = "SWAP" if "-SWAP" in symbol else "SPOT"
             td_mode = "cross" if inst_type == "SWAP" else "cash"
 
-            # For SWAP, convert quantity to contracts
+            # Get symbol info for size validation and formatting
+            symbol_info = await self.get_symbol_info(symbol)
             sz = quantity
+            sz_str = ""
+
             if inst_type == "SWAP":
-                # Get contract value (e.g., 0.01 BTC per contract for BTC-USDT-SWAP)
-                symbol_info = await self.get_symbol_info(symbol)
+                # For SWAP: convert quantity to contracts
                 if symbol_info:
                     ct_val = symbol_info.get("contract_val", 0.01)
                     # Convert BTC quantity to number of contracts
@@ -237,6 +239,35 @@ class OKXAdapter(ExchangeAdapter):
                     sz = max(1, round(contracts))
                     logger.info("SWAP order: %.6f %s = %d contracts (ctVal=%.4f)",
                                quantity, symbol.split("-")[0], sz, ct_val)
+                sz_str = str(int(sz))
+            else:
+                # For SPOT: validate and format quantity properly
+                if symbol_info:
+                    min_sz = symbol_info.get("min_qty", 0)
+                    lot_sz = symbol_info.get("lot_sz", 0.00000001)
+
+                    # Calculate decimal places from lot_sz
+                    lot_str = str(lot_sz)
+                    if "." in lot_str:
+                        decimals = len(lot_str.split(".")[1].rstrip("0")) or 8
+                    else:
+                        decimals = 0
+
+                    # Round to lot_sz precision
+                    sz = round(quantity, decimals)
+
+                    # Validate minimum
+                    if sz < min_sz:
+                        logger.error("SPOT order size %.8f below minimum %.8f for %s",
+                                    sz, min_sz, symbol)
+                        return OrderResult(success=False, error=f"Size {sz} below minimum {min_sz}")
+
+                    logger.info("SPOT order: qty=%.8f (minSz=%.8f, lotSz=%.8f, decimals=%d)",
+                               sz, min_sz, lot_sz, decimals)
+
+                # Format size string properly (avoid floating point representation issues)
+                # Use format with enough precision, then strip trailing zeros
+                sz_str = f"{sz:.8f}".rstrip("0").rstrip(".")
 
             # OKX order types: market, limit, post_only, fok, ioc
             # post_only = limit order that's cancelled if it would fill immediately (ensures maker)
@@ -252,11 +283,23 @@ class OKXAdapter(ExchangeAdapter):
                 "tdMode": td_mode,
                 "side": side.lower(),
                 "ordType": okx_ord_type,
-                "sz": str(int(sz) if inst_type == "SWAP" else sz),
+                "sz": sz_str,
             }
 
             if order_type in ("LIMIT", "POST_ONLY") and price:
-                order_data["px"] = str(round(price, 2))  # Round price to 2 decimals
+                # Use tick_sz for proper price precision (default 2 decimals for BTC)
+                if symbol_info:
+                    tick_sz = symbol_info.get("tick_sz", 0.01)
+                    tick_str = str(tick_sz)
+                    if "." in tick_str:
+                        price_decimals = len(tick_str.split(".")[1].rstrip("0")) or 2
+                    else:
+                        price_decimals = 0
+                    rounded_price = round(price, price_decimals)
+                    px_str = f"{rounded_price:.{price_decimals}f}"
+                else:
+                    px_str = str(round(price, 2))
+                order_data["px"] = px_str
 
             if reduce_only and inst_type == "SWAP":
                 order_data["reduceOnly"] = True
@@ -680,11 +723,15 @@ class OKXAdapter(ExchangeAdapter):
 
             if result and result.get("code") == "0" and result.get("data"):
                 data = result["data"][0]
+                lot_sz_str = data.get("lotSz", "0.00000001")
+                tick_sz_str = data.get("tickSz", "0.01")
                 return {
                     "symbol": symbol,
                     "min_qty": float(data.get("minSz", 0)),
-                    "qty_precision": int(data.get("lotSz", "0").find("1") - 1) if "." in data.get("lotSz", "1") else 0,
-                    "price_precision": int(data.get("tickSz", "0").find("1") - 1) if "." in data.get("tickSz", "1") else 0,
+                    "lot_sz": float(lot_sz_str),  # Minimum order increment
+                    "tick_sz": float(tick_sz_str),  # Price tick size
+                    "qty_precision": int(lot_sz_str.find("1") - 1) if "." in lot_sz_str else 0,
+                    "price_precision": int(tick_sz_str.find("1") - 1) if "." in tick_sz_str else 0,
                     "contract_val": float(data.get("ctVal", 1)),
                 }
 
