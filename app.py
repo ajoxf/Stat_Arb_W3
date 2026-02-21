@@ -1881,36 +1881,33 @@ def ensure_engine_started():
 
 
 if __name__ == '__main__':
-    # Only start engine in the main process (not the reloader child)
-    # WERKZEUG_RUN_MAIN is set in the child process when using debug mode
-    is_main_process = os.environ.get('WERKZEUG_RUN_MAIN') != 'true'
-    use_debug = os.getenv('FLASK_DEBUG', 'false').lower() == 'true'
+    # ALWAYS start engine before Flask starts serving requests
+    # This ensures spread history is loaded and engine is ready
+    start_engine_loop()
 
-    # In debug mode with reloader, only start engine in child process
-    # In non-debug mode, start engine in main process
-    if not use_debug or os.environ.get('WERKZEUG_RUN_MAIN') == 'true':
-        start_engine_loop()
+    # Wait for engine to fully initialize (including API calls)
+    logger.info("Waiting for engine initialization to complete...")
+    time.sleep(1.0)
 
     # Log the server address
     port = 5000
-    if is_main_process or not use_debug:
-        logger.info("=" * 50)
-        logger.info("Dashboard available at: http://localhost:%d", port)
-        logger.info("=" * 50)
+    logger.info("=" * 50)
+    logger.info("Dashboard available at: http://localhost:%d", port)
+    logger.info("=" * 50)
 
-    # Suppress HTTP request logs right before starting
+    # Suppress HTTP request logs
     logging.getLogger('werkzeug').setLevel(logging.ERROR)
     logging.getLogger('engineio').setLevel(logging.ERROR)
     logging.getLogger('socketio').setLevel(logging.ERROR)
     app.logger.setLevel(logging.WARNING)
 
     # Run Flask app with SocketIO (threading mode)
-    # use_reloader=False prevents duplicate processes
+    # use_reloader=False and debug=False for stable single-process operation
     socketio.run(
         app,
         host='0.0.0.0',
         port=port,
-        debug=use_debug,
-        use_reloader=False,  # Disable reloader to prevent duplicate engines
+        debug=False,  # Disable debug mode for production stability
+        use_reloader=False,
         allow_unsafe_werkzeug=True
     )
