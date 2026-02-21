@@ -451,9 +451,18 @@ class OrderExecutor:
         )
 
     async def _place_limit_orders(self, spread_order: SpreadOrder) -> None:
-        """Place initial limit orders for both legs using POST_ONLY for maker fills."""
-        # Use POST_ONLY to ensure maker execution (order rejected if it would cross spread)
-        order_type = "POST_ONLY"
+        """
+        Place initial limit orders for both legs.
+
+        Uses regular LIMIT orders with passive prices (at/near best bid/ask).
+        This achieves maker fills without the POST_ONLY cancellation risk in tight spreads.
+
+        Note: POST_ONLY was causing issues - OKX cancels immediately if price would
+        cross the spread, which happens often in tight BTC markets.
+        """
+        # Use regular LIMIT orders - prices are already calculated to be passive
+        # (at best bid for BUY, best ask for SELL) which should achieve maker fills
+        order_type = "LIMIT"
 
         # Place spot limit order first
         spot_result = await self.spot_adapter.place_order(
@@ -468,7 +477,7 @@ class OrderExecutor:
         if spot_result.success:
             spread_order.spot_leg.order_id = spot_result.order_id
             spread_order.spot_leg.status = LegStatus.OPEN
-            logger.info("Placed spot POST_ONLY order: %s @ %.2f",
+            logger.info("Placed spot LIMIT order: %s @ %.2f",
                        spread_order.spot_leg.side, spread_order.spot_leg.target_price)
         else:
             spread_order.spot_leg.status = LegStatus.FAILED
@@ -489,7 +498,7 @@ class OrderExecutor:
         if futures_result.success:
             spread_order.futures_leg.order_id = futures_result.order_id
             spread_order.futures_leg.status = LegStatus.OPEN
-            logger.info("Placed futures POST_ONLY order: %s @ %.2f",
+            logger.info("Placed futures LIMIT order: %s @ %.2f",
                        spread_order.futures_leg.side, spread_order.futures_leg.target_price)
         else:
             spread_order.futures_leg.status = LegStatus.FAILED
@@ -506,9 +515,8 @@ class OrderExecutor:
                 logger.error("Failed to cancel spot after futures failure: %s", e)
             return
 
-        # CRITICAL: Immediately check if either order was cancelled by exchange (POST_ONLY rejection)
-        # OKX may accept the order but immediately cancel it if it would cross the spread
-        await asyncio.sleep(0.1)  # Brief delay for exchange to process
+        # Brief delay then check status (LIMIT orders won't auto-cancel like POST_ONLY)
+        await asyncio.sleep(0.1)
         await self._check_order_status(spread_order)
 
     async def _amend_limit_orders(self, spread_order: SpreadOrder) -> None:
@@ -531,7 +539,7 @@ class OrderExecutor:
                     spread_order.spot_leg.filled_price = status["filled_price"]
                     logger.info("Spot leg already filled during amend check")
                 elif status and status["state"] in ("live", "partially_filled"):
-                    # Cancel and replace with POST_ONLY order
+                    # Cancel and replace with LIMIT order
                     cancel_success = await self.spot_adapter.cancel_order(
                         spread_order.spot_leg.symbol,
                         spread_order.spot_leg.order_id,
@@ -542,7 +550,7 @@ class OrderExecutor:
                             result = await self.spot_adapter.place_order(
                                 symbol=spread_order.spot_leg.symbol,
                                 side=spread_order.spot_leg.side,
-                                order_type="POST_ONLY",  # Use POST_ONLY for maker fees
+                                order_type="LIMIT",  # Regular LIMIT - passive price achieves maker
                                 quantity=remaining_qty,
                                 price=spread_order.spot_leg.target_price,
                                 pos_side=spread_order.spot_leg.pos_side,
@@ -573,7 +581,7 @@ class OrderExecutor:
                     spread_order.futures_leg.filled_price = status["filled_price"]
                     logger.info("Futures leg already filled during amend check")
                 elif status and status["state"] in ("live", "partially_filled"):
-                    # Cancel and replace with POST_ONLY order
+                    # Cancel and replace with LIMIT order
                     cancel_success = await self.futures_adapter.cancel_order(
                         spread_order.futures_leg.symbol,
                         spread_order.futures_leg.order_id,
@@ -584,7 +592,7 @@ class OrderExecutor:
                             result = await self.futures_adapter.place_order(
                                 symbol=spread_order.futures_leg.symbol,
                                 side=spread_order.futures_leg.side,
-                                order_type="POST_ONLY",  # Use POST_ONLY for maker fees
+                                order_type="LIMIT",  # Regular LIMIT - passive price achieves maker
                                 quantity=remaining_qty,
                                 price=spread_order.futures_leg.target_price,
                                 pos_side=spread_order.futures_leg.pos_side,
