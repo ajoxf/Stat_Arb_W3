@@ -79,6 +79,9 @@ class DatabaseManager:
                     taker_fee_bps REAL DEFAULT 5.0,
                     maker_fee_bps REAL DEFAULT 2.0,
                     estimated_costs_bps REAL DEFAULT 10.0,
+                    entry_cooldown_seconds INTEGER DEFAULT 60,
+                    verify_exchange_position INTEGER DEFAULT 1,
+                    orphan_recovery_timeout_sec INTEGER DEFAULT 60,
                     CHECK (id = 1)
                 )
             """)
@@ -211,6 +214,12 @@ class DatabaseManager:
                 cursor.execute("ALTER TABLE trading_config ADD COLUMN spot_leverage INTEGER DEFAULT 1")
             if 'futures_leverage' not in existing_columns:
                 cursor.execute("ALTER TABLE trading_config ADD COLUMN futures_leverage INTEGER DEFAULT 1")
+            if 'entry_cooldown_seconds' not in existing_columns:
+                cursor.execute("ALTER TABLE trading_config ADD COLUMN entry_cooldown_seconds INTEGER DEFAULT 60")
+            if 'verify_exchange_position' not in existing_columns:
+                cursor.execute("ALTER TABLE trading_config ADD COLUMN verify_exchange_position INTEGER DEFAULT 1")
+            if 'orphan_recovery_timeout_sec' not in existing_columns:
+                cursor.execute("ALTER TABLE trading_config ADD COLUMN orphan_recovery_timeout_sec INTEGER DEFAULT 60")
 
             logger.info("Database initialized: %s", self.db_path)
 
@@ -249,6 +258,9 @@ class DatabaseManager:
                     taker_fee_bps=row["taker_fee_bps"] if "taker_fee_bps" in row.keys() else 5.0,
                     maker_fee_bps=row["maker_fee_bps"] if "maker_fee_bps" in row.keys() else 2.0,
                     estimated_costs_bps=row["estimated_costs_bps"],
+                    entry_cooldown_seconds=row["entry_cooldown_seconds"] if "entry_cooldown_seconds" in row.keys() else 60,
+                    verify_exchange_position=bool(row["verify_exchange_position"]) if "verify_exchange_position" in row.keys() else True,
+                    orphan_recovery_timeout_sec=row["orphan_recovery_timeout_sec"] if "orphan_recovery_timeout_sec" in row.keys() else 60,
                 )
 
             return TradingConfig()
@@ -282,7 +294,10 @@ class DatabaseManager:
                     limit_order_price_offset_bps = ?,
                     taker_fee_bps = ?,
                     maker_fee_bps = ?,
-                    estimated_costs_bps = ?
+                    estimated_costs_bps = ?,
+                    entry_cooldown_seconds = ?,
+                    verify_exchange_position = ?,
+                    orphan_recovery_timeout_sec = ?
                 WHERE id = 1
             """, (
                 config.asset,
@@ -309,6 +324,9 @@ class DatabaseManager:
                 config.taker_fee_bps,
                 config.maker_fee_bps,
                 config.estimated_costs_bps,
+                config.entry_cooldown_seconds,
+                int(config.verify_exchange_position),
+                config.orphan_recovery_timeout_sec,
             ))
             logger.info("Config saved")
 
