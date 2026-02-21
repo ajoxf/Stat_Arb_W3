@@ -2075,7 +2075,7 @@ async def run_test_suite():
         'scenarios':  scenarios,
         'start_time': datetime.now(timezone.utc).isoformat(),
         'order_mode': order_mode,
-        'inter_pause': inter_pause,
+        'single_running': False,
     }
     socketio.emit('test_suite_update', _test_suite_state)
 
