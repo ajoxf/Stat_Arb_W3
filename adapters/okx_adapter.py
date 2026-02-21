@@ -37,10 +37,13 @@ class OKXAdapter(ExchangeAdapter):
         secret_key: str,
         passphrase: str = "",
         is_testnet: bool = True,
+        spot_leverage: int = 1,
     ):
         super().__init__(api_key, secret_key, passphrase, is_testnet)
         self._session: Optional[aiohttp.ClientSession] = None
         self.base_url = self.BASE_URL
+        # cross mode required for leveraged spot accounts; cash for simple 1x spot
+        self._spot_td_mode = "cross" if spot_leverage > 1 else "cash"
 
     async def connect(self) -> bool:
         """Establish connection to OKX."""
@@ -231,7 +234,7 @@ class OKXAdapter(ExchangeAdapter):
         try:
             # Determine instrument type and trade mode
             inst_type = "SWAP" if "-SWAP" in symbol else "SPOT"
-            td_mode = "cross" if inst_type == "SWAP" else "cash"
+            td_mode = "cross" if inst_type == "SWAP" else self._spot_td_mode
 
             # Get symbol info for size validation and formatting
             symbol_info = await self.get_symbol_info(symbol)

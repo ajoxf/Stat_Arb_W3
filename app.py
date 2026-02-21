@@ -137,6 +137,7 @@ def start_engine_loop():
             secret_key=secret_key,
             passphrase=passphrase,
             is_testnet=is_demo,
+            spot_leverage=config.spot_leverage,
         )
         futures_adapter = OKXAdapter(
             api_key=api_key,
@@ -1543,8 +1544,11 @@ def close_test_order():
                         return None, f"Failed to cancel pending order {original_order_id}"
 
                 elif state == "filled":
-                    # Order was filled - proceed to place closing order
-                    logger.info("Original order %s was filled - placing close order", original_order_id)
+                    # Order was filled - use actual filled qty for close order
+                    if filled_qty > 0:
+                        quantity = filled_qty
+                    logger.info("Original order %s was filled (filled_qty=%.8f) - placing close order",
+                               original_order_id, quantity)
                 else:
                     # Order was already cancelled or in unknown state
                     logger.info("Original order %s already in state '%s' - removing position", original_order_id, state)
@@ -1677,6 +1681,10 @@ def close_all_test_orders():
                         else:
                             errors.append(f"{pos_id}: Failed to cancel pending order")
                             continue
+                    elif state == "filled":
+                        # Use actual filled quantity for close order
+                        if filled_qty > 0:
+                            quantity = filled_qty
                     elif state == "canceled":
                         # Already cancelled
                         closed += 1
