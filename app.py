@@ -1836,6 +1836,368 @@ def get_test_order_status():
     return jsonify({'positions': positions})
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Full Test Suite – runs 18 scenarios in the background, emits live WS events
+# ─────────────────────────────────────────────────────────────────────────────
+
+_test_suite_cancel: bool = False
+_test_suite_running: bool = False
+_test_suite_state: Dict[str, Any] = {
+    'running': False, 'current': 0, 'total': 18,
+    'pass': 0, 'fail': 0, 'scenarios': [], 'start_time': None, 'order_mode': '',
+}
+
+# 18 scenarios: 6 order-types × (fill-test, fill-test, cancel-test)
+_SUITE_SCENARIOS = [
+    {'id': '1a', 'label': 'BUY_SPOT #1',         'order_type': 'BUY_SPOT',      'cancel_test': False},
+    {'id': '1b', 'label': 'BUY_SPOT #2',         'order_type': 'BUY_SPOT',      'cancel_test': False},
+    {'id': '1c', 'label': 'BUY_SPOT #3 (cancel)','order_type': 'BUY_SPOT',      'cancel_test': True},
+    {'id': '2a', 'label': 'SELL_FUTURES #1',      'order_type': 'SELL_FUTURES',  'cancel_test': False},
+    {'id': '2b', 'label': 'SELL_FUTURES #2',      'order_type': 'SELL_FUTURES',  'cancel_test': False},
+    {'id': '2c', 'label': 'SELL_FUTURES #3 (cancel)', 'order_type': 'SELL_FUTURES', 'cancel_test': True},
+    {'id': '3a', 'label': 'BUY_FUTURES #1',       'order_type': 'BUY_FUTURES',   'cancel_test': False},
+    {'id': '3b', 'label': 'BUY_FUTURES #2',       'order_type': 'BUY_FUTURES',   'cancel_test': False},
+    {'id': '3c', 'label': 'BUY_FUTURES #3 (cancel)', 'order_type': 'BUY_FUTURES', 'cancel_test': True},
+    {'id': '4a', 'label': 'SELL_SPOT #1',         'order_type': 'SELL_SPOT',     'cancel_test': False},
+    {'id': '4b', 'label': 'SELL_SPOT #2',         'order_type': 'SELL_SPOT',     'cancel_test': False},
+    {'id': '4c', 'label': 'SELL_SPOT #3 (cancel)','order_type': 'SELL_SPOT',     'cancel_test': True},
+    {'id': '5a', 'label': 'LONG_SPREAD #1',       'order_type': 'LONG_SPREAD',   'cancel_test': False},
+    {'id': '5b', 'label': 'LONG_SPREAD #2',       'order_type': 'LONG_SPREAD',   'cancel_test': False},
+    {'id': '5c', 'label': 'LONG_SPREAD #3 (cancel)', 'order_type': 'LONG_SPREAD', 'cancel_test': True},
+    {'id': '6a', 'label': 'SHORT_SPREAD #1',      'order_type': 'SHORT_SPREAD',  'cancel_test': False},
+    {'id': '6b', 'label': 'SHORT_SPREAD #2',      'order_type': 'SHORT_SPREAD',  'cancel_test': False},
+    {'id': '6c', 'label': 'SHORT_SPREAD #3 (cancel)', 'order_type': 'SHORT_SPREAD', 'cancel_test': True},
+]
+
+
+async def _suite_open_order(order_type: str, quantity: float):
+    """
+    Place the opening leg(s) for a suite scenario.
+    Returns (list_of_leg_tuples, error_str).  error_str is None on success.
+    Each leg tuple: (market_type, side, entry_price, OrderResult, qty, pos_side)
+    """
+    order_mode = config.order_execution_mode
+
+    def calc_limit_price(side: str, tick) -> float:
+        offset_bps = config.limit_order_price_offset_bps / 10000
+        SAFETY = 0.00005
+        if side.upper() == "BUY":
+            return round(min(tick.bid * (1 + offset_bps), tick.ask * (1 - SAFETY)), 2)
+        return round(max(tick.ask * (1 - offset_bps), tick.bid * (1 + SAFETY)), 2)
+
+    async def single_leg(market_type: str, side: str):
+        adapter = engine.spot_adapter if market_type == "SPOT" else engine.futures_adapter
+        if not adapter:
+            return None, f"No {market_type} adapter"
+        symbol   = config.spot_symbol if market_type == "SPOT" else config.futures_symbol
+        tick     = engine.spot_tick    if market_type == "SPOT" else engine.futures_tick
+        pos_side = ("long" if side == "BUY" else "short") if market_type == "FUTURES" else None
+        lp       = calc_limit_price(side, tick) if order_mode == "LIMIT" else None
+        if order_mode == "LIMIT":
+            logger.info("[SUITE] LIMIT %s %s: bid=%.2f ask=%.2f offset=%.1fbps → px=%.2f",
+                        side, market_type, tick.bid, tick.ask,
+                        config.limit_order_price_offset_bps, lp)
+        result = await adapter.place_order(
+            symbol=symbol, side=side, order_type=order_mode,
+            quantity=quantity, price=lp, pos_side=pos_side,
+        )
+        if result.success:
+            entry_price = tick.mid
+            return (market_type, side, entry_price, result, quantity, pos_side), None
+        return None, result.error
+
+    legs: list = []
+    if order_type in ("BUY_SPOT",):
+        leg, err = await single_leg("SPOT", "BUY")
+        if err: return None, err
+        legs.append(leg)
+    elif order_type == "SELL_SPOT":
+        leg, err = await single_leg("SPOT", "SELL")
+        if err: return None, err
+        legs.append(leg)
+    elif order_type == "BUY_FUTURES":
+        leg, err = await single_leg("FUTURES", "BUY")
+        if err: return None, err
+        legs.append(leg)
+    elif order_type == "SELL_FUTURES":
+        leg, err = await single_leg("FUTURES", "SELL")
+        if err: return None, err
+        legs.append(leg)
+    elif order_type == "LONG_SPREAD":
+        spot_leg, err = await single_leg("SPOT", "BUY")
+        if err: return None, f"Spot: {err}"
+        legs.append(spot_leg)
+        fut_leg, err = await single_leg("FUTURES", "SELL")
+        if err: return legs, f"Futures: {err}"   # return spot leg so caller can clean up
+        legs.append(fut_leg)
+    elif order_type == "SHORT_SPREAD":
+        spot_leg, err = await single_leg("SPOT", "SELL")
+        if err: return None, f"Spot: {err}"
+        legs.append(spot_leg)
+        fut_leg, err = await single_leg("FUTURES", "BUY")
+        if err: return legs, f"Futures: {err}"
+        legs.append(fut_leg)
+    else:
+        return None, f"Unknown order_type: {order_type}"
+
+    return legs, None
+
+
+async def _suite_close_position(pos_id: str):
+    """
+    Close one test position (cancel if pending, close if filled).
+    Returns (success: bool, detail_str: str).
+    """
+    global test_positions
+    if pos_id not in test_positions:
+        return False, "position not found"
+
+    pos             = test_positions[pos_id]
+    market_type     = pos['market_type']
+    close_side      = "SELL" if pos['side'] == "BUY" else "BUY"
+    quantity        = pos['quantity']
+    symbol          = config.spot_symbol if market_type == "SPOT" else config.futures_symbol
+    stored_pos_side = pos.get('pos_side')
+    original_oid    = pos.get('order_id')
+    adapter         = engine.spot_adapter if market_type == "SPOT" else engine.futures_adapter
+
+    if not adapter:
+        return False, f"no {market_type} adapter"
+
+    # Cancel if original order still pending
+    if original_oid:
+        status = await adapter.get_order_status(symbol, original_oid)
+        if status:
+            state      = status.get("state", "")
+            filled_qty = status.get("filled_qty", 0)
+            if state in ("live", "partially_filled") or filled_qty == 0:
+                cancelled = await adapter.cancel_order(symbol, original_oid)
+                del test_positions[pos_id]
+                return True, "cancelled (was pending)" if cancelled else "cancel-failed"
+            elif state == "filled":
+                if filled_qty > 0:
+                    quantity = filled_qty
+            elif state == "canceled":
+                del test_positions[pos_id]
+                return True, "already cancelled"
+
+    # Place closing order
+    order_mode       = config.order_execution_mode
+    close_lp: Optional[float] = None
+    if order_mode == "LIMIT":
+        tick        = engine.spot_tick if market_type == "SPOT" else engine.futures_tick
+        offset_bps  = config.limit_order_price_offset_bps / 10000
+        SAFETY      = 0.00005
+        if close_side.upper() == "BUY":
+            close_lp = round(min(tick.bid * (1 + offset_bps), tick.ask * (1 - SAFETY)), 2)
+        else:
+            close_lp = round(max(tick.ask * (1 - offset_bps), tick.bid * (1 + SAFETY)), 2)
+
+    result = await adapter.place_order(
+        symbol=symbol, side=close_side, order_type=order_mode,
+        quantity=quantity, price=close_lp,
+        pos_side=stored_pos_side,
+        reduce_only=(market_type == "FUTURES"),
+    )
+    if result.success:
+        tick        = engine.spot_tick if market_type == "SPOT" else engine.futures_tick
+        cur_price   = tick.mid if tick else pos['entry_price']
+        pnl         = (cur_price - pos['entry_price']) * quantity if pos['side'] == "BUY" \
+                      else (pos['entry_price'] - cur_price) * quantity
+        del test_positions[pos_id]
+        return True, f"closed pnl=${pnl:.2f}"
+    return False, result.error
+
+
+async def run_test_suite():
+    """
+    Full 18-scenario test suite.  Runs entirely in the async event loop so it
+    can await adapter calls without blocking Flask.  Emits 'test_suite_update'
+    WebSocket events after every state change so the UI stays in sync.
+
+    Timing (targets 10-15 min total):
+      MARKET  mode: 4 s after open + 30 s cooldown  → 18 × ~34 s ≈ 10 min
+      LIMIT   mode: limit_timeout s after open + 20 s cooldown
+                    → 18 × (timeout+24 s) ≈ 13-15 min with default 30 s timeout
+    Cancel-test scenarios close after 3 s regardless of mode to explicitly
+    exercise the order-cancellation path.
+    """
+    global _test_suite_cancel, _test_suite_running, _test_suite_state, test_positions
+    import copy
+
+    _test_suite_running = True
+    _test_suite_cancel  = False
+
+    order_mode     = config.order_execution_mode
+    limit_timeout  = config.limit_order_timeout_sec
+    inter_pause    = 30 if order_mode == "MARKET" else 20  # seconds between scenarios
+
+    scenarios = copy.deepcopy(_SUITE_SCENARIOS)
+    for s in scenarios:
+        s['status'] = 'pending'
+        s['detail'] = ''
+        s['mode']   = order_mode
+
+    _test_suite_state = {
+        'running':    True,
+        'current':    0,
+        'total':      len(scenarios),
+        'pass':       0,
+        'fail':       0,
+        'scenarios':  scenarios,
+        'start_time': datetime.now(timezone.utc).isoformat(),
+        'order_mode': order_mode,
+        'inter_pause': inter_pause,
+    }
+    socketio.emit('test_suite_update', _test_suite_state)
+
+    spot_price = engine.spot_tick.mid if engine.spot_tick else 65000.0
+    quantity   = 100.0 / spot_price   # $100 notional
+
+    for idx, scenario in enumerate(scenarios):
+        if _test_suite_cancel:
+            scenario['status'] = 'cancelled'
+            scenario['detail'] = 'suite stopped'
+            break
+
+        scenario['status'] = 'running'
+        _test_suite_state['current'] = idx + 1
+        socketio.emit('test_suite_update', _test_suite_state)
+        logger.info("[TEST SUITE] %d/%d  %s  [%s]",
+                    idx + 1, len(scenarios), scenario['label'], order_mode)
+
+        order_type  = scenario['order_type']
+        cancel_test = scenario['cancel_test']
+
+        # ── OPEN ──────────────────────────────────────────────────────────
+        try:
+            legs, open_err = await _suite_open_order(order_type, quantity)
+        except Exception as exc:
+            open_err = str(exc)
+            legs = None
+
+        if open_err or not legs:
+            scenario['status'] = 'fail'
+            scenario['detail'] = f"open failed: {open_err}"
+            _test_suite_state['fail'] += 1
+            socketio.emit('test_suite_update', _test_suite_state)
+            logger.warning("[TEST SUITE] %s FAIL open: %s", scenario['label'], open_err)
+            await asyncio.sleep(inter_pause)
+            continue
+
+        # Register positions in global test_positions (same dict the UI reads)
+        opened_ids = []
+        for (mtype, side, entry_px, result, qty, ps) in legs:
+            pos_id = str(uuid.uuid4())[:8]
+            test_positions[pos_id] = {
+                'id': pos_id, 'market_type': mtype, 'side': side,
+                'quantity': qty, 'entry_price': entry_px,
+                'order_id': result.order_id,
+                'entry_time': datetime.now(timezone.utc).isoformat(),
+                'pos_side': ps,
+            }
+            opened_ids.append(pos_id)
+
+        oid_short = legs[0][3].order_id[:12] if legs else '?'
+        scenario['detail'] = (
+            f"{len(opened_ids)} leg(s) placed  order_id={oid_short}..."
+        )
+        socketio.emit('test_suite_update', _test_suite_state)
+
+        # ── WAIT ──────────────────────────────────────────────────────────
+        if cancel_test:
+            # Wait just long enough for the order to land, then cancel it
+            scenario['detail'] += "  |  cancel test – closing in 3 s"
+            socketio.emit('test_suite_update', _test_suite_state)
+            await asyncio.sleep(3)
+        elif order_mode == "LIMIT":
+            # Give the limit order a real chance to fill
+            scenario['detail'] += f"  |  waiting {limit_timeout} s for fill…"
+            socketio.emit('test_suite_update', _test_suite_state)
+            await asyncio.sleep(limit_timeout)
+        else:
+            # Market order – small wait for exchange confirmation
+            await asyncio.sleep(4)
+
+        if _test_suite_cancel:
+            scenario['status'] = 'cancelled'
+            scenario['detail'] += '  |  suite stopped mid-scenario'
+            break
+
+        # ── CLOSE ─────────────────────────────────────────────────────────
+        close_ok      = True
+        close_details = []
+        for pos_id in opened_ids:
+            try:
+                ok, detail = await _suite_close_position(pos_id)
+                close_details.append(detail)
+                if not ok:
+                    close_ok = False
+            except Exception as exc:
+                close_details.append(str(exc))
+                close_ok = False
+
+        detail_str = "  |  ".join(close_details)
+        if close_ok:
+            scenario['status'] = 'pass'
+            scenario['detail'] = detail_str
+            _test_suite_state['pass'] += 1
+            logger.info("[TEST SUITE] %s  PASS  %s", scenario['label'], detail_str)
+        else:
+            scenario['status'] = 'fail'
+            scenario['detail'] = detail_str
+            _test_suite_state['fail'] += 1
+            logger.warning("[TEST SUITE] %s  FAIL  %s", scenario['label'], detail_str)
+
+        socketio.emit('test_suite_update', _test_suite_state)
+
+        # ── INTER-SCENARIO COOLDOWN ────────────────────────────────────────
+        if idx < len(scenarios) - 1 and not _test_suite_cancel:
+            scenario['detail'] += f"  |  cooling {inter_pause} s…"
+            socketio.emit('test_suite_update', _test_suite_state)
+            # Sleep in 1-second slices so we can react to cancellation quickly
+            for _ in range(inter_pause):
+                if _test_suite_cancel:
+                    break
+                await asyncio.sleep(1)
+
+    _test_suite_state['running']  = False
+    _test_suite_running           = False
+    socketio.emit('test_suite_update', _test_suite_state)
+    logger.info("[TEST SUITE] Done – pass=%d  fail=%d",
+                _test_suite_state['pass'], _test_suite_state['fail'])
+
+
+@app.route('/api/test-suite/start', methods=['POST'])
+def start_test_suite():
+    """Start the full 18-scenario test suite in the background."""
+    global _test_suite_running
+    if _test_suite_running:
+        return jsonify({'success': False, 'error': 'Suite already running'}), 400
+    if not engine.spot_adapter:
+        return jsonify({'success': False, 'error': 'No exchange connected'}), 400
+    if not engine.spot_tick or not engine.futures_tick:
+        return jsonify({'success': False, 'error': 'No price data – wait for connection'}), 400
+    if loop:
+        asyncio.run_coroutine_threadsafe(run_test_suite(), loop)
+        return jsonify({'success': True, 'message': 'Test suite started'})
+    return jsonify({'success': False, 'error': 'Event loop not running'}), 500
+
+
+@app.route('/api/test-suite/stop', methods=['POST'])
+def stop_test_suite():
+    """Cancel the running test suite after the current scenario finishes."""
+    global _test_suite_cancel
+    _test_suite_cancel = True
+    return jsonify({'success': True, 'message': 'Stop signal sent'})
+
+
+@app.route('/api/test-suite/status', methods=['GET'])
+def get_test_suite_status():
+    """Return the current test suite state."""
+    return jsonify(_test_suite_state)
+
+
 @app.route('/api/reset-trades', methods=['POST'])
 def reset_trades_only():
     """Reset only trades and SD analysis - preserves spread data collection."""
