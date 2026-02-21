@@ -242,12 +242,21 @@ class OKXAdapter(ExchangeAdapter):
                 # For SWAP: convert quantity to contracts
                 if symbol_info:
                     ct_val = symbol_info.get("contract_val", 0.01)
+                    if ct_val <= 0:
+                        return OrderResult(success=False, error=f"Invalid contract value {ct_val}")
                     # Convert BTC quantity to number of contracts
                     contracts = quantity / ct_val
-                    # Round to nearest whole contract (minimum 1)
-                    sz = max(1, round(contracts))
+                    sz = round(contracts)
+                    # Validate minimum 1 contract - don't silently inflate small positions
+                    if sz < 1:
+                        logger.error("SWAP quantity %.6f = %.2f contracts (ctVal=%.4f), minimum is 1",
+                                    quantity, contracts, ct_val)
+                        return OrderResult(success=False, error=f"Quantity {quantity} too small, need at least {ct_val} for 1 contract")
                     logger.info("SWAP order: %.6f %s = %d contracts (ctVal=%.4f)",
                                quantity, symbol.split("-")[0], sz, ct_val)
+                else:
+                    # No symbol info - cannot safely place SWAP order
+                    return OrderResult(success=False, error="Cannot place SWAP order without symbol info")
                 sz_str = str(int(sz))
             else:
                 # For SPOT: validate and format quantity properly
@@ -270,10 +279,21 @@ class OKXAdapter(ExchangeAdapter):
 
                     logger.info("SPOT order: qty=%.8f (minSz=%.8f, lotSz=%.8f, decimals=%d)",
                                sz, min_sz, lot_sz, decimals)
+                else:
+                    # No symbol info - use safe defaults
+                    decimals = 8
+                    sz = round(quantity, decimals)
+                    logger.warning("SPOT order without symbol info, using defaults: qty=%.8f, decimals=%d",
+                                  sz, decimals)
 
-                # Format size string properly (avoid floating point representation issues)
-                # Use format with enough precision, then strip trailing zeros
-                sz_str = f"{sz:.8f}".rstrip("0").rstrip(".")
+                # Validate sz is positive after rounding
+                if sz <= 0:
+                    return OrderResult(success=False, error=f"Order size {sz} is not positive after rounding")
+
+                # Format size string with correct precision (use decimals, not hardcoded 8)
+                sz_str = f"{sz:.{decimals}f}".rstrip("0").rstrip(".")
+                if not sz_str or sz_str == "0":
+                    return OrderResult(success=False, error=f"Order size formatted to invalid value: {sz_str}")
 
             # OKX order types: market, limit, post_only, fok, ioc
             # post_only = limit order that's cancelled if it would fill immediately (ensures maker)
