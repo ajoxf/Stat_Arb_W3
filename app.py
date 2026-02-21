@@ -1371,6 +1371,23 @@ def open_test_order():
 
     logger.info("Executing test order: %s, size=$%.2f, qty=%.6f", order_type, size_usd, quantity)
 
+    def calc_limit_price(side: str, tick) -> float:
+        """
+        Calculate a passive limit price matching the real order executor logic.
+        BUY  → bid + offset_bps  (capped just below ask to stay maker)
+        SELL → ask - offset_bps  (floored just above bid to stay maker)
+        """
+        offset_bps = config.limit_order_price_offset_bps / 10000
+        SAFETY_BUFFER_BPS = 0.00005  # 0.5 bps safety buffer
+        if side.upper() == "BUY":
+            target = tick.bid * (1 + offset_bps)
+            max_price = tick.ask * (1 - SAFETY_BUFFER_BPS)
+            return round(min(target, max_price), 2)
+        else:
+            target = tick.ask * (1 - offset_bps)
+            min_price = tick.bid * (1 + SAFETY_BUFFER_BPS)
+            return round(max(target, min_price), 2)
+
     async def execute_single_leg(market_type: str, side: str, price: float):
         """Execute a single leg order."""
         adapter = engine.spot_adapter if market_type == "SPOT" else engine.futures_adapter
@@ -1379,6 +1396,17 @@ def open_test_order():
 
         symbol = config.spot_symbol if market_type == "SPOT" else config.futures_symbol
         order_type_str = config.order_execution_mode  # MARKET or LIMIT
+
+        # For LIMIT orders use proper bid+offset / ask-offset pricing (same as OrderExecutor)
+        # instead of mid price, so orders behave as maker orders
+        if order_type_str == "LIMIT":
+            tick = engine.spot_tick if market_type == "SPOT" else engine.futures_tick
+            limit_price = calc_limit_price(side, tick)
+            logger.info("LIMIT %s %s: bid=%.2f ask=%.2f offset=%.1f bps → price=%.2f",
+                       side, market_type, tick.bid, tick.ask,
+                       config.limit_order_price_offset_bps, limit_price)
+        else:
+            limit_price = None
 
         # For futures, determine pos_side for long_short_mode
         pos_side = None
@@ -1390,7 +1418,7 @@ def open_test_order():
             side=side,
             order_type=order_type_str,
             quantity=quantity,
-            price=price if order_type_str == "LIMIT" else None,
+            price=limit_price,
             pos_side=pos_side,
         )
 
@@ -1557,12 +1585,32 @@ def close_test_order():
 
         # Place closing order (only if original was filled)
         order_type_str = config.order_execution_mode
+
+        # For LIMIT closes, use bid+offset / ask-offset (same as entry logic)
+        # close_side is opposite of entry: BUY close uses ask-offset, SELL close uses bid+offset
+        close_limit_price = None
+        if order_type_str == "LIMIT":
+            tick = engine.spot_tick if market_type == "SPOT" else engine.futures_tick
+            offset_bps = config.limit_order_price_offset_bps / 10000
+            SAFETY_BUFFER_BPS = 0.00005
+            if close_side.upper() == "BUY":
+                target = tick.bid * (1 + offset_bps)
+                max_price = tick.ask * (1 - SAFETY_BUFFER_BPS)
+                close_limit_price = round(min(target, max_price), 2)
+            else:
+                target = tick.ask * (1 - offset_bps)
+                min_price = tick.bid * (1 + SAFETY_BUFFER_BPS)
+                close_limit_price = round(max(target, min_price), 2)
+            logger.info("LIMIT close %s %s: bid=%.2f ask=%.2f offset=%.1f bps → price=%.2f",
+                       close_side, market_type, tick.bid, tick.ask,
+                       config.limit_order_price_offset_bps, close_limit_price)
+
         result = await adapter.place_order(
             symbol=symbol,
             side=close_side,
             order_type=order_type_str,
             quantity=quantity,
-            price=current_price if order_type_str == "LIMIT" else None,
+            price=close_limit_price,
             pos_side=stored_pos_side,  # Use original pos_side for closing!
             reduce_only=True if market_type == "FUTURES" else False,
         )
@@ -1694,12 +1742,28 @@ def close_all_test_orders():
 
             # Place closing order (original was filled)
             order_type_str = config.order_execution_mode
+
+            # For LIMIT closes, use bid+offset / ask-offset matching OrderExecutor logic
+            close_limit_price = None
+            if order_type_str == "LIMIT":
+                tick = engine.spot_tick if market_type == "SPOT" else engine.futures_tick
+                offset_bps = config.limit_order_price_offset_bps / 10000
+                SAFETY_BUFFER_BPS = 0.00005
+                if close_side.upper() == "BUY":
+                    target = tick.bid * (1 + offset_bps)
+                    max_price = tick.ask * (1 - SAFETY_BUFFER_BPS)
+                    close_limit_price = round(min(target, max_price), 2)
+                else:
+                    target = tick.ask * (1 - offset_bps)
+                    min_price = tick.bid * (1 + SAFETY_BUFFER_BPS)
+                    close_limit_price = round(max(target, min_price), 2)
+
             result = await adapter.place_order(
                 symbol=symbol,
                 side=close_side,
                 order_type=order_type_str,
                 quantity=quantity,
-                price=current_price if order_type_str == "LIMIT" else None,
+                price=close_limit_price,
                 pos_side=stored_pos_side,  # Use original pos_side for closing!
                 reduce_only=True if market_type == "FUTURES" else False,
             )
