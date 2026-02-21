@@ -2,6 +2,11 @@
 Flask web application for the Crypto Statistical Arbitrage Trading System.
 """
 
+# CRITICAL: eventlet monkey-patching must happen before ANY other imports
+# This is required for Flask-SocketIO with eventlet async_mode
+import eventlet
+eventlet.monkey_patch()
+
 import os
 import sys
 import signal
