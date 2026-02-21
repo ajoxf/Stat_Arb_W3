@@ -4,6 +4,7 @@ Flask web application for the Crypto Statistical Arbitrage Trading System.
 
 import os
 import sys
+import time
 import signal
 import asyncio
 import logging
@@ -61,7 +62,9 @@ shutdown_in_progress = False
 
 def run_async_loop(loop: asyncio.AbstractEventLoop):
     """Run the async event loop in a separate thread."""
+    logger.info("Async event loop thread starting...")
     asyncio.set_event_loop(loop)
+    logger.info("Async event loop running")
     loop.run_forever()
 
 
@@ -73,6 +76,9 @@ def start_engine_loop():
         loop = asyncio.new_event_loop()
         engine_thread = Thread(target=run_async_loop, args=(loop,), daemon=True)
         engine_thread.start()
+        # Wait for the event loop to actually start running
+        time.sleep(0.1)
+        logger.info("Event loop thread started, scheduling engine.start()")
 
     # Set up callbacks
     engine.on_tick = on_tick_callback
@@ -144,9 +150,12 @@ def start_engine_loop():
     else:
         logger.warning("API keys not configured - using paper trading simulation only")
 
-    # Start engine
-    asyncio.run_coroutine_threadsafe(engine.start(), loop)
-    logger.info("Trading engine started")
+    # Start engine - schedule the coroutine and give it time to start
+    logger.info("Scheduling engine.start() coroutine...")
+    future = asyncio.run_coroutine_threadsafe(engine.start(), loop)
+    # Give the async task time to start running
+    time.sleep(0.2)
+    logger.info("Trading engine started (future done=%s)", future.done())
 
 
 def stop_engine_loop():
