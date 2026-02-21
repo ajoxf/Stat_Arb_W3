@@ -230,6 +230,13 @@ def on_signal_callback(signal: Signal):
     try:
         signal_data = signal.to_dict()
         signal_data['asset'] = config.asset
+        # Add data_points and lookback from signal generator state
+        sg_state = engine.signal_generator.get_state()
+        signal_data['data_points'] = sg_state.get('data_points', 0)
+        signal_data['lookback'] = sg_state.get('lookback', config.lookback_period)
+        signal_data['data_ready'] = sg_state.get('data_ready', False)
+        signal_data['std_ratio'] = sg_state.get('std_ratio')
+        signal_data['std_ratio_required'] = sg_state.get('std_ratio_required')
         socketio.emit('signal', signal_data, namespace='/')
     except Exception as e:
         logger.error("Error emitting signal: %s", e)

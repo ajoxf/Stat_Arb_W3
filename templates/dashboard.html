@@ -1733,7 +1733,7 @@
         .then(data => {
             if (data.success) {
                 showToast(data.message || 'Position closed', 'success');
-                fetch('/api/engine/status').then(r => r.json()).then(updateSignal);
+                fetch('/api/engine/status').then(r => r.json()).then(d => updateSignal(d.signal));
             } else {
                 showToast('Failed: ' + (data.error || 'Unknown error'), 'error');
             }
@@ -1814,7 +1814,7 @@
                 showToast(`Reset: ${d.trades} trades, ${d.sd_touches} SD touches (spread preserved)`, 'success');
                 const tbody = document.getElementById('trades-table');
                 tbody.innerHTML = '<tr><td colspan="4" class="text-center text-secondary">No trades</td></tr>';
-                fetch('/api/engine/status').then(r => r.json()).then(updateSignal);
+                fetch('/api/engine/status').then(r => r.json()).then(d => updateSignal(d.signal));
             } else {
                 showToast('Reset failed', 'error');
             }
@@ -1842,7 +1842,7 @@
                 spreadChart.data.datasets[0].data = [];
                 zscoreChart.update();
                 spreadChart.update();
-                fetch('/api/engine/status').then(r => r.json()).then(updateSignal);
+                fetch('/api/engine/status').then(r => r.json()).then(d => updateSignal(d.signal));
             } else {
                 showToast('Failed to reset', 'error');
             }
