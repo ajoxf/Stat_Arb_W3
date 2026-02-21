@@ -220,6 +220,7 @@ class OKXAdapter(ExchangeAdapter):
         price: Optional[float] = None,
         reduce_only: bool = False,
         pos_side: Optional[str] = None,
+        notional_usdt: Optional[float] = None,
     ) -> OrderResult:
         """
         Place an order.
@@ -328,25 +329,34 @@ class OKXAdapter(ExchangeAdapter):
             if reduce_only and inst_type == "SWAP":
                 order_data["reduceOnly"] = True
 
-            # For spot MARKET BUY (any tdMode), tgtCcy=base_ccy tells OKX that sz is in
-            # base currency (BTC), not quote (USDT).  In cash mode this is required because
-            # OKX defaults market-buy sz to quote.  In cross-margin mode, ccy=USDT causes
-            # the same misinterpretation (sz read as USDT), so we apply tgtCcy here too
-            # and skip the ccy field for this specific order type to avoid the conflict.
-            if inst_type == "SPOT" and okx_ord_type == "market" and side.upper() == "BUY":
+            # For spot cash-mode (tdMode=cash) market BUY, OKX defaults sz to quote (USDT).
+            # tgtCcy=base_ccy tells OKX that sz is in base currency (BTC) instead.
+            # NOTE: tgtCcy is NOT supported in cross-margin mode (sCode=59110).
+            if inst_type == "SPOT" and okx_ord_type == "market" and side.upper() == "BUY" and td_mode == "cash":
                 order_data["tgtCcy"] = "base_ccy"
 
             # Cross-margin SPOT orders require ccy = margin currency (quote currency).
-            # OKX rejects cross-margin spot orders with "Parameter ccy can not be empty"
-            # if this is omitted — EXCEPT for market BUY where tgtCcy=base_ccy already
-            # tells OKX how to interpret sz, and adding ccy conflicts with it.
+            # OKX rejects cross-margin spot orders without ccy ("Parameter ccy can not be empty").
+            # For cross-margin SPOT MARKET BUY, ccy=USDT also causes OKX to interpret sz
+            # as USDT amount (not BTC qty) — so the caller must pass notional_usdt and we
+            # override sz here to the USDT value.
             if inst_type == "SPOT" and td_mode == "cross":
                 symbol_parts = symbol.split("-")
                 # BTC-USDT → quote = USDT; guard against malformed symbols
                 if len(symbol_parts) >= 2:
-                    is_market_buy = okx_ord_type == "market" and side.upper() == "BUY"
-                    if not is_market_buy:
-                        order_data["ccy"] = symbol_parts[1]
+                    order_data["ccy"] = symbol_parts[1]
+                    # Market BUY: sz must be in USDT (quote currency) because ccy=USDT
+                    if okx_ord_type == "market" and side.upper() == "BUY":
+                        if notional_usdt:
+                            sz_str = f"{round(notional_usdt, 2):.2f}"
+                            order_data["sz"] = sz_str
+                            logger.info("Cross-margin SPOT MARKET BUY: overriding sz to notional_usdt=%.2f USDT", notional_usdt)
+                        else:
+                            logger.warning(
+                                "Cross-margin SPOT MARKET BUY without notional_usdt: "
+                                "sz=%.8f will be read as USDT by OKX (likely too small). "
+                                "Pass notional_usdt at the call site.", quantity
+                            )
 
             # Handle position side for long/short mode accounts (required for SWAP)
             if inst_type == "SWAP":

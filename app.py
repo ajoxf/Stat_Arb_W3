@@ -1413,6 +1413,8 @@ def open_test_order():
         if market_type == "FUTURES":
             pos_side = "long" if side == "BUY" else "short"
 
+        # Cross-margin SPOT MARKET BUY: pass USDT notional so adapter uses correct sz.
+        notional = size_usd if (market_type == "SPOT" and order_type_str == "MARKET" and side == "BUY") else None
         result = await adapter.place_order(
             symbol=symbol,
             side=side,
@@ -1420,6 +1422,7 @@ def open_test_order():
             quantity=quantity,
             price=limit_price,
             pos_side=pos_side,
+            notional_usdt=notional,
         )
 
         if result.success:
@@ -1919,9 +1922,14 @@ async def _suite_open_order(order_type: str, quantity: float, forced_mode: str |
             logger.info("[SUITE] LIMIT %s %s: bid=%.2f ask=%.2f offset=%.1fbps → px=%.2f",
                         side, market_type, tick.bid, tick.ask,
                         config.limit_order_price_offset_bps, lp)
+        # Cross-margin SPOT MARKET BUY requires sz in USDT (not BTC qty).
+        notional = round(quantity * tick.mid, 2) if (
+            market_type == "SPOT" and order_mode == "MARKET" and side == "BUY"
+        ) else None
         result = await adapter.place_order(
             symbol=symbol, side=side, order_type=order_mode,
             quantity=quantity, price=lp, pos_side=pos_side,
+            notional_usdt=notional,
         )
         if result.success:
             entry_price = tick.mid
