@@ -270,23 +270,37 @@ class OrderExecutor:
                 execution_mode = getattr(self.config, 'exit_execution_mode', self.config.order_execution_mode)
 
             if execution_mode == "MARKET":
-                return await self._execute_market(spread_order)
+                spot_mid = spot_tick.mid if spot_tick else 0.0
+                return await self._execute_market(spread_order, spot_mid=spot_mid)
             else:
                 return await self._execute_limit(spread_order, spot_tick, futures_tick)
         finally:
             self._executing = False
             self.active_order = None
 
-    async def _execute_market(self, spread_order: SpreadOrder) -> SpreadOrder:
+    async def _execute_market(
+        self,
+        spread_order: SpreadOrder,
+        spot_mid: float = 0.0,
+    ) -> SpreadOrder:
         """Execute spread using market orders (immediate fill)."""
         logger.info("Executing spread with MARKET orders: %s %s",
                     spread_order.position_type,
                     "ENTRY" if spread_order.is_entry else "EXIT")
 
+        # Cross-margin SPOT MARKET BUY: OKX reads sz as USDT when ccy=USDT is set.
+        # Compute notional so the adapter can override sz with the correct USDT amount.
+        spot_notional = (
+            round(spread_order.spot_leg.quantity * spot_mid, 2)
+            if spread_order.spot_leg.side == "BUY" and spot_mid > 0
+            else None
+        )
+
         # Execute both legs simultaneously
         spot_task = self._place_market_order(
             self.spot_adapter,
             spread_order.spot_leg,
+            notional_usdt=spot_notional,
         )
         futures_task = self._place_market_order(
             self.futures_adapter,
@@ -444,6 +458,7 @@ class OrderExecutor:
         self,
         adapter: ExchangeAdapter,
         leg: LegOrder,
+        notional_usdt: Optional[float] = None,
     ) -> OrderResult:
         """Place a market order for a single leg."""
         return await adapter.place_order(
@@ -452,6 +467,7 @@ class OrderExecutor:
             order_type="MARKET",
             quantity=leg.quantity,
             pos_side=leg.pos_side,  # For OKX long_short_mode
+            notional_usdt=notional_usdt,
         )
 
     async def _place_limit_orders(self, spread_order: SpreadOrder) -> None:
@@ -784,11 +800,21 @@ class OrderExecutor:
                 # Last resort: close the spot leg at market
                 logger.error("Futures recovery failed - closing spot orphan at MARKET (taker fees apply)")
                 close_side = "SELL" if spread_order.spot_leg.side == "BUY" else "BUY"
+                # Cross-margin SPOT MARKET BUY needs notional_usdt (sz must be in USDT)
+                spot_notional = None
+                if close_side == "BUY":
+                    try:
+                        spot_tick = await self.spot_adapter.get_tick(spread_order.spot_leg.symbol)
+                        if spot_tick:
+                            spot_notional = round(spread_order.spot_leg.filled_qty * spot_tick.mid, 2)
+                    except Exception as e:
+                        logger.warning("Could not fetch spot tick for notional calc: %s", e)
                 result = await self.spot_adapter.place_order(
                     symbol=spread_order.spot_leg.symbol,
                     side=close_side,
                     order_type="MARKET",
                     quantity=spread_order.spot_leg.filled_qty,
+                    notional_usdt=spot_notional,
                 )
                 if result.success:
                     logger.info("Closed orphan spot leg at market: order_id=%s", result.order_id)
