@@ -20,17 +20,19 @@ implementation, and everything needed to port the system to a new project or exc
 10. [Quantity Calculation](#10-quantity-calculation)
 11. [Limit-Price Calculation](#11-limit-price-calculation)
 12. [Position Lifecycle — Open → Wait → Close](#12-position-lifecycle--open--wait--close)
-13. [Frontend — Real-Time UI](#13-frontend--real-time-ui)
-14. [Frontend — Per-Row Run Button](#14-frontend--per-row-run-button)
-15. [WebSocket Live Updates](#15-websocket-live-updates)
-16. [CSV Export](#16-csv-export)
-17. [Configuration Parameters](#17-configuration-parameters)
-18. [Timing & Rate-Limit Strategy](#18-timing--rate-limit-strategy)
-19. [Error Taxonomy & How to Handle Each](#19-error-taxonomy--how-to-handle-each)
-20. [Porting to Another Exchange](#20-porting-to-another-exchange)
-21. [Porting to Another Project](#21-porting-to-another-project)
-22. [Complete Scenario List Reference](#22-complete-scenario-list-reference)
-23. [Checklist: Implementing from Scratch](#23-checklist-implementing-from-scratch)
+13. [Partial-Fill Recovery Scenarios](#13-partial-fill-recovery-scenarios)
+14. [Frontend — Real-Time UI](#14-frontend--real-time-ui)
+15. [Frontend — Per-Row Run Button](#15-frontend--per-row-run-button)
+16. [WebSocket Live Updates](#16-websocket-live-updates)
+17. [CSV Export](#17-csv-export)
+18. [Configuration Parameters](#18-configuration-parameters)
+19. [Timing & Rate-Limit Strategy](#19-timing--rate-limit-strategy)
+20. [Error Taxonomy & How to Handle Each](#20-error-taxonomy--how-to-handle-each)
+21. [Known Bugs Fixed](#21-known-bugs-fixed)
+22. [Porting to Another Exchange](#22-porting-to-another-exchange)
+23. [Porting to Another Project](#23-porting-to-another-project)
+24. [Complete Scenario List Reference](#24-complete-scenario-list-reference)
+25. [Checklist: Implementing from Scratch](#25-checklist-implementing-from-scratch)
 
 ---
 
@@ -98,7 +100,7 @@ Six order types × two execution modes = 12 scenario families, each with 3 varia
 | `LIMIT` | Passive limit order at bid/ask ± offset | Waits up to `limit_timeout` for fill |
 | `MARKET` | Immediate market order | Fills instantly; no price param sent |
 
-### Full Scenario List (36 total)
+### Full Scenario List (40 total)
 
 ```
 LIMIT mode (18):
@@ -112,6 +114,12 @@ LIMIT mode (18):
 MARKET mode (18, forced regardless of config):
   m1a MKT BUY_SPOT #1     m1b MKT BUY_SPOT #2     m1c MKT BUY_SPOT #3 (quick-close)
   m2a MKT SELL_FUTURES #1  ... (same pattern for all 6 types)
+
+Partial-fill recovery (4, always MARKET):
+  pf-1 LONG_SPREAD:  spot fills, futures fails → market-close spot
+  pf-2 LONG_SPREAD:  futures fills, spot fails → market-close futures
+  pf-3 SHORT_SPREAD: spot fills, futures fails → market-close spot
+  pf-4 SHORT_SPREAD: futures fills, spot fails → market-close futures
 ```
 
 ---
@@ -673,7 +681,118 @@ async def _suite_close_position(pos_id: str):
 
 ---
 
-## 13. Frontend — Real-Time UI
+## 13. Partial-Fill Recovery Scenarios
+
+Four additional scenarios (ids `pf-1` through `pf-4`) test the **emergency market-close
+recovery path** that fires when one spread leg fills and the other fails.  They always
+run in MARKET mode regardless of `config.entry_execution_mode`.
+
+### Scenario definition
+
+```python
+{'id': 'pf-1',
+ 'label': 'LONG_SPREAD partial: spot fills, futures fails → market-close spot',
+ 'order_type': 'LONG_SPREAD', 'cancel_test': False, 'forced_mode': 'MARKET',
+ 'partial_fail_test': True, 'filled_leg': 'SPOT'},
+```
+
+Two extra fields distinguish partial-fail scenarios from normal ones:
+
+| Field | Values | Meaning |
+|-------|--------|---------|
+| `partial_fail_test` | `True` | Skips the normal open/wait/close path |
+| `filled_leg` | `"SPOT"` or `"FUTURES"` | Which leg is placed at MARKET (fills); the other is skipped |
+
+### What each test does (3 steps)
+
+**Step 1 — Open the filled leg at MARKET** (times the call in ms)
+- For LONG_SPREAD/`SPOT`: BUY spot at MARKET
+- For LONG_SPREAD/`FUTURES`: SELL futures at MARKET
+- For SHORT_SPREAD/`SPOT`: SELL spot at MARKET
+- For SHORT_SPREAD/`FUTURES`: BUY futures at MARKET
+
+**Step 2 — Wait 1 s, fetch actual filled qty**
+- Queries `get_order_status` for the filled leg
+- Uses the actual `filled_qty` for the close (handles exchange rounding)
+
+**Step 3 — Market-close the filled leg (recovery)**
+- Places the opposite-side MARKET order for the same filled qty
+- Times this call in ms
+- PASS = close succeeded; FAIL = close failed (orphan risk flagged in detail)
+
+### Detail column format
+
+On PASS:
+```
+Leg 1 (SPOT BUY) filled 0.010000 BTC @ $68341.00 in 187ms [oid=332828132715…]  |
+Leg 2 (FUTURES SELL) SIMULATED FAILURE — not placed  |
+Recovery (SPOT SELL MARKET) closed in 203ms [oid=332828156696…]  |  Total: 1412ms
+```
+
+On FAIL:
+```
+Leg 1 (SPOT BUY) filled 0.010000 BTC @ $68341.00 in 187ms [oid=…]  |
+Leg 2 (FUTURES SELL) SIMULATED FAILURE — not placed  |
+Recovery (SPOT SELL MARKET) FAILED in 95ms: <error> — ORPHAN RISK: filled leg not closed
+```
+
+### Helper function: `_suite_partial_fill_test`
+
+```python
+async def _suite_partial_fill_test(order_type: str, quantity: float, filled_leg: str) -> tuple[bool, str]:
+    """
+    Place only the named leg at MARKET (fills), skip the second leg (simulated failure),
+    then immediately market-close the filled leg as recovery.
+
+    Returns (success: bool, detail_str: str).
+    """
+    # Determine sides
+    spot_side, futures_side = ("BUY", "SELL") if order_type == "LONG_SPREAD" else ("SELL", "BUY")
+    is_spot_filled = (filled_leg == "SPOT")
+    open_side      = spot_side if is_spot_filled else futures_side
+    pos_side       = None if is_spot_filled else ("long" if futures_side == "BUY" else "short")
+
+    # Step 1: place filled leg at MARKET
+    notional = round(quantity * tick.mid, 2) if (is_spot_filled and open_side == "BUY") else None
+    open_result = await adapter.place_order(
+        symbol=symbol, side=open_side, order_type="MARKET",
+        quantity=quantity, pos_side=pos_side, notional_usdt=notional,
+    )
+    # ... check success, wait 1s, fetch filled_qty ...
+
+    # Step 3: recovery close
+    close_result = await adapter.place_order(
+        symbol=symbol, side=close_side, order_type="MARKET",
+        quantity=filled_qty, pos_side=pos_side,
+        reduce_only=(not is_spot_filled),
+        notional_usdt=close_notional,  # only for SPOT MARKET BUY close
+    )
+    return close_result.success, detail
+```
+
+### Loop dispatch
+
+The main `run_test_suite` loop checks for `partial_fail_test` **before** the normal
+open/wait/close path and dispatches to the helper:
+
+```python
+if scenario.get('partial_fail_test'):
+    ok, detail = await asyncio.wait_for(
+        _suite_partial_fill_test(order_type, quantity, scenario['filled_leg']),
+        timeout=60.0,
+    )
+    scenario['status'] = 'pass' if ok else 'fail'
+    scenario['detail'] = detail
+    _test_suite_state['pass' if ok else 'fail'] += 1
+    socketio.emit('test_suite_update', _test_suite_state)
+    # cooldown then continue
+    continue
+# ... normal open/wait/close path below ...
+```
+
+---
+
+## 14. Frontend — Real-Time UI
 
 The test suite page has three zones:
 
@@ -743,7 +862,7 @@ rows.forEach(r => {
 
 ---
 
-## 14. Frontend — Per-Row Run Button
+## 15. Frontend — Per-Row Run Button
 
 Each row has a Run button that triggers a single scenario without running the full suite.
 
@@ -824,7 +943,7 @@ def get_test_suite_status():
 
 ---
 
-## 15. WebSocket Live Updates
+## 16. WebSocket Live Updates
 
 All state changes are pushed to the browser via `socketio.emit('test_suite_update', state)`.
 The frontend re-renders the entire table on every event — simple and reliable.
@@ -860,7 +979,7 @@ Emit after every state change for responsive UI:
 
 ---
 
-## 16. CSV Export
+## 17. CSV Export
 
 ```python
 @app.route('/api/test-suite/download-csv', methods=['GET'])
@@ -902,7 +1021,7 @@ document.getElementById('btn-download-csv').classList.toggle(
 
 ---
 
-## 17. Configuration Parameters
+## 18. Configuration Parameters
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -917,7 +1036,7 @@ MARKET scenarios always use `forced_mode='MARKET'` regardless of `entry_executio
 
 ---
 
-## 18. Timing & Rate-Limit Strategy
+## 19. Timing & Rate-Limit Strategy
 
 | Phase | Duration | Notes |
 |-------|----------|-------|
@@ -930,16 +1049,17 @@ MARKET scenarios always use `forced_mode='MARKET'` regardless of `entry_executio
 **Total time estimate:**
 
 ```
-18 LIMIT scenarios: 18 × (30 + 4 + 20) = 18 × 54 s ≈ 16 min
-18 MARKET scenarios: 18 × (4 + 4 + 5) = 18 × 13 s ≈ 4 min
-Total: ~20 min for full 36-scenario run
+18 LIMIT scenarios:    18 × (30 + 4 + 20) = 18 × 54 s  ≈ 16 min
+18 MARKET scenarios:   18 × (4 + 4 + 5)   = 18 × 13 s  ≈  4 min
+ 4 partial-fill tests:  4 × (2 + 5)        =  4 × 7 s   ≈  1 min
+Total: ~21 min for full 40-scenario run
 ```
 
 Adjust `inter_pause` and `limit_timeout` for your exchange's rate limits.
 
 ---
 
-## 19. Error Taxonomy & How to Handle Each
+## 20. Error Taxonomy & How to Handle Each
 
 | Error | Root Cause | Fix |
 |-------|-----------|-----|
@@ -953,7 +1073,90 @@ Adjust `inter_pause` and `limit_timeout` for your exchange's rate limits.
 
 ---
 
-## 20. Porting to Another Exchange
+## 21. Known Bugs Fixed
+
+These bugs were discovered during live testing of the suite and are documented here
+so they are not reintroduced when porting.
+
+### Bug 1 — `NameError: scen_mode referenced before assignment` (silent coroutine crash)
+
+**Symptom:** Suite UI freezes permanently on scenario 1 showing "running".
+No errors in the Flask log.  `_test_suite_running` flag stays `True`.
+
+**Root cause:** Inside `run_test_suite`, `logger.info(... scen_mode)` was called
+**before** the line that assigns `scen_mode = scenario.get('forced_mode') or order_mode`.
+On the very first loop iteration, `scen_mode` is undefined → `NameError` →
+uncaught exception kills the coroutine.  Because `socketio.emit` had already run
+with status `'running'`, the UI is stuck.
+
+**Fix:** Move all loop-local variable assignments (`order_type`, `cancel_test`,
+`scen_mode`, `scenario['mode']`, `inter_pause`) **above** the first
+`socketio.emit` and `logger.info` calls in the loop body.
+
+```python
+# CORRECT order:
+for idx, scenario in enumerate(scenarios):
+    order_type  = scenario['order_type']
+    cancel_test = scenario['cancel_test']
+    scen_mode   = scenario.get('forced_mode') or order_mode  # ← defined first
+    scenario['mode'] = scen_mode
+    inter_pause = 5 if scen_mode == 'MARKET' else 20
+
+    scenario['status'] = 'running'
+    _test_suite_state['current'] = idx + 1
+    socketio.emit('test_suite_update', _test_suite_state)
+    logger.info("... [%s]", scen_mode)                       # ← safe to log now
+```
+
+**Force-reset recovery:** If the suite is stuck, the "Force Reset" button calls
+`POST /api/test-suite/reset` which clears the flags without a server restart.
+
+---
+
+### Bug 2 — Partial fill orphan in `_suite_close_position`
+
+**Symptom:** After a cancel-test scenario, a small open position remains on the exchange
+(e.g. −0.0001 BTC spot).  The scenario reports PASS ("cancelled (was pending)").
+
+**Root cause:** When `get_order_status` returns `state="partially_filled"` with
+`filled_qty > 0`, the code cancelled the remaining open portion but **did not close
+the already-filled quantity**.  The filled BTC stayed on the exchange as an orphan.
+
+**Why it happens:** A limit order placed 3 seconds before the cancel window can
+partially fill if the market briefly crosses the limit price.  The cancel removes the
+open remainder, but the filled portion is gone from the order book.
+
+**Fix:** After cancelling, detect `state == "partially_filled"` with `filled_qty > 0`
+and immediately market-close the filled portion:
+
+```python
+if state in ("live", "partially_filled") or filled_qty == 0:
+    cancelled = await adapter.cancel_order(symbol, original_oid)
+    # Close the already-filled qty if a partial fill occurred
+    if filled_qty and filled_qty > 0 and state == "partially_filled":
+        close_notional = round(filled_qty * tick.mid, 2) if (
+            market_type == "SPOT" and close_side == "BUY"
+        ) else None
+        await adapter.place_order(
+            symbol=symbol, side=close_side, order_type="MARKET",
+            quantity=filled_qty, pos_side=stored_pos_side,
+            reduce_only=(market_type == "FUTURES"),
+            notional_usdt=close_notional,
+        )
+        del test_positions[pos_id]
+        return True, f"partial fill: cancelled remaining, market-closed {filled_qty:.6f} BTC"
+    del test_positions[pos_id]
+    return True, "cancelled (was pending)" if cancelled else "cancel-failed"
+```
+
+**Cleanup of pre-existing orphans:** The startup orphan cleanup (`cleanup_orphan_orders`)
+only cancels **pending orders**, not open positions.  Tiny orphan spot positions
+from previous runs must be closed manually (e.g. via the exchange UI or a direct
+market order).
+
+---
+
+## 22. Porting to Another Exchange
 
 ### Step 1: Implement the adapter interface
 
@@ -1019,7 +1222,7 @@ MARKET orders fill immediately.  Always use a demo/sandbox account first.
 
 ---
 
-## 21. Porting to Another Project
+## 23. Porting to Another Project
 
 ### Minimum files needed
 
@@ -1097,7 +1300,7 @@ asyncio.run_coroutine_threadsafe(run_test_suite(), loop)
 
 ---
 
-## 22. Complete Scenario List Reference
+## 24. Complete Scenario List Reference
 
 ```python
 _SUITE_SCENARIOS = [
@@ -1139,12 +1342,25 @@ _SUITE_SCENARIOS = [
     {'id': 'm6a', 'label': 'MKT SHORT_SPREAD #1',            'order_type': 'SHORT_SPREAD',  'cancel_test': False, 'forced_mode': 'MARKET'},
     {'id': 'm6b', 'label': 'MKT SHORT_SPREAD #2',            'order_type': 'SHORT_SPREAD',  'cancel_test': False, 'forced_mode': 'MARKET'},
     {'id': 'm6c', 'label': 'MKT SHORT_SPREAD #3 (quick-close)', 'order_type': 'SHORT_SPREAD', 'cancel_test': True, 'forced_mode': 'MARKET'},
+    # ── Partial-fill / leg-failure recovery (4 scenarios, always MARKET) ──
+    {'id': 'pf-1', 'label': 'LONG_SPREAD partial: spot fills, futures fails → market-close spot',
+     'order_type': 'LONG_SPREAD',  'cancel_test': False, 'forced_mode': 'MARKET',
+     'partial_fail_test': True, 'filled_leg': 'SPOT'},
+    {'id': 'pf-2', 'label': 'LONG_SPREAD partial: futures fills, spot fails → market-close futures',
+     'order_type': 'LONG_SPREAD',  'cancel_test': False, 'forced_mode': 'MARKET',
+     'partial_fail_test': True, 'filled_leg': 'FUTURES'},
+    {'id': 'pf-3', 'label': 'SHORT_SPREAD partial: spot fills, futures fails → market-close spot',
+     'order_type': 'SHORT_SPREAD', 'cancel_test': False, 'forced_mode': 'MARKET',
+     'partial_fail_test': True, 'filled_leg': 'SPOT'},
+    {'id': 'pf-4', 'label': 'SHORT_SPREAD partial: futures fills, spot fails → market-close futures',
+     'order_type': 'SHORT_SPREAD', 'cancel_test': False, 'forced_mode': 'MARKET',
+     'partial_fail_test': True, 'filled_leg': 'FUTURES'},
 ]
 ```
 
 ---
 
-## 23. Checklist: Implementing from Scratch
+## 25. Checklist: Implementing from Scratch
 
 ### Exchange Research
 - [ ] What is the minimum order size (SPOT and FUTURES)?
@@ -1163,10 +1379,14 @@ _SUITE_SCENARIOS = [
 - [ ] Handle `reduceOnly` for futures close orders
 
 ### Backend
-- [ ] Define `_SUITE_SCENARIOS` list (18 LIMIT + 18 MARKET recommended)
+- [ ] Define `_SUITE_SCENARIOS` list (18 LIMIT + 18 MARKET + 4 partial-fail recommended)
 - [ ] Implement `_suite_open_order(order_type, quantity, forced_mode)`
 - [ ] Implement `_suite_close_position(pos_id)` — cancel or close
+  - [ ] **Critical:** when `state="partially_filled"` and `filled_qty > 0`, market-close the filled portion after cancelling the remainder (see Bug 2 in §21)
+- [ ] Implement `_suite_partial_fill_test(order_type, quantity, filled_leg)` for recovery path scenarios
 - [ ] Implement `run_test_suite()` coroutine with sliced cooldowns
+  - [ ] **Critical:** assign `scen_mode` **before** any `socketio.emit` or `logger.info` that references it (see Bug 1 in §21)
+  - [ ] Dispatch `partial_fail_test` scenarios to `_suite_partial_fill_test` before the normal open/wait/close path
 - [ ] Implement `run_single_scenario_task(scenario_id)` coroutine
 - [ ] Add API endpoints: start, stop, run-scenario, status, download-csv
 - [ ] Pre-populate `scenarios` in status endpoint if empty
@@ -1186,6 +1406,12 @@ _SUITE_SCENARIOS = [
 ### Testing Sequence
 1. Run MARKET single scenario for each order type individually
 2. Run LIMIT single scenario for each order type individually
-3. Run full MARKET 18-scenario sweep
-4. Run full LIMIT 18-scenario sweep
-5. Run complete 36-scenario suite end-to-end
+3. Run each partial-fill recovery scenario (pf-1 through pf-4) individually
+4. Run full MARKET 18-scenario sweep
+5. Run full LIMIT 18-scenario sweep
+6. Run complete 40-scenario suite end-to-end
+
+### Post-Run Checklist
+- [ ] Verify no orphan positions remain on the exchange after each run
+- [ ] If any cancel-test scenario reports "cancelled (was pending)", check that no tiny spot/futures position was left open (partial-fill orphan)
+- [ ] If suite freezes on scenario 1 and logs show no error, check for `scen_mode` usage before assignment
