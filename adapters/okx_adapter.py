@@ -255,12 +255,9 @@ class OKXAdapter(ExchangeAdapter):
                     min_sz = symbol_info.get("min_qty", 0)
                     lot_sz = symbol_info.get("lot_sz", 0.00000001)
 
-                    # Calculate decimal places from lot_sz
-                    lot_str = str(lot_sz)
-                    if "." in lot_str:
-                        decimals = len(lot_str.split(".")[1].rstrip("0")) or 8
-                    else:
-                        decimals = 0
+                    # Use qty_precision from symbol_info (calculated from original API string)
+                    # Don't recalculate from float - str(0.00000001) becomes "1e-08"
+                    decimals = symbol_info.get("qty_precision", 8)
 
                     # Round to lot_sz precision
                     sz = round(quantity, decimals)
@@ -296,14 +293,9 @@ class OKXAdapter(ExchangeAdapter):
             }
 
             if order_type in ("LIMIT", "POST_ONLY") and price:
-                # Use tick_sz for proper price precision (default 2 decimals for BTC)
+                # Use price_precision from symbol_info (calculated from original API string)
                 if symbol_info:
-                    tick_sz = symbol_info.get("tick_sz", 0.01)
-                    tick_str = str(tick_sz)
-                    if "." in tick_str:
-                        price_decimals = len(tick_str.split(".")[1].rstrip("0")) or 2
-                    else:
-                        price_decimals = 0
+                    price_decimals = symbol_info.get("price_precision", 2)
                     rounded_price = round(price, price_decimals)
                     px_str = f"{rounded_price:.{price_decimals}f}"
                 else:
@@ -740,13 +732,19 @@ class OKXAdapter(ExchangeAdapter):
                 data = result["data"][0]
                 lot_sz_str = data.get("lotSz", "0.00000001")
                 tick_sz_str = data.get("tickSz", "0.01")
+
+                # Calculate decimal precision from string representation
+                # e.g., "0.00000001" -> 8 decimals, "0.001" -> 3 decimals
+                qty_precision = len(lot_sz_str.split(".")[1]) if "." in lot_sz_str else 0
+                price_precision = len(tick_sz_str.split(".")[1]) if "." in tick_sz_str else 0
+
                 return {
                     "symbol": symbol,
-                    "min_qty": float(data.get("minSz", 0)),
+                    "min_qty": float(data.get("minSz") or 0),
                     "lot_sz": float(lot_sz_str),  # Minimum order increment
                     "tick_sz": float(tick_sz_str),  # Price tick size
-                    "qty_precision": int(lot_sz_str.find("1") - 1) if "." in lot_sz_str else 0,
-                    "price_precision": int(tick_sz_str.find("1") - 1) if "." in tick_sz_str else 0,
+                    "qty_precision": qty_precision,
+                    "price_precision": price_precision,
                     "contract_val": float(data.get("ctVal") or 1),
                 }
 
