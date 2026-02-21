@@ -630,28 +630,30 @@ def close_orphaned_spot():
         return jsonify({'success': False, 'error': 'No spot adapter available'})
 
     async def sell_to_usdt():
-        # Get current balance
-        balance = await adapter.get_asset_balance(currency)
-        if balance <= 0:
-            return None, f"No {currency} balance to sell"
+        # Get current balance (returns dict with 'available', 'total', etc.)
+        balance_info = await adapter.get_asset_balance(currency)
+        available = balance_info.get('available', 0) if isinstance(balance_info, dict) else 0
+
+        if available <= 0:
+            return None, f"No {currency} balance to sell (available: {available})"
 
         # Sell to USDT
         result = await adapter.sell_spot_to_usdt(currency)
-        return result, balance
+        return result, available
 
     if loop:
         try:
             future = asyncio.run_coroutine_threadsafe(sell_to_usdt(), loop)
-            result, balance = future.result(timeout=30)
+            result, amount = future.result(timeout=30)
 
             if result is None:
-                return jsonify({'success': True, 'message': balance})  # balance is error message
+                return jsonify({'success': True, 'message': amount})  # amount is error message here
 
             if result.success:
                 return jsonify({
                     'success': True,
                     'currency': currency,
-                    'amount_sold': balance,
+                    'amount_sold': amount,
                     'order_id': result.order_id,
                 })
             else:
