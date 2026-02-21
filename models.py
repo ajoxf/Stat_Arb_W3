@@ -96,8 +96,17 @@ class TradingConfig:
     limit_order_price_offset_bps: float = 1.0  # Offset from best bid/ask in basis points
 
     # Fee estimates for STD filter (per side, in basis points)
-    taker_fee_bps: float = 5.0   # Market orders - typically 0.05%
-    maker_fee_bps: float = 2.0   # Limit orders - typically 0.02% (or rebate)
+    # Spot and Futures have different fee structures on OKX
+    # Spot (non-VIP): Maker 8 bps, Taker 10 bps
+    # Futures (non-VIP): Maker 2 bps, Taker 5 bps
+    spot_maker_fee_bps: float = 8.0    # Spot limit orders (0.08%)
+    spot_taker_fee_bps: float = 10.0   # Spot market orders (0.10%)
+    futures_maker_fee_bps: float = 2.0  # Futures limit orders (0.02%)
+    futures_taker_fee_bps: float = 5.0  # Futures market orders (0.05%)
+
+    # Legacy fields - kept for backward compatibility
+    taker_fee_bps: float = 5.0
+    maker_fee_bps: float = 2.0
 
     # Safety settings
     entry_cooldown_seconds: int = 60  # Minimum seconds between trades (prevents rapid re-entry)
@@ -135,6 +144,10 @@ class TradingConfig:
             'exit_execution_mode': self.exit_execution_mode,
             'limit_order_timeout_sec': self.limit_order_timeout_sec,
             'limit_order_price_offset_bps': self.limit_order_price_offset_bps,
+            'spot_maker_fee_bps': self.spot_maker_fee_bps,
+            'spot_taker_fee_bps': self.spot_taker_fee_bps,
+            'futures_maker_fee_bps': self.futures_maker_fee_bps,
+            'futures_taker_fee_bps': self.futures_taker_fee_bps,
             'taker_fee_bps': self.taker_fee_bps,
             'maker_fee_bps': self.maker_fee_bps,
             'estimated_costs_bps': self.estimated_costs_bps,

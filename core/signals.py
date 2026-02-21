@@ -211,6 +211,12 @@ class SignalGenerator:
         """
         Check if STD is sufficient to cover trading costs.
 
+        Uses separate spot and futures fees since they differ significantly:
+          Spot (non-VIP):    Maker 8 bps, Taker 10 bps
+          Futures (non-VIP): Maker 2 bps, Taker  5 bps
+
+        Round-trip cost = entry (spot + futures) + exit (spot + futures)
+
         Returns (passed, profitability_ratio)
         """
         if not self.config.std_filter_enabled:
@@ -219,21 +225,33 @@ class SignalGenerator:
         if self.current_std <= 0:
             return False, 0.0
 
-        # Use appropriate fee based on order execution mode
-        # Market orders = taker fee, Limit orders = maker fee
-        if self.config.order_execution_mode == "LIMIT":
-            fee_bps = self.config.maker_fee_bps
-        else:
-            fee_bps = self.config.taker_fee_bps
-
-        # Estimated round-trip cost in price terms
-        # fee_bps is per side, so round-trip is 2x (entry + exit)
-        # Also multiply by 2 for both legs (spot + futures)
         spot_price = self.spot_prices[-1] if self.spot_prices else 0
         if spot_price <= 0:
             return False, 0.0
 
-        costs_price = (fee_bps / 10000) * spot_price * 4  # 2 sides * 2 legs
+        # Get separate spot/futures fees (fall back to legacy fields if not set)
+        spot_maker   = getattr(self.config, 'spot_maker_fee_bps',    self.config.maker_fee_bps)
+        spot_taker   = getattr(self.config, 'spot_taker_fee_bps',    self.config.taker_fee_bps)
+        fut_maker    = getattr(self.config, 'futures_maker_fee_bps',  self.config.maker_fee_bps)
+        fut_taker    = getattr(self.config, 'futures_taker_fee_bps',  self.config.taker_fee_bps)
+
+        # Entry fees: based on entry execution mode
+        entry_mode = getattr(self.config, 'entry_execution_mode', self.config.order_execution_mode)
+        if entry_mode == "LIMIT":
+            entry_cost_bps = spot_maker + fut_maker   # e.g. 8 + 2 = 10 bps
+        else:
+            entry_cost_bps = spot_taker + fut_taker   # e.g. 10 + 5 = 15 bps
+
+        # Exit fees: based on exit execution mode
+        exit_mode = getattr(self.config, 'exit_execution_mode', self.config.order_execution_mode)
+        if exit_mode == "LIMIT":
+            exit_cost_bps = spot_maker + fut_maker
+        else:
+            exit_cost_bps = spot_taker + fut_taker    # e.g. 10 + 5 = 15 bps
+
+        # Total round-trip cost in price terms
+        total_cost_bps = entry_cost_bps + exit_cost_bps  # e.g. 10 + 15 = 25 bps
+        costs_price = (total_cost_bps / 10000) * spot_price
 
         # Profitability ratio: how many times STD covers the costs
         profitability_ratio = self.current_std / costs_price if costs_price > 0 else float('inf')
@@ -455,7 +473,13 @@ class SignalGenerator:
             'std_ratio_required': self.config.min_std_multiple,
             'std_filter_enabled': self.config.std_filter_enabled,
             'order_mode': self.config.order_execution_mode,
-            'fee_bps_used': self.config.maker_fee_bps if self.config.order_execution_mode == "LIMIT" else self.config.taker_fee_bps,
+            'fee_bps_used': (
+                getattr(self.config, 'spot_maker_fee_bps', self.config.maker_fee_bps) +
+                getattr(self.config, 'futures_maker_fee_bps', self.config.maker_fee_bps)
+            ) if getattr(self.config, 'entry_execution_mode', self.config.order_execution_mode) == "LIMIT" else (
+                getattr(self.config, 'spot_taker_fee_bps', self.config.taker_fee_bps) +
+                getattr(self.config, 'futures_taker_fee_bps', self.config.taker_fee_bps)
+            ),
             'regime': regime if data_ready else "COLLECTING",
             'data_points': len(self.spread_history),
             'lookback': self.lookback,

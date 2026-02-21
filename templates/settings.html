@@ -166,17 +166,47 @@
                     <div class="row mb-4">
                         <div class="col-12">
                             <h6 class="text-secondary mb-3">Fee Estimates (for STD Filter)</h6>
-                            <small class="text-secondary d-block mb-3">STD Filter uses the appropriate fee based on your Order Execution Mode</small>
+                            <small class="text-secondary d-block mb-2">
+                                The STD Filter calculates the minimum spread required to profit after fees.
+                                Spot and Futures fees differ — set them separately for an accurate calculation.
+                            </small>
+                            <div class="alert alert-info py-2 px-3 mb-3" style="font-size:0.82rem;">
+                                <strong>Round-trip cost</strong> =
+                                Entry (Spot + Futures) + Exit (Spot + Futures)<br>
+                                <span id="fee-summary-text" class="text-muted">—</span>
+                            </div>
                         </div>
-                        <div class="col-md-6">
-                            <label class="form-label">Taker Fee (bps) - Market Orders</label>
-                            <input type="number" class="form-control" id="taker_fee_bps" name="taker_fee_bps" value="{{ config.taker_fee_bps }}" step="0.5" min="0" max="50">
-                            <small class="text-secondary">Typical: 5 bps (0.05%)</small>
+
+                        <!-- Spot Fees -->
+                        <div class="col-12 mb-2">
+                            <span class="badge bg-primary me-1">SPOT</span>
+                            <small class="text-secondary">OKX non-VIP: Maker 8 bps · Taker 10 bps &nbsp;|&nbsp; VIP1: Maker 4.5 bps · Taker 5 bps</small>
                         </div>
-                        <div class="col-md-6">
-                            <label class="form-label">Maker Fee (bps) - Limit Orders</label>
-                            <input type="number" class="form-control" id="maker_fee_bps" name="maker_fee_bps" value="{{ config.maker_fee_bps }}" step="0.5" min="0" max="50">
-                            <small class="text-secondary">Typical: 2 bps (0.02%) or rebate</small>
+                        <div class="col-md-3">
+                            <label class="form-label">Spot Maker (bps)</label>
+                            <input type="number" class="form-control fee-input" id="spot_maker_fee_bps" name="spot_maker_fee_bps" value="{{ config.spot_maker_fee_bps }}" step="0.5" min="0" max="50" oninput="updateFeeSummary()">
+                            <small class="text-secondary">Limit orders on Spot</small>
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label">Spot Taker (bps)</label>
+                            <input type="number" class="form-control fee-input" id="spot_taker_fee_bps" name="spot_taker_fee_bps" value="{{ config.spot_taker_fee_bps }}" step="0.5" min="0" max="50" oninput="updateFeeSummary()">
+                            <small class="text-secondary">Market orders on Spot</small>
+                        </div>
+
+                        <!-- Futures Fees -->
+                        <div class="col-12 mb-2 mt-3">
+                            <span class="badge bg-warning text-dark me-1">FUTURES</span>
+                            <small class="text-secondary">OKX non-VIP: Maker 2 bps · Taker 5 bps &nbsp;|&nbsp; VIP1: Maker 1 bps · Taker 3 bps</small>
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label">Futures Maker (bps)</label>
+                            <input type="number" class="form-control fee-input" id="futures_maker_fee_bps" name="futures_maker_fee_bps" value="{{ config.futures_maker_fee_bps }}" step="0.5" min="0" max="50" oninput="updateFeeSummary()">
+                            <small class="text-secondary">Limit orders on Futures</small>
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label">Futures Taker (bps)</label>
+                            <input type="number" class="form-control fee-input" id="futures_taker_fee_bps" name="futures_taker_fee_bps" value="{{ config.futures_taker_fee_bps }}" step="0.5" min="0" max="50" oninput="updateFeeSummary()">
+                            <small class="text-secondary">Market orders on Futures</small>
                         </div>
                     </div>
 
@@ -533,9 +563,39 @@
         document.getElementById('limit_order_timeout_sec').disabled = !anyLimit;
         document.getElementById('limit_order_price_offset_bps').disabled = !anyLimit;
         document.getElementById('limit-order-info').style.display = anyLimit ? 'block' : 'none';
+        updateFeeSummary();
     }
 
-    updateLimitSettingsVisibility(); // Initial state
+    // Live fee round-trip summary
+    function updateFeeSummary() {
+        const spotMaker = parseFloat(document.getElementById('spot_maker_fee_bps').value) || 0;
+        const spotTaker = parseFloat(document.getElementById('spot_taker_fee_bps').value) || 0;
+        const futMaker  = parseFloat(document.getElementById('futures_maker_fee_bps').value) || 0;
+        const futTaker  = parseFloat(document.getElementById('futures_taker_fee_bps').value) || 0;
+
+        const entryMode = document.getElementById('entry_execution_mode').value;
+        const exitMode  = document.getElementById('exit_execution_mode').value;
+
+        // LIMIT uses maker rates, MARKET uses taker rates
+        const spotEntryFee = entryMode === 'LIMIT' ? spotMaker : spotTaker;
+        const futEntryFee  = entryMode === 'LIMIT' ? futMaker  : futTaker;
+        const entryCost    = spotEntryFee + futEntryFee;
+
+        const spotExitFee = exitMode === 'LIMIT' ? spotMaker : spotTaker;
+        const futExitFee  = exitMode === 'LIMIT' ? futMaker  : futTaker;
+        const exitCost    = spotExitFee + futExitFee;
+
+        const totalCost  = entryCost + exitCost;
+        const entryLabel = entryMode === 'LIMIT' ? 'maker' : 'taker';
+        const exitLabel  = exitMode  === 'LIMIT' ? 'maker' : 'taker';
+
+        document.getElementById('fee-summary-text').textContent =
+            `Entry (${entryLabel}): Spot ${spotEntryFee} + Futures ${futEntryFee} = ${entryCost} bps  ·  ` +
+            `Exit (${exitLabel}): Spot ${spotExitFee} + Futures ${futExitFee} = ${exitCost} bps  ·  ` +
+            `Round-trip: ${totalCost} bps (${(totalCost / 100).toFixed(3)}%)`;
+    }
+
+    updateLimitSettingsVisibility(); // Initial state (also calls updateFeeSummary)
 
     // Form submission
     document.getElementById('config-form').addEventListener('submit', function(e) {
@@ -558,8 +618,10 @@
             max_position_size_usd: parseFloat(document.getElementById('max_position_size_usd').value),
             spot_leverage: parseInt(document.getElementById('spot_leverage').value),
             futures_leverage: parseInt(document.getElementById('futures_leverage').value),
-            taker_fee_bps: parseFloat(document.getElementById('taker_fee_bps').value),
-            maker_fee_bps: parseFloat(document.getElementById('maker_fee_bps').value),
+            spot_maker_fee_bps: parseFloat(document.getElementById('spot_maker_fee_bps').value),
+            spot_taker_fee_bps: parseFloat(document.getElementById('spot_taker_fee_bps').value),
+            futures_maker_fee_bps: parseFloat(document.getElementById('futures_maker_fee_bps').value),
+            futures_taker_fee_bps: parseFloat(document.getElementById('futures_taker_fee_bps').value),
             paper_trading: document.getElementById('paper_trading').checked,
             entry_execution_mode: document.getElementById('entry_execution_mode').value,
             exit_execution_mode: document.getElementById('exit_execution_mode').value,
@@ -609,8 +671,10 @@
                 document.getElementById('max_position_size_usd').value = config.max_position_size_usd;
                 document.getElementById('spot_leverage').value = config.spot_leverage || 1;
                 document.getElementById('futures_leverage').value = config.futures_leverage || 1;
-                document.getElementById('taker_fee_bps').value = config.taker_fee_bps || 5.0;
-                document.getElementById('maker_fee_bps').value = config.maker_fee_bps || 2.0;
+                document.getElementById('spot_maker_fee_bps').value = config.spot_maker_fee_bps || 8.0;
+                document.getElementById('spot_taker_fee_bps').value = config.spot_taker_fee_bps || 10.0;
+                document.getElementById('futures_maker_fee_bps').value = config.futures_maker_fee_bps || 2.0;
+                document.getElementById('futures_taker_fee_bps').value = config.futures_taker_fee_bps || 5.0;
                 document.getElementById('paper_trading').checked = config.paper_trading;
                 document.getElementById('entry_execution_mode').value = config.entry_execution_mode || 'LIMIT';
                 document.getElementById('exit_execution_mode').value = config.exit_execution_mode || 'MARKET';
@@ -620,6 +684,7 @@
                 document.getElementById('verify_exchange_position').checked = config.verify_exchange_position !== false;
                 document.getElementById('orphan_recovery_timeout_sec').value = config.orphan_recovery_timeout_sec || 60;
                 updateLimitSettingsVisibility();
+                updateFeeSummary();
             });
     }
 
