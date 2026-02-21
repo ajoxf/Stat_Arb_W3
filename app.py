@@ -1388,7 +1388,7 @@ def open_test_order():
             min_price = tick.bid * (1 + SAFETY_BUFFER_BPS)
             return round(max(target, min_price), 2)
 
-    async def execute_single_leg(market_type: str, side: str, price: float):
+    async def execute_single_leg(market_type: str, side: str, price: float, qty: float = quantity):
         """Execute a single leg order."""
         adapter = engine.spot_adapter if market_type == "SPOT" else engine.futures_adapter
         if not adapter:
@@ -1419,7 +1419,7 @@ def open_test_order():
             symbol=symbol,
             side=side,
             order_type=order_type_str,
-            quantity=quantity,
+            quantity=qty,
             price=limit_price,
             pos_side=pos_side,
             notional_usdt=notional,
@@ -1431,6 +1431,14 @@ def open_test_order():
 
     async def execute_order():
         results = []
+
+        # For futures legs, quantity must be at least 1 contract (ct_val BTC).
+        # Fetch the actual ct_val; fall back to 0.01 (standard BTC-USDT-SWAP).
+        futures_info = None
+        if engine.futures_adapter:
+            futures_info = await engine.futures_adapter.get_symbol_info(config.futures_symbol)
+        ct_val = float(futures_info.get('ct_val', 0.01)) if futures_info else 0.01
+        futures_qty = max(quantity, ct_val)
 
         if order_type == "BUY_SPOT":
             result, error, pos_side = await execute_single_leg("SPOT", "BUY", spot_price)
@@ -1447,16 +1455,16 @@ def open_test_order():
                 return None, error
 
         elif order_type == "BUY_FUTURES":
-            result, error, pos_side = await execute_single_leg("FUTURES", "BUY", futures_price)
+            result, error, pos_side = await execute_single_leg("FUTURES", "BUY", futures_price, qty=futures_qty)
             if result:
-                results.append(("FUTURES", "BUY", futures_price, result, quantity, pos_side))
+                results.append(("FUTURES", "BUY", futures_price, result, futures_qty, pos_side))
             else:
                 return None, error
 
         elif order_type == "SELL_FUTURES":
-            result, error, pos_side = await execute_single_leg("FUTURES", "SELL", futures_price)
+            result, error, pos_side = await execute_single_leg("FUTURES", "SELL", futures_price, qty=futures_qty)
             if result:
-                results.append(("FUTURES", "SELL", futures_price, result, quantity, pos_side))
+                results.append(("FUTURES", "SELL", futures_price, result, futures_qty, pos_side))
             else:
                 return None, error
 
@@ -1467,10 +1475,10 @@ def open_test_order():
                 return None, f"Spot order failed: {spot_error}"
             results.append(("SPOT", "BUY", spot_price, spot_result, quantity, None))
 
-            futures_result, futures_error, pos_side = await execute_single_leg("FUTURES", "SELL", futures_price)
+            futures_result, futures_error, pos_side = await execute_single_leg("FUTURES", "SELL", futures_price, qty=futures_qty)
             if not futures_result:
                 return None, f"Futures order failed: {futures_error}"
-            results.append(("FUTURES", "SELL", futures_price, futures_result, quantity, pos_side))
+            results.append(("FUTURES", "SELL", futures_price, futures_result, futures_qty, pos_side))
 
         elif order_type == "SHORT_SPREAD":
             # Sell Spot + Buy Futures
@@ -1479,10 +1487,10 @@ def open_test_order():
                 return None, f"Spot order failed: {spot_error}"
             results.append(("SPOT", "SELL", spot_price, spot_result, quantity, None))
 
-            futures_result, futures_error, pos_side = await execute_single_leg("FUTURES", "BUY", futures_price)
+            futures_result, futures_error, pos_side = await execute_single_leg("FUTURES", "BUY", futures_price, qty=futures_qty)
             if not futures_result:
                 return None, f"Futures order failed: {futures_error}"
-            results.append(("FUTURES", "BUY", futures_price, futures_result, quantity, pos_side))
+            results.append(("FUTURES", "BUY", futures_price, futures_result, futures_qty, pos_side))
 
         return results, None
 
