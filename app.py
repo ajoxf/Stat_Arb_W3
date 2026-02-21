@@ -1881,14 +1881,22 @@ def ensure_engine_started():
 
 
 if __name__ == '__main__':
-    # Start the trading engine
-    start_engine_loop()
+    # Only start engine in the main process (not the reloader child)
+    # WERKZEUG_RUN_MAIN is set in the child process when using debug mode
+    is_main_process = os.environ.get('WERKZEUG_RUN_MAIN') != 'true'
+    use_debug = os.getenv('FLASK_DEBUG', 'false').lower() == 'true'
+
+    # In debug mode with reloader, only start engine in child process
+    # In non-debug mode, start engine in main process
+    if not use_debug or os.environ.get('WERKZEUG_RUN_MAIN') == 'true':
+        start_engine_loop()
 
     # Log the server address
     port = 5000
-    logger.info("=" * 50)
-    logger.info("Dashboard available at: http://localhost:%d", port)
-    logger.info("=" * 50)
+    if is_main_process or not use_debug:
+        logger.info("=" * 50)
+        logger.info("Dashboard available at: http://localhost:%d", port)
+        logger.info("=" * 50)
 
     # Suppress HTTP request logs right before starting
     logging.getLogger('werkzeug').setLevel(logging.ERROR)
@@ -1897,10 +1905,12 @@ if __name__ == '__main__':
     app.logger.setLevel(logging.WARNING)
 
     # Run Flask app with SocketIO (threading mode)
+    # use_reloader=False prevents duplicate processes
     socketio.run(
         app,
         host='0.0.0.0',
         port=port,
-        debug=os.getenv('FLASK_DEBUG', 'false').lower() == 'true',
-        allow_unsafe_werkzeug=True  # Required for threading mode in production
+        debug=use_debug,
+        use_reloader=False,  # Disable reloader to prevent duplicate engines
+        allow_unsafe_werkzeug=True
     )
