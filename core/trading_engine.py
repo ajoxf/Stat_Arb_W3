@@ -15,6 +15,7 @@ from models import (
 )
 from core.signals import SignalGenerator
 from core.order_executor import OrderExecutor
+from core.trade_logger import get_trade_logger
 from adapters.base import ExchangeAdapter
 from adapters.okx_websocket import OKXWebSocketManager
 
@@ -854,6 +855,22 @@ class TradingEngine:
                             self.config.order_execution_mode,
                             trade.spot_order_id, trade.entry_spot_price,
                             trade.futures_order_id, trade.entry_futures_price)
+
+                # Log to CSV for post-analysis
+                csv_logger = get_trade_logger()
+                csv_logger.log_trade(
+                    event_type="ENTRY",
+                    position_type=signal.signal_type,
+                    quantity=trade.quantity,
+                    spot_price=trade.entry_spot_price,
+                    futures_price=trade.entry_futures_price,
+                    spot_order_id=trade.spot_order_id,
+                    futures_order_id=trade.futures_order_id,
+                    spot_status="FILLED",
+                    futures_status="FILLED",
+                    notes=f"mode={self.config.order_execution_mode}"
+                )
+
                 # Log periodic stats
                 self._log_order_stats()
                 return True
@@ -915,6 +932,13 @@ class TradingEngine:
             )
             self.state.error = f"CRITICAL: Spot orders failing {spot_fail_rate*100:.0f}% of the time"
 
+            # Log to CSV for post-analysis
+            csv_logger = get_trade_logger()
+            csv_logger.log_spot_failure_pattern(
+                self._spot_order_attempts, self._spot_order_failures,
+                self._futures_order_attempts, self._futures_order_failures
+            )
+
     def _log_order_stats(self) -> None:
         """Log order execution statistics periodically for monitoring."""
         now = datetime.utcnow()
@@ -930,6 +954,13 @@ class TradingEngine:
             self._futures_order_attempts - self._futures_order_failures,
             self._futures_order_attempts,
             (1 - self._futures_order_failures / self._futures_order_attempts) * 100 if self._futures_order_attempts > 0 else 100
+        )
+
+        # Log to CSV for post-analysis
+        csv_logger = get_trade_logger()
+        csv_logger.log_order_stats(
+            self._spot_order_attempts, self._spot_order_failures,
+            self._futures_order_attempts, self._futures_order_failures
         )
 
     def _log_startup_summary(self) -> None:
@@ -962,6 +993,10 @@ class TradingEngine:
                    cfg.hurst_enabled, cfg.hurst_threshold,
                    cfg.std_filter_enabled, cfg.min_std_multiple)
         logger.info("=" * 60)
+
+        # Also log to CSV for easy reference
+        csv_logger = get_trade_logger()
+        csv_logger.log_startup(cfg.to_dict())
 
     async def _execute_exit_orders(self, trade: Trade, signal: Signal) -> bool:
         """Execute exit orders on exchanges using the order executor."""

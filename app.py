@@ -32,10 +32,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Suppress noisy HTTP request logs
-logging.getLogger('werkzeug').setLevel(logging.WARNING)
-logging.getLogger('engineio').setLevel(logging.WARNING)
-logging.getLogger('socketio').setLevel(logging.WARNING)
+# Suppress noisy HTTP request logs - use ERROR to hide all routine requests
+logging.getLogger('werkzeug').setLevel(logging.ERROR)
+logging.getLogger('engineio').setLevel(logging.ERROR)
+logging.getLogger('socketio').setLevel(logging.ERROR)
+logging.getLogger('urllib3').setLevel(logging.WARNING)
 
 # Initialize Flask app
 app = Flask(__name__)
