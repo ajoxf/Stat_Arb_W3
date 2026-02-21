@@ -1843,7 +1843,7 @@ def get_test_order_status():
 _test_suite_cancel: bool = False
 _test_suite_running: bool = False
 _test_suite_state: Dict[str, Any] = {
-    'running': False, 'current': 0, 'total': 18,
+    'running': False, 'current': 0, 'total': 36,
     'pass': 0, 'fail': 0, 'scenarios': [], 'start_time': None, 'order_mode': '',
 }
 
@@ -1867,16 +1867,36 @@ _SUITE_SCENARIOS = [
     {'id': '6a', 'label': 'SHORT_SPREAD #1',      'order_type': 'SHORT_SPREAD',  'cancel_test': False},
     {'id': '6b', 'label': 'SHORT_SPREAD #2',      'order_type': 'SHORT_SPREAD',  'cancel_test': False},
     {'id': '6c', 'label': 'SHORT_SPREAD #3 (cancel)', 'order_type': 'SHORT_SPREAD', 'cancel_test': True},
+    # ── 18 MARKET-order scenarios (forced_mode overrides config) ──────────────
+    {'id': 'm1a', 'label': 'MKT BUY_SPOT #1',              'order_type': 'BUY_SPOT',      'cancel_test': False, 'forced_mode': 'MARKET'},
+    {'id': 'm1b', 'label': 'MKT BUY_SPOT #2',              'order_type': 'BUY_SPOT',      'cancel_test': False, 'forced_mode': 'MARKET'},
+    {'id': 'm1c', 'label': 'MKT BUY_SPOT #3 (quick-close)','order_type': 'BUY_SPOT',      'cancel_test': True,  'forced_mode': 'MARKET'},
+    {'id': 'm2a', 'label': 'MKT SELL_FUTURES #1',           'order_type': 'SELL_FUTURES',  'cancel_test': False, 'forced_mode': 'MARKET'},
+    {'id': 'm2b', 'label': 'MKT SELL_FUTURES #2',           'order_type': 'SELL_FUTURES',  'cancel_test': False, 'forced_mode': 'MARKET'},
+    {'id': 'm2c', 'label': 'MKT SELL_FUTURES #3 (quick-close)', 'order_type': 'SELL_FUTURES', 'cancel_test': True, 'forced_mode': 'MARKET'},
+    {'id': 'm3a', 'label': 'MKT BUY_FUTURES #1',            'order_type': 'BUY_FUTURES',   'cancel_test': False, 'forced_mode': 'MARKET'},
+    {'id': 'm3b', 'label': 'MKT BUY_FUTURES #2',            'order_type': 'BUY_FUTURES',   'cancel_test': False, 'forced_mode': 'MARKET'},
+    {'id': 'm3c', 'label': 'MKT BUY_FUTURES #3 (quick-close)', 'order_type': 'BUY_FUTURES', 'cancel_test': True, 'forced_mode': 'MARKET'},
+    {'id': 'm4a', 'label': 'MKT SELL_SPOT #1',              'order_type': 'SELL_SPOT',     'cancel_test': False, 'forced_mode': 'MARKET'},
+    {'id': 'm4b', 'label': 'MKT SELL_SPOT #2',              'order_type': 'SELL_SPOT',     'cancel_test': False, 'forced_mode': 'MARKET'},
+    {'id': 'm4c', 'label': 'MKT SELL_SPOT #3 (quick-close)','order_type': 'SELL_SPOT',     'cancel_test': True,  'forced_mode': 'MARKET'},
+    {'id': 'm5a', 'label': 'MKT LONG_SPREAD #1',            'order_type': 'LONG_SPREAD',   'cancel_test': False, 'forced_mode': 'MARKET'},
+    {'id': 'm5b', 'label': 'MKT LONG_SPREAD #2',            'order_type': 'LONG_SPREAD',   'cancel_test': False, 'forced_mode': 'MARKET'},
+    {'id': 'm5c', 'label': 'MKT LONG_SPREAD #3 (quick-close)', 'order_type': 'LONG_SPREAD', 'cancel_test': True, 'forced_mode': 'MARKET'},
+    {'id': 'm6a', 'label': 'MKT SHORT_SPREAD #1',           'order_type': 'SHORT_SPREAD',  'cancel_test': False, 'forced_mode': 'MARKET'},
+    {'id': 'm6b', 'label': 'MKT SHORT_SPREAD #2',           'order_type': 'SHORT_SPREAD',  'cancel_test': False, 'forced_mode': 'MARKET'},
+    {'id': 'm6c', 'label': 'MKT SHORT_SPREAD #3 (quick-close)', 'order_type': 'SHORT_SPREAD', 'cancel_test': True, 'forced_mode': 'MARKET'},
 ]
 
 
-async def _suite_open_order(order_type: str, quantity: float):
+async def _suite_open_order(order_type: str, quantity: float, forced_mode: str | None = None):
     """
     Place the opening leg(s) for a suite scenario.
     Returns (list_of_leg_tuples, error_str).  error_str is None on success.
     Each leg tuple: (market_type, side, entry_price, OrderResult, qty, pos_side)
+    forced_mode overrides config.entry_execution_mode when set (e.g. 'MARKET').
     """
-    order_mode = config.entry_execution_mode  # Use entry mode (LIMIT/MARKET) for opening legs
+    order_mode = forced_mode or config.entry_execution_mode
 
     def calc_limit_price(side: str, tick) -> float:
         offset_bps = config.limit_order_price_offset_bps / 10000
@@ -2011,16 +2031,15 @@ async def _suite_close_position(pos_id: str):
 
 async def run_test_suite():
     """
-    Full 18-scenario test suite.  Runs entirely in the async event loop so it
-    can await adapter calls without blocking Flask.  Emits 'test_suite_update'
-    WebSocket events after every state change so the UI stays in sync.
+    Full 36-scenario test suite (18 LIMIT + 18 MARKET).
+    Runs entirely in the async event loop so it can await adapter calls without
+    blocking Flask.  Emits 'test_suite_update' WebSocket events after every
+    state change so the UI stays in sync.
 
-    Timing (targets 10-15 min total):
-      MARKET  mode: 4 s after open + 30 s cooldown  → 18 × ~34 s ≈ 10 min
-      LIMIT   mode: limit_timeout s after open + 20 s cooldown
-                    → 18 × (timeout+24 s) ≈ 13-15 min with default 30 s timeout
-    Cancel-test scenarios close after 3 s regardless of mode to explicitly
-    exercise the order-cancellation path.
+    Timing per scenario:
+      LIMIT  open: limit_timeout s wait + 20 s cooldown → ~13-15 min for 18 LIMIT
+      MARKET open: 4 s wait          +  5 s cooldown → ~3 min for 18 MARKET
+    Cancel/quick-close scenarios always close after 3 s.
     """
     global _test_suite_cancel, _test_suite_running, _test_suite_state, test_positions
     import copy
@@ -2028,9 +2047,8 @@ async def run_test_suite():
     _test_suite_running = True
     _test_suite_cancel  = False
 
-    order_mode     = config.entry_execution_mode  # Use entry mode for the suite
+    order_mode     = config.entry_execution_mode  # default; per-scenario forced_mode may override
     limit_timeout  = config.limit_order_timeout_sec
-    inter_pause    = 30 if order_mode == "MARKET" else 20  # seconds between scenarios
 
     scenarios = copy.deepcopy(_SUITE_SCENARIOS)
     for s in scenarios:
@@ -2068,14 +2086,16 @@ async def run_test_suite():
         _test_suite_state['current'] = idx + 1
         socketio.emit('test_suite_update', _test_suite_state)
         logger.info("[TEST SUITE] %d/%d  %s  [%s]",
-                    idx + 1, len(scenarios), scenario['label'], order_mode)
+                    idx + 1, len(scenarios), scenario['label'], scen_mode)
 
-        order_type  = scenario['order_type']
-        cancel_test = scenario['cancel_test']
+        order_type   = scenario['order_type']
+        cancel_test  = scenario['cancel_test']
+        scen_mode    = scenario.get('forced_mode') or order_mode  # per-scenario override
+        inter_pause  = 5 if scen_mode == 'MARKET' else 20
 
         # ── OPEN ──────────────────────────────────────────────────────────
         try:
-            legs, open_err = await _suite_open_order(order_type, quantity)
+            legs, open_err = await _suite_open_order(order_type, quantity, forced_mode=scen_mode)
         except Exception as exc:
             open_err = str(exc)
             legs = None
@@ -2110,11 +2130,12 @@ async def run_test_suite():
 
         # ── WAIT ──────────────────────────────────────────────────────────
         if cancel_test:
-            # Wait just long enough for the order to land, then cancel it
-            scenario['detail'] += "  |  cancel test – closing in 3 s"
+            # LIMIT cancel: cancels unfilled order.  MARKET quick-close: closes filled position.
+            label = "cancel test" if scen_mode == "LIMIT" else "quick-close"
+            scenario['detail'] += f"  |  {label} – closing in 3 s"
             socketio.emit('test_suite_update', _test_suite_state)
             await asyncio.sleep(3)
-        elif order_mode == "LIMIT":
+        elif scen_mode == "LIMIT":
             # Give the limit order a real chance to fill
             scenario['detail'] += f"  |  waiting {limit_timeout} s for fill…"
             socketio.emit('test_suite_update', _test_suite_state)
@@ -2174,7 +2195,7 @@ async def run_test_suite():
 
 @app.route('/api/test-suite/start', methods=['POST'])
 def start_test_suite():
-    """Start the full 18-scenario test suite in the background."""
+    """Start the full 36-scenario test suite (18 LIMIT + 18 MARKET) in the background."""
     global _test_suite_running
     if _test_suite_running:
         return jsonify({'success': False, 'error': 'Suite already running'}), 400
