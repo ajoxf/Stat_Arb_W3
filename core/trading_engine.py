@@ -175,7 +175,15 @@ class TradingEngine:
                 if success:
                     logger.info("Futures leverage set to %dx", self.config.futures_leverage)
                 else:
-                    logger.warning("Failed to set futures leverage")
+                    # Set failed - read back what the exchange actually has
+                    logger.warning("Failed to set futures leverage to %dx - reading actual exchange value",
+                                  self.config.futures_leverage)
+                    if hasattr(self.futures_adapter, 'get_leverage'):
+                        actual = await self.futures_adapter.get_leverage(self.config.futures_symbol)
+                        if actual and actual != self.config.futures_leverage:
+                            logger.warning("Exchange caps leverage at %dx (config=%dx) - adjusting config",
+                                          actual, self.config.futures_leverage)
+                            self.config.futures_leverage = actual
 
             # Note: Spot margin leverage may require different API calls
             # depending on exchange implementation
@@ -838,11 +846,10 @@ class TradingEngine:
                     if success:
                         logger.info("Leverage corrected to %dx", self.config.futures_leverage)
                     else:
-                        logger.error("Failed to correct leverage - trading with %dx instead of %dx",
-                                   current_leverage, self.config.futures_leverage)
-                        # Return False to block trading if leverage mismatch is critical
-                        # For now, we'll warn but continue
-                        return True
+                        # Exchange rejected our configured value - treat the actual exchange value as authoritative
+                        logger.warning("Exchange rejected %dx leverage - adjusting config to actual %dx",
+                                      self.config.futures_leverage, current_leverage)
+                        self.config.futures_leverage = current_leverage
                 else:
                     logger.info("✅ Leverage verified on exchange: %dx matches config", self.config.futures_leverage)
             return True
