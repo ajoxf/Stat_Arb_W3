@@ -2106,7 +2106,13 @@ async def run_test_suite():
 
         # ── OPEN ──────────────────────────────────────────────────────────
         try:
-            legs, open_err = await _suite_open_order(order_type, quantity, forced_mode=scen_mode)
+            legs, open_err = await asyncio.wait_for(
+                _suite_open_order(order_type, quantity, forced_mode=scen_mode),
+                timeout=30.0,
+            )
+        except asyncio.TimeoutError:
+            open_err = "open timed out (>30 s)"
+            legs = None
         except Exception as exc:
             open_err = str(exc)
             legs = None
@@ -2165,10 +2171,16 @@ async def run_test_suite():
         close_details = []
         for pos_id in opened_ids:
             try:
-                ok, detail = await _suite_close_position(pos_id)
+                ok, detail = await asyncio.wait_for(
+                    _suite_close_position(pos_id),
+                    timeout=30.0,
+                )
                 close_details.append(detail)
                 if not ok:
                     close_ok = False
+            except asyncio.TimeoutError:
+                close_details.append("close timed out (>30 s)")
+                close_ok = False
             except Exception as exc:
                 close_details.append(str(exc))
                 close_ok = False
@@ -2322,9 +2334,13 @@ async def run_single_scenario_task(scenario_id: str):
 
         # Open
         try:
-            legs, open_err = await _suite_open_order(
-                scenario_def['order_type'], quantity, forced_mode=scen_mode,
+            legs, open_err = await asyncio.wait_for(
+                _suite_open_order(scenario_def['order_type'], quantity, forced_mode=scen_mode),
+                timeout=30.0,
             )
+        except asyncio.TimeoutError:
+            open_err = "open timed out (>30 s)"
+            legs = None
         except Exception as exc:
             open_err = str(exc)
             legs = None
@@ -2370,10 +2386,16 @@ async def run_single_scenario_task(scenario_id: str):
         close_details = []
         for pos_id in opened_ids:
             try:
-                ok, detail = await _suite_close_position(pos_id)
+                ok, detail = await asyncio.wait_for(
+                    _suite_close_position(pos_id),
+                    timeout=30.0,
+                )
                 close_details.append(detail)
                 if not ok:
                     close_ok = False
+            except asyncio.TimeoutError:
+                close_details.append("close timed out (>30 s)")
+                close_ok = False
             except Exception as exc:
                 close_details.append(str(exc))
                 close_ok = False

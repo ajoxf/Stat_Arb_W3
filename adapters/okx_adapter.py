@@ -328,22 +328,25 @@ class OKXAdapter(ExchangeAdapter):
             if reduce_only and inst_type == "SWAP":
                 order_data["reduceOnly"] = True
 
-            # For spot cash-mode (tdMode=cash) market BUY, OKX defaults sz to quote (USDT).
-            # tgtCcy=base_ccy tells OKX that sz is in base currency (BTC) instead.
-            # NOTE: tgtCcy is NOT supported in cross-margin mode (tdMode=cross) — OKX
-            # returns "instrument does not support the tgtCcy parameter" and rejects the order.
-            # In cross-margin mode sz for market BUY defaults to base_ccy already.
-            if inst_type == "SPOT" and okx_ord_type == "market" and side.upper() == "BUY" and td_mode == "cash":
+            # For spot MARKET BUY (any tdMode), tgtCcy=base_ccy tells OKX that sz is in
+            # base currency (BTC), not quote (USDT).  In cash mode this is required because
+            # OKX defaults market-buy sz to quote.  In cross-margin mode, ccy=USDT causes
+            # the same misinterpretation (sz read as USDT), so we apply tgtCcy here too
+            # and skip the ccy field for this specific order type to avoid the conflict.
+            if inst_type == "SPOT" and okx_ord_type == "market" and side.upper() == "BUY":
                 order_data["tgtCcy"] = "base_ccy"
 
             # Cross-margin SPOT orders require ccy = margin currency (quote currency).
             # OKX rejects cross-margin spot orders with "Parameter ccy can not be empty"
-            # if this is omitted (applies to both BUY and SELL directions).
+            # if this is omitted — EXCEPT for market BUY where tgtCcy=base_ccy already
+            # tells OKX how to interpret sz, and adding ccy conflicts with it.
             if inst_type == "SPOT" and td_mode == "cross":
                 symbol_parts = symbol.split("-")
                 # BTC-USDT → quote = USDT; guard against malformed symbols
                 if len(symbol_parts) >= 2:
-                    order_data["ccy"] = symbol_parts[1]
+                    is_market_buy = okx_ord_type == "market" and side.upper() == "BUY"
+                    if not is_market_buy:
+                        order_data["ccy"] = symbol_parts[1]
 
             # Handle position side for long/short mode accounts (required for SWAP)
             if inst_type == "SWAP":
