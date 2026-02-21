@@ -256,18 +256,14 @@ class TradingEngine:
 
         # Log comprehensive startup summary for monitoring
         self._log_startup_summary()
-        print("[DEBUG] After _log_startup_summary", flush=True)
 
         # Clean up any orphan orders from previous sessions
         try:
-            print("[DEBUG] Before cleanup_orphan_orders", flush=True)
             logger.info("Cleaning up orphan orders...")
             await self._cleanup_orphan_orders()
             logger.info("Orphan cleanup complete")
-            print("[DEBUG] After cleanup_orphan_orders", flush=True)
         except Exception as e:
             logger.error("Error during orphan cleanup (continuing): %s", e)
-            print(f"[DEBUG] Cleanup error: {e}", flush=True)
 
         # Apply pending leverage settings (deferred from set_adapters)
         if self._pending_leverage_setup:
@@ -294,11 +290,9 @@ class TradingEngine:
 
         # Start main loop (for REST polling or as a fallback)
         if not self._use_websocket:
-            print("[DEBUG] About to create REST polling task", flush=True)
             logger.info("Creating REST polling task...")
             self._task = asyncio.create_task(self._main_loop())
             logger.info("REST polling task created successfully")
-            print("[DEBUG] REST polling task created", flush=True)
 
     async def stop(self) -> None:
         """Stop the trading engine."""
@@ -1023,9 +1017,9 @@ class TradingEngine:
                        getattr(cfg, 'orphan_recovery_timeout_sec', 60),
                        getattr(cfg, 'entry_cooldown_seconds', 60))
             logger.info("SIGNALS: z_entry=%.2f, z_exit=%.2f, stop_loss=%.2f",
-                       cfg.z_score_entry_threshold,
-                       cfg.z_score_exit_threshold,
-                       cfg.stop_loss_z_score)
+                       cfg.entry_threshold,
+                       cfg.exit_threshold,
+                       getattr(cfg, 'stop_loss_zscore', 4.0))
             logger.info("FILTERS: hurst=%s (threshold=%.2f), std=%s (min=%.1fx)",
                        cfg.hurst_enabled, cfg.hurst_threshold,
                        cfg.std_filter_enabled, cfg.min_std_multiple)
@@ -1037,12 +1031,8 @@ class TradingEngine:
                 csv_logger.log_startup(cfg.to_dict())
             except Exception as csv_err:
                 logger.warning("CSV logging failed: %s", csv_err)
-            print("[DEBUG] _log_startup_summary completed successfully", flush=True)
         except Exception as e:
             logger.error("Error in startup summary: %s", e)
-            print(f"[DEBUG] _log_startup_summary FAILED: {e}", flush=True)
-            import traceback
-            traceback.print_exc()
 
     async def _execute_exit_orders(self, trade: Trade, signal: Signal) -> bool:
         """Execute exit orders on exchanges using the order executor."""
