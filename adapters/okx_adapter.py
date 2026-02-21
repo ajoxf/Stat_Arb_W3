@@ -169,9 +169,18 @@ class OKXAdapter(ExchangeAdapter):
                     volume_24h=float(data.get("vol24h", 0)),
                     timestamp=datetime.utcnow(),
                 )
+            else:
+                # Log API error if result exists but code is not "0"
+                if result:
+                    error_msg = result.get("msg", "Unknown")
+                    error_code = result.get("code", "?")
+                    logger.warning("OKX ticker API error for %s: code=%s, msg=%s",
+                                  symbol, error_code, error_msg)
+                else:
+                    logger.warning("OKX ticker API returned None for %s", symbol)
 
         except Exception as e:
-            logger.error("Error fetching OKX tick: %s", e)
+            logger.error("Error fetching OKX tick for %s: %s", symbol, e)
 
         return None
 

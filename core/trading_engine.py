@@ -303,7 +303,8 @@ class TradingEngine:
 
     async def _main_loop(self) -> None:
         """Main trading loop."""
-        logger.debug("Main loop started")
+        logger.info("REST polling main loop started (interval=%.1fs, spot=%s, futures=%s)",
+                   self.tick_interval, self.config.spot_symbol, self.config.futures_symbol)
 
         while self._running:
             try:
@@ -328,7 +329,22 @@ class TradingEngine:
         futures_tick = await self._get_futures_tick()
 
         if not spot_tick or not futures_tick:
+            # Log why we're not processing (only occasionally to avoid spam)
+            if not hasattr(self, '_tick_fail_count'):
+                self._tick_fail_count = 0
+            self._tick_fail_count += 1
+            if self._tick_fail_count <= 3 or self._tick_fail_count % 100 == 0:
+                logger.warning("Tick fetch failed (count=%d): spot=%s, futures=%s, symbols=(%s, %s)",
+                              self._tick_fail_count,
+                              "OK" if spot_tick else "NONE",
+                              "OK" if futures_tick else "NONE",
+                              self.config.spot_symbol, self.config.futures_symbol)
             return
+
+        # Reset fail count on success
+        if hasattr(self, '_tick_fail_count') and self._tick_fail_count > 0:
+            logger.info("Tick fetch recovered after %d failures", self._tick_fail_count)
+            self._tick_fail_count = 0
 
         self.spot_tick = spot_tick
         self.futures_tick = futures_tick
@@ -370,31 +386,33 @@ class TradingEngine:
 
     async def _get_spot_tick(self) -> Optional[MarketTick]:
         """Get current spot price."""
+        tick = None
         if self.spot_adapter:
             try:
-                return await self.spot_adapter.get_tick(self.config.spot_symbol)
+                tick = await self.spot_adapter.get_tick(self.config.spot_symbol)
             except Exception as e:
                 logger.error("Error fetching spot tick: %s", e)
 
-        # Paper trading fallback - simulate price
-        if self.state.paper_trading:
-            return self._simulate_tick(self.config.spot_symbol, is_spot=True)
+        # Paper trading fallback - simulate price if adapter failed or not available
+        if tick is None and self.state.paper_trading:
+            tick = self._simulate_tick(self.config.spot_symbol, is_spot=True)
 
-        return None
+        return tick
 
     async def _get_futures_tick(self) -> Optional[MarketTick]:
         """Get current futures price."""
+        tick = None
         if self.futures_adapter:
             try:
-                return await self.futures_adapter.get_tick(self.config.futures_symbol)
+                tick = await self.futures_adapter.get_tick(self.config.futures_symbol)
             except Exception as e:
                 logger.error("Error fetching futures tick: %s", e)
 
-        # Paper trading fallback - simulate price
-        if self.state.paper_trading:
-            return self._simulate_tick(self.config.futures_symbol, is_spot=False)
+        # Paper trading fallback - simulate price if adapter failed or not available
+        if tick is None and self.state.paper_trading:
+            tick = self._simulate_tick(self.config.futures_symbol, is_spot=False)
 
-        return None
+        return tick
 
     def _simulate_tick(self, symbol: str, is_spot: bool) -> MarketTick:
         """Simulate a market tick for paper trading."""

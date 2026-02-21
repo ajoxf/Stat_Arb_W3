@@ -139,12 +139,10 @@ def start_engine_loop():
             is_testnet=is_demo,
         )
         engine.set_adapters(spot_adapter, futures_adapter)
-        if config.paper_trading:
-            logger.debug("REST adapters initialized for account info (paper trading mode, demo=%s)", is_demo)
-        else:
-            logger.debug("REST adapters initialized for order execution (demo=%s)", is_demo)
+        logger.info("REST adapters configured: demo=%s, paper=%s, symbols=(%s, %s)",
+                   is_demo, config.paper_trading, config.spot_symbol, config.futures_symbol)
     else:
-        logger.warning("API keys not configured - account info and order execution disabled")
+        logger.warning("API keys not configured - using paper trading simulation only")
 
     # Start engine
     asyncio.run_coroutine_threadsafe(engine.start(), loop)
