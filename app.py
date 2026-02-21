@@ -1983,6 +1983,14 @@ async def _suite_close_position(pos_id: str):
     original_oid    = pos.get('order_id')
     adapter         = engine.spot_adapter if market_type == "SPOT" else engine.futures_adapter
 
+    # Elapsed time from order placement to close/cancel
+    try:
+        entry_dt = datetime.fromisoformat(pos['entry_time'])
+        elapsed  = (datetime.now(timezone.utc) - entry_dt).total_seconds()
+        elapsed_str = f" ({elapsed:.1f}s)"
+    except Exception:
+        elapsed_str = ""
+
     if not adapter:
         return False, f"no {market_type} adapter"
 
@@ -1995,13 +2003,13 @@ async def _suite_close_position(pos_id: str):
             if state in ("live", "partially_filled") or filled_qty == 0:
                 cancelled = await adapter.cancel_order(symbol, original_oid)
                 del test_positions[pos_id]
-                return True, "cancelled (was pending)" if cancelled else "cancel-failed"
+                return True, f"cancelled (was pending){elapsed_str}" if cancelled else f"cancel-failed{elapsed_str}"
             elif state == "filled":
                 if filled_qty > 0:
                     quantity = filled_qty
             elif state == "canceled":
                 del test_positions[pos_id]
-                return True, "already cancelled"
+                return True, f"already cancelled{elapsed_str}"
 
     # Place closing order
     order_mode       = config.exit_execution_mode  # Use exit mode for closing legs
@@ -2027,7 +2035,7 @@ async def _suite_close_position(pos_id: str):
         pnl         = (cur_price - pos['entry_price']) * quantity if pos['side'] == "BUY" \
                       else (pos['entry_price'] - cur_price) * quantity
         del test_positions[pos_id]
-        return True, f"closed pnl=${pnl:.2f}"
+        return True, f"closed pnl=${pnl:.2f}{elapsed_str}"
     return False, result.error
 
 
