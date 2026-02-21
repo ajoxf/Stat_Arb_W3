@@ -587,6 +587,9 @@
             </div>
             <div class="card-body py-2">
                 <div class="d-grid gap-1">
+                    <button class="btn btn-outline-secondary btn-sm py-1" onclick="resetTradesOnly()" style="font-size: 0.75rem;" title="Reset trades and SD analysis, keep spread data">
+                        <i class="bi bi-journal-x me-1"></i>Reset Trades/SD
+                    </button>
                     <button class="btn btn-outline-warning btn-sm py-1" onclick="resetSpreadHistory()" style="font-size: 0.75rem;">
                         <i class="bi bi-graph-down me-1"></i>Reset Spread
                     </button>
@@ -1792,6 +1795,28 @@
                 spreadChart.update();
             } else {
                 showToast('Failed to reset spread data', 'error');
+            }
+        })
+        .catch(err => showToast('Error: ' + err, 'error'));
+    }
+
+    function resetTradesOnly() {
+        if (!confirm('Reset trades and SD analysis? (Spread data will be preserved)')) return;
+        fetch('/api/reset-trades', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({})
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                const d = data.deleted;
+                showToast(`Reset: ${d.trades} trades, ${d.sd_touches} SD touches (spread preserved)`, 'success');
+                const tbody = document.getElementById('trades-table');
+                tbody.innerHTML = '<tr><td colspan="4" class="text-center text-secondary">No trades</td></tr>';
+                fetch('/api/engine/status').then(r => r.json()).then(updateSignal);
+            } else {
+                showToast('Reset failed', 'error');
             }
         })
         .catch(err => showToast('Error: ' + err, 'error'));

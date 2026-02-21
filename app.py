@@ -1748,6 +1748,40 @@ def get_test_order_status():
     return jsonify({'positions': positions})
 
 
+@app.route('/api/reset-trades', methods=['POST'])
+def reset_trades_only():
+    """Reset only trades and SD analysis - preserves spread data collection."""
+    data = request.json or {}
+    asset = data.get('asset')
+
+    # Clear only trades and SD touches, keep spread history
+    trades_deleted = db.clear_trades(asset=asset)
+    sd_deleted = db.clear_sd_touches(asset=asset)
+    signals_deleted = db.clear_signal_log(asset=asset)
+
+    # Clear SD touch events from signal generator memory but keep spread data
+    engine.signal_generator.sd_touch_events.clear()
+    engine.signal_generator.last_sd_level = 0.0
+
+    # Reset position state but keep spread history
+    engine.state.current_position = "NONE"
+    engine.signal_generator.set_position("NONE")
+    engine.open_trade = None
+
+    logger.info("Trades/SD reset: trades=%d, sd_touches=%d, signals=%d (spread preserved)",
+               trades_deleted, sd_deleted, signals_deleted)
+
+    return jsonify({
+        'success': True,
+        'deleted': {
+            'trades': trades_deleted,
+            'sd_touches': sd_deleted,
+            'signals': signals_deleted,
+        },
+        'spread_preserved': True,
+    })
+
+
 @app.route('/api/reset-all', methods=['POST'])
 def reset_all():
     """Reset everything - trades, SD touches, spread history, and engine state."""
