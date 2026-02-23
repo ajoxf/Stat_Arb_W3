@@ -420,16 +420,16 @@
 
                             <!-- Scenario table -->
                             <div class="card bg-dark">
-                                <div class="card-body p-0">
-                                    <table class="table table-sm table-dark mb-0" style="font-size:0.8rem;">
+                                <div class="card-body p-0" style="overflow-x:auto;">
+                                    <table class="table table-sm table-dark mb-0" style="font-size:0.78rem; min-width:900px;">
                                         <thead>
                                             <tr>
                                                 <th style="width:2rem;">#</th>
-                                                <th>Scenario</th>
+                                                <th style="width:12rem;">Scenario</th>
                                                 <th style="width:5rem;">Mode</th>
                                                 <th style="width:5rem;">Type</th>
                                                 <th style="width:5rem;">Status</th>
-                                                <th>Detail</th>
+                                                <th style="min-width:34rem;">Detail</th>
                                                 <th style="width:4rem;"></th>
                                             </tr>
                                         </thead>
@@ -929,6 +929,13 @@
         if (!tbody) return;
         tbody.innerHTML = '';
         const anyRunning = state.running || state.single_running;
+
+        // Convert "  |  " separators to line breaks; HTML-escape the rest
+        function detailHtml(text) {
+            if (!text) return '';
+            const esc = text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+            return esc.split('  |  ').map(part => `<span>${part}</span>`).join('<br>');
+        }
         (state.scenarios || []).forEach((s, i) => {
             const tr = document.createElement('tr');
             if (s.status === 'running') tr.classList.add('table-warning');
@@ -951,7 +958,7 @@
                 <td><span class="badge bg-dark border" style="font-size:0.7rem;">${s.mode || ''}</span></td>
                 <td>${TYPE_BADGE[s.order_type] || s.order_type}</td>
                 <td>${SUITE_BADGE[s.status] || s.status}</td>
-                <td class="text-muted small">${s.detail || ''}</td>
+                <td class="text-muted small" style="line-height:1.6;">${detailHtml(s.detail)}</td>
                 <td><button class="btn btn-sm btn-outline-primary py-0 px-2"
                             style="font-size:0.7rem;"
                             onclick="runSingleScenario('${s.id}')"${btnDisabled}>${btnSpinner}Run</button></td>
