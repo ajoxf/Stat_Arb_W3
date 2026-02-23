@@ -1927,7 +1927,9 @@ async def _suite_open_order(order_type: str, quantity: float, forced_mode: str |
     """
     Place the opening leg(s) for a suite scenario.
     Returns (list_of_leg_tuples, error_str).  error_str is None on success.
-    Each leg tuple: (market_type, side, entry_price, OrderResult, qty, pos_side)
+    Each leg tuple: (market_type, side, entry_price, OrderResult, qty, pos_side, place_ms, lp)
+      place_ms  – placement API round-trip in milliseconds
+      lp        – limit price used (None for MARKET orders)
     forced_mode overrides config.entry_execution_mode when set (e.g. 'MARKET').
     """
     order_mode = forced_mode or config.entry_execution_mode
@@ -1955,14 +1957,16 @@ async def _suite_open_order(order_type: str, quantity: float, forced_mode: str |
         notional = round(quantity * tick.mid, 2) if (
             market_type == "SPOT" and order_mode == "MARKET" and side == "BUY"
         ) else None
+        t_place_start = datetime.now(timezone.utc)
         result = await adapter.place_order(
             symbol=symbol, side=side, order_type=order_mode,
             quantity=quantity, price=lp, pos_side=pos_side,
             notional_usdt=notional,
         )
+        place_ms = int((datetime.now(timezone.utc) - t_place_start).total_seconds() * 1000)
         if result.success:
             entry_price = tick.mid
-            return (market_type, side, entry_price, result, quantity, pos_side), None
+            return (market_type, side, entry_price, result, quantity, pos_side, place_ms, lp), None
         return None, result.error
 
     legs: list = []
@@ -2094,7 +2098,7 @@ async def _suite_close_position(pos_id: str):
         pnl         = (cur_price - pos['entry_price']) * quantity if pos['side'] == "BUY" \
                       else (pos['entry_price'] - cur_price) * quantity
         del test_positions[pos_id]
-        return True, f"closed pnl=${pnl:.2f}{elapsed_str}"
+        return True, f"closed @ ${cur_price:.2f}  pnl=${pnl:.2f}{elapsed_str}"
     return False, result.error
 
 
@@ -2316,8 +2320,9 @@ async def run_test_suite():
             continue
 
         # Register positions in global test_positions (same dict the UI reads)
-        opened_ids = []
-        for (mtype, side, entry_px, result, qty, ps) in legs:
+        opened_ids  = []
+        open_detail_parts = []
+        for (mtype, side, entry_px, result, qty, ps, place_ms, lp) in legs:
             pos_id = str(uuid.uuid4())[:8]
             test_positions[pos_id] = {
                 'id': pos_id, 'market_type': mtype, 'side': side,
@@ -2327,11 +2332,17 @@ async def run_test_suite():
                 'pos_side': ps,
             }
             opened_ids.append(pos_id)
+            oid_short = (result.order_id or '?')[:12]
+            if lp is not None:
+                open_detail_parts.append(
+                    f"{mtype} {side} LIMIT @ ${lp:.2f} placed in {place_ms}ms [oid={oid_short}…]"
+                )
+            else:
+                open_detail_parts.append(
+                    f"{mtype} {side} MARKET @ ~${entry_px:.2f} placed in {place_ms}ms [oid={oid_short}…]"
+                )
 
-        oid_short = legs[0][3].order_id[:12] if legs else '?'
-        scenario['detail'] = (
-            f"{len(opened_ids)} leg(s) placed  order_id={oid_short}..."
-        )
+        scenario['detail'] = "  |  ".join(open_detail_parts)
         socketio.emit('test_suite_update', _test_suite_state)
 
         # ── WAIT ──────────────────────────────────────────────────────────
@@ -2541,8 +2552,9 @@ async def run_single_scenario_task(scenario_id: str):
             return
 
         # Register positions
-        opened_ids = []
-        for (mtype, side, entry_px, result, qty, ps) in legs:
+        opened_ids         = []
+        open_detail_parts  = []
+        for (mtype, side, entry_px, result, qty, ps, place_ms, lp) in legs:
             pos_id = str(uuid.uuid4())[:8]
             test_positions[pos_id] = {
                 'id': pos_id, 'market_type': mtype, 'side': side,
@@ -2552,9 +2564,17 @@ async def run_single_scenario_task(scenario_id: str):
                 'pos_side': ps,
             }
             opened_ids.append(pos_id)
+            oid_short = (result.order_id or '?')[:12]
+            if lp is not None:
+                open_detail_parts.append(
+                    f"{mtype} {side} LIMIT @ ${lp:.2f} placed in {place_ms}ms [oid={oid_short}…]"
+                )
+            else:
+                open_detail_parts.append(
+                    f"{mtype} {side} MARKET @ ~${entry_px:.2f} placed in {place_ms}ms [oid={oid_short}…]"
+                )
 
-        oid_short = legs[0][3].order_id[:12] if legs else '?'
-        scenario['detail'] = f"{len(opened_ids)} leg(s) placed  order_id={oid_short}..."
+        scenario['detail'] = "  |  ".join(open_detail_parts)
         socketio.emit('test_suite_update', _test_suite_state)
 
         # Wait
