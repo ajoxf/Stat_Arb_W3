@@ -2035,6 +2035,9 @@ async def _suite_close_position(pos_id: str):
     if not adapter:
         return False, f"no {market_type} adapter"
 
+    # Actual fill price of the opening order (captured below if available)
+    open_fill_price: Optional[float] = None
+
     # Cancel if original order still pending
     if original_oid:
         status = await adapter.get_order_status(symbol, original_oid)
@@ -2064,6 +2067,7 @@ async def _suite_close_position(pos_id: str):
             elif state == "filled":
                 if filled_qty > 0:
                     quantity = filled_qty
+                open_fill_price = status.get("filled_price")  # actual fill price of open leg
             elif state == "canceled":
                 del test_positions[pos_id]
                 return True, f"already cancelled{elapsed_str}"
@@ -2093,12 +2097,39 @@ async def _suite_close_position(pos_id: str):
         notional_usdt=close_notional,
     )
     if result.success:
-        tick        = engine.spot_tick if market_type == "SPOT" else engine.futures_tick
-        cur_price   = tick.mid if tick else pos['entry_price']
-        pnl         = (cur_price - pos['entry_price']) * quantity if pos['side'] == "BUY" \
-                      else (pos['entry_price'] - cur_price) * quantity
+        # Fetch actual close fill price (short wait for exchange to record the fill)
+        close_fill_price: Optional[float] = None
+        if result.order_id:
+            await asyncio.sleep(0.4)
+            try:
+                cs = await adapter.get_order_status(symbol, result.order_id)
+                if cs and cs.get("state") == "filled":
+                    close_fill_price = cs.get("filled_price")
+            except Exception:
+                pass
+
+        tick      = engine.spot_tick if market_type == "SPOT" else engine.futures_tick
+        mid_close = tick.mid if tick else pos['entry_price']
+        mid_open  = pos['entry_price']   # tick.mid at the moment the open order was placed
+
+        eff_open  = open_fill_price  or mid_open
+        eff_close = close_fill_price or mid_close
+
+        pnl = (eff_close - eff_open) * quantity if pos['side'] == "BUY" \
+              else (eff_open - eff_close) * quantity
+
+        # Drift = fill_price minus mid-at-placement (signed; shows slippage direction)
+        open_drift_str  = (f" ({open_fill_price  - mid_open:+.2f} vs mid)"
+                           if open_fill_price  is not None else "")
+        close_drift_str = (f" ({close_fill_price - mid_close:+.2f} vs mid)"
+                           if close_fill_price is not None else "")
+
         del test_positions[pos_id]
-        return True, f"closed @ ${cur_price:.2f}  pnl=${pnl:.2f}{elapsed_str}"
+        return True, (
+            f"open fill @ ${eff_open:.2f}{open_drift_str}  |  "
+            f"close fill @ ${eff_close:.2f}{close_drift_str}  |  "
+            f"pnl=${pnl:.2f}{elapsed_str}"
+        )
     return False, result.error
 
 
