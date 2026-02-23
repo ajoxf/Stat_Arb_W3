@@ -2341,12 +2341,58 @@ async def run_test_suite():
             open_err = str(exc)
             legs = None
 
-        if open_err or not legs:
+        if open_err and not legs:
+            # Complete failure — nothing was placed, nothing to close
             scenario['status'] = 'fail'
             scenario['detail'] = f"open failed: {open_err}"
             _test_suite_state['fail'] += 1
             socketio.emit('test_suite_update', _test_suite_state)
             logger.warning("[TEST SUITE] %s FAIL open: %s", scenario['label'], open_err)
+            await asyncio.sleep(inter_pause)
+            continue
+
+        if open_err and legs:
+            # Partial success — first leg placed, second leg failed.
+            # Register the placed leg, show its fill/drift, close it, then mark fail.
+            opened_ids        = []
+            open_detail_parts = []
+            for (mtype, side, entry_px, res, qty, ps, place_ms, lp) in legs:
+                pos_id = str(uuid.uuid4())[:8]
+                test_positions[pos_id] = {
+                    'id': pos_id, 'market_type': mtype, 'side': side,
+                    'quantity': qty, 'entry_price': entry_px,
+                    'order_id': res.order_id,
+                    'entry_time': datetime.now(timezone.utc).isoformat(),
+                    'pos_side': ps,
+                }
+                opened_ids.append(pos_id)
+                oid_short = (res.order_id or '?')[:12]
+                if lp is not None:
+                    open_detail_parts.append(
+                        f"{mtype} {side} LIMIT @ ${lp:.2f} placed in {place_ms}ms [oid={oid_short}…]"
+                    )
+                else:
+                    open_detail_parts.append(
+                        f"{mtype} {side} MARKET @ ~${entry_px:.2f} placed in {place_ms}ms [oid={oid_short}…]"
+                    )
+            open_detail_parts.append(f"2nd leg FAILED: {open_err}")
+            scenario['detail'] = "  |  ".join(open_detail_parts)
+            socketio.emit('test_suite_update', _test_suite_state)
+            close_details = []
+            for pos_id in opened_ids:
+                try:
+                    _, cd = await asyncio.wait_for(_suite_close_position(pos_id), timeout=30.0)
+                    close_details.append(cd)
+                except asyncio.TimeoutError:
+                    close_details.append("close timed out (>30 s)")
+                except Exception as exc:
+                    close_details.append(str(exc))
+            if close_details:
+                scenario['detail'] += "  |  " + "  |  ".join(close_details)
+            scenario['status'] = 'fail'
+            _test_suite_state['fail'] += 1
+            socketio.emit('test_suite_update', _test_suite_state)
+            logger.warning("[TEST SUITE] %s FAIL partial open: %s", scenario['label'], scenario['detail'])
             await asyncio.sleep(inter_pause)
             continue
 
@@ -2576,10 +2622,54 @@ async def run_single_scenario_task(scenario_id: str):
             open_err = str(exc)
             legs = None
 
-        if open_err or not legs:
+        if open_err and not legs:
+            # Complete failure — nothing was placed, nothing to close
             scenario['status'] = 'fail'
             scenario['detail'] = f"open failed: {open_err}"
             socketio.emit('test_suite_update', _test_suite_state)
+            return
+
+        if open_err and legs:
+            # Partial success — first leg placed, second leg failed.
+            # Register the placed leg, show its fill/drift, close it, then mark fail.
+            opened_ids        = []
+            open_detail_parts = []
+            for (mtype, side, entry_px, res, qty, ps, place_ms, lp) in legs:
+                pos_id = str(uuid.uuid4())[:8]
+                test_positions[pos_id] = {
+                    'id': pos_id, 'market_type': mtype, 'side': side,
+                    'quantity': qty, 'entry_price': entry_px,
+                    'order_id': res.order_id,
+                    'entry_time': datetime.now(timezone.utc).isoformat(),
+                    'pos_side': ps,
+                }
+                opened_ids.append(pos_id)
+                oid_short = (res.order_id or '?')[:12]
+                if lp is not None:
+                    open_detail_parts.append(
+                        f"{mtype} {side} LIMIT @ ${lp:.2f} placed in {place_ms}ms [oid={oid_short}…]"
+                    )
+                else:
+                    open_detail_parts.append(
+                        f"{mtype} {side} MARKET @ ~${entry_px:.2f} placed in {place_ms}ms [oid={oid_short}…]"
+                    )
+            open_detail_parts.append(f"2nd leg FAILED: {open_err}")
+            scenario['detail'] = "  |  ".join(open_detail_parts)
+            socketio.emit('test_suite_update', _test_suite_state)
+            close_details = []
+            for pos_id in opened_ids:
+                try:
+                    _, cd = await asyncio.wait_for(_suite_close_position(pos_id), timeout=30.0)
+                    close_details.append(cd)
+                except asyncio.TimeoutError:
+                    close_details.append("close timed out (>30 s)")
+                except Exception as exc:
+                    close_details.append(str(exc))
+            if close_details:
+                scenario['detail'] += "  |  " + "  |  ".join(close_details)
+            scenario['status'] = 'fail'
+            socketio.emit('test_suite_update', _test_suite_state)
+            logger.warning("[SINGLE] %s FAIL partial open: %s", scenario['label'], scenario['detail'])
             return
 
         # Register positions
