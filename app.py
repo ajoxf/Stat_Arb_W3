@@ -1970,8 +1970,12 @@ async def _suite_open_order(order_type: str, quantity: float, forced_mode: str |
                        if engine.spot_tick and engine.futures_tick else None
             z_now    = round(engine.signal_generator.current_zscore, 4) \
                        if engine.signal_generator else None
+            std_now  = round(engine.signal_generator.current_std,  4) \
+                       if engine.signal_generator else None
+            mean_now = round(engine.signal_generator.current_mean, 4) \
+                       if engine.signal_generator else None
             return (market_type, side, entry_price, result, quantity, pos_side, place_ms, lp,
-                    tick.bid, tick.ask, sprd_now, z_now), None
+                    tick.bid, tick.ask, sprd_now, z_now, std_now, mean_now), None
         return None, result.error
 
     legs: list = []
@@ -2032,8 +2036,21 @@ async def _suite_close_position(pos_id: str):
     # Extra context captured when the position was opened
     target_price    = pos.get('target_price')      # limit price submitted at open (None = MARKET)
     open_mode       = pos.get('open_mode', 'MARKET')
+    bid_at_open     = pos.get('bid_at_open')       # book state at open time
+    ask_at_open     = pos.get('ask_at_open')
     spread_at_open  = pos.get('spread_at_open')    # futures_mid - spot_mid at open time
     zscore_at_open  = pos.get('zscore_at_open')
+    std_at_open     = pos.get('std_at_open')       # spread rolling std at open time
+    mean_at_open    = pos.get('mean_at_open')      # spread rolling mean at open time
+    leg_label       = pos.get('leg_label', f"{market_type} {pos['side']}")
+    entry_time_iso  = pos.get('entry_time', '')    # ISO timestamp of when open was placed
+
+    # Format open timestamp for display (UTC HH:MM:SS)
+    try:
+        _dt_open    = datetime.fromisoformat(entry_time_iso.replace('Z', '+00:00'))
+        open_ts_str = _dt_open.strftime('%H:%M:%S UTC')
+    except Exception:
+        open_ts_str = ''
 
     # Elapsed time from order placement to close/cancel
     try:
@@ -2101,8 +2118,17 @@ async def _suite_close_position(pos_id: str):
     # Snapshot market state at the moment we decide to close (before placing the order)
     _ts = engine.spot_tick
     _tf = engine.futures_tick
+    close_dt        = datetime.now(timezone.utc)
+    close_ts_str    = close_dt.strftime('%H:%M:%S UTC')
+    _close_tick     = _ts if market_type == "SPOT" else _tf
+    bid_at_close    = _close_tick.bid if _close_tick else None
+    ask_at_close    = _close_tick.ask if _close_tick else None
     spread_at_close = round(_tf.mid - _ts.mid, 4) if (_ts and _tf) else None
     zscore_at_close = round(engine.signal_generator.current_zscore, 4) \
+                      if engine.signal_generator else None
+    std_at_close    = round(engine.signal_generator.current_std,  4) \
+                      if engine.signal_generator else None
+    mean_at_close   = round(engine.signal_generator.current_mean, 4) \
                       if engine.signal_generator else None
 
     # Cross-margin SPOT MARKET BUY (closing a SELL position) needs sz in USDT.
@@ -2153,42 +2179,58 @@ async def _suite_close_position(pos_id: str):
         net_pnl       = pnl - total_fee_usd
 
         # ── Open-leg detail ──────────────────────────────────────────────────
-        # Drift vs mid (negative for buys = filled below mid = good; positive for sells = good)
+        # bid/ask context at open
+        ba_open_str = (f"  bid=${bid_at_open:.2f} ask=${ask_at_open:.2f}"
+                       if bid_at_open is not None and ask_at_open is not None else "")
         open_vs_mid_str = f"{eff_open - mid_open:+.2f}" if open_fill_price is not None else "n/a"
         if target_price is not None:
-            # LIMIT open: show target vs actual fill (slippage vs our limit price)
             open_vs_tgt = eff_open - target_price
             open_str = (
-                f"open: tgt=${target_price:.2f}  fill=${eff_open:.2f}"
+                f"[{leg_label}] open @ {open_ts_str}{ba_open_str}"
+                f"  tgt=${target_price:.2f}  fill=${eff_open:.2f}"
                 f"  (Δtgt={open_vs_tgt:+.2f}, Δmid={open_vs_mid_str})"
             )
         else:
-            # MARKET open: show fill vs mid only
-            open_str = f"open: MARKET fill=${eff_open:.2f}  (Δmid={open_vs_mid_str})"
+            open_str = (
+                f"[{leg_label}] open @ {open_ts_str}{ba_open_str}"
+                f"  MARKET fill=${eff_open:.2f}  (Δmid={open_vs_mid_str})"
+            )
 
         # ── Close-leg detail ─────────────────────────────────────────────────
+        ba_close_str = (f"  bid=${bid_at_close:.2f} ask=${ask_at_close:.2f}"
+                        if bid_at_close is not None and ask_at_close is not None else "")
         close_vs_mid_str = f"{eff_close - mid_close:+.2f}" if close_fill_price is not None else "n/a"
         if close_lp is not None:
-            # LIMIT close: show target vs actual fill
             close_vs_tgt = eff_close - close_lp
             close_str = (
-                f"close: tgt=${close_lp:.2f}  fill=${eff_close:.2f}"
+                f"[{leg_label}] close @ {close_ts_str}{ba_close_str}"
+                f"  tgt=${close_lp:.2f}  fill=${eff_close:.2f}"
                 f"  (Δtgt={close_vs_tgt:+.2f}, Δmid={close_vs_mid_str})"
             )
         else:
-            # MARKET close
-            close_str = f"close: MARKET fill=${eff_close:.2f}  (Δmid={close_vs_mid_str})"
+            close_str = (
+                f"[{leg_label}] close @ {close_ts_str}{ba_close_str}"
+                f"  MARKET fill=${eff_close:.2f}  (Δmid={close_vs_mid_str})"
+            )
 
-        # ── Spread & z-score context ─────────────────────────────────────────
-        # spread = futures_mid - spot_mid; z-score captures how far spread was from mean
-        spread_parts: list = []
+        # ── Spread + σ/μ/z at open ───────────────────────────────────────────
+        # spread = futures_mid − spot_mid; σ = rolling std; μ = rolling mean
+        # z = (spread − μ) / σ — shows distance from mean in standard deviations
+        spread_open_str = None
         if spread_at_open is not None:
-            z_o_str = f" z={zscore_at_open:+.2f}" if zscore_at_open is not None else ""
-            spread_parts.append(f"${spread_at_open:.2f}{z_o_str}")
+            parts_o: list = [f"${spread_at_open:.2f}"]
+            if mean_at_open  is not None: parts_o.append(f"μ=${mean_at_open:.2f}")
+            if std_at_open   is not None: parts_o.append(f"σ=${std_at_open:.2f}")
+            if zscore_at_open is not None: parts_o.append(f"z={zscore_at_open:+.2f}")
+            spread_open_str = "spread@open: " + "  ".join(parts_o)
+
+        spread_close_str = None
         if spread_at_close is not None:
-            z_c_str = f" z={zscore_at_close:+.2f}" if zscore_at_close is not None else ""
-            spread_parts.append(f"${spread_at_close:.2f}{z_c_str}")
-        spread_str = ("spread: " + " → ".join(spread_parts)) if spread_parts else None
+            parts_c: list = [f"${spread_at_close:.2f}"]
+            if mean_at_close  is not None: parts_c.append(f"μ=${mean_at_close:.2f}")
+            if std_at_close   is not None: parts_c.append(f"σ=${std_at_close:.2f}")
+            if zscore_at_close is not None: parts_c.append(f"z={zscore_at_close:+.2f}")
+            spread_close_str = "spread@close: " + "  ".join(parts_c)
 
         # ── Fees & P&L ───────────────────────────────────────────────────────
         fee_str = (
@@ -2198,8 +2240,10 @@ async def _suite_close_position(pos_id: str):
         pnl_str = f"gross=${pnl:+.2f}  net=${net_pnl:+.2f}{elapsed_str}"
 
         detail_parts = [open_str, close_str]
-        if spread_str:
-            detail_parts.append(spread_str)
+        if spread_open_str:
+            detail_parts.append(spread_open_str)
+        if spread_close_str:
+            detail_parts.append(spread_close_str)
         detail_parts.extend([fee_str, pnl_str])
 
         del test_positions[pos_id]
@@ -2431,7 +2475,7 @@ async def run_test_suite():
             opened_ids        = []
             open_detail_parts = []
             for (mtype, side, entry_px, res, qty, ps, place_ms, lp,
-                 _bid_o, _ask_o, sprd_o, z_o) in legs:
+                 _bid_o, _ask_o, sprd_o, z_o, std_o, mean_o) in legs:
                 pos_id = str(uuid.uuid4())[:8]
                 test_positions[pos_id] = {
                     'id': pos_id, 'market_type': mtype, 'side': side,
@@ -2439,10 +2483,15 @@ async def run_test_suite():
                     'order_id': res.order_id,
                     'entry_time': datetime.now(timezone.utc).isoformat(),
                     'pos_side': ps,
-                    'target_price':   lp,
-                    'open_mode':      scen_mode,
-                    'spread_at_open': sprd_o,
-                    'zscore_at_open': z_o,
+                    'target_price':      lp,
+                    'open_mode':         scen_mode,
+                    'bid_at_open':       _bid_o,
+                    'ask_at_open':       _ask_o,
+                    'spread_at_open':    sprd_o,
+                    'zscore_at_open':    z_o,
+                    'std_at_open':       std_o,
+                    'mean_at_open':      mean_o,
+                    'leg_label':         f"{mtype} {side}",
                 }
                 opened_ids.append(pos_id)
                 oid_short = (res.order_id or '?')[:12]
@@ -2479,7 +2528,7 @@ async def run_test_suite():
         opened_ids  = []
         open_detail_parts = []
         for (mtype, side, entry_px, result, qty, ps, place_ms, lp,
-             _bid_o, _ask_o, sprd_o, z_o) in legs:
+             _bid_o, _ask_o, sprd_o, z_o, std_o, mean_o) in legs:
             pos_id = str(uuid.uuid4())[:8]
             test_positions[pos_id] = {
                 'id': pos_id, 'market_type': mtype, 'side': side,
@@ -2487,10 +2536,15 @@ async def run_test_suite():
                 'order_id': result.order_id,
                 'entry_time': datetime.now(timezone.utc).isoformat(),
                 'pos_side': ps,
-                'target_price':   lp,
-                'open_mode':      scen_mode,
-                'spread_at_open': sprd_o,
-                'zscore_at_open': z_o,
+                'target_price':      lp,
+                'open_mode':         scen_mode,
+                'bid_at_open':       _bid_o,
+                'ask_at_open':       _ask_o,
+                'spread_at_open':    sprd_o,
+                'zscore_at_open':    z_o,
+                'std_at_open':       std_o,
+                'mean_at_open':      mean_o,
+                'leg_label':         f"{mtype} {side}",
             }
             opened_ids.append(pos_id)
             oid_short = (result.order_id or '?')[:12]
@@ -2719,7 +2773,7 @@ async def run_single_scenario_task(scenario_id: str):
             opened_ids        = []
             open_detail_parts = []
             for (mtype, side, entry_px, res, qty, ps, place_ms, lp,
-                 _bid_o, _ask_o, sprd_o, z_o) in legs:
+                 _bid_o, _ask_o, sprd_o, z_o, std_o, mean_o) in legs:
                 pos_id = str(uuid.uuid4())[:8]
                 test_positions[pos_id] = {
                     'id': pos_id, 'market_type': mtype, 'side': side,
@@ -2727,10 +2781,15 @@ async def run_single_scenario_task(scenario_id: str):
                     'order_id': res.order_id,
                     'entry_time': datetime.now(timezone.utc).isoformat(),
                     'pos_side': ps,
-                    'target_price':   lp,
-                    'open_mode':      scen_mode,
-                    'spread_at_open': sprd_o,
-                    'zscore_at_open': z_o,
+                    'target_price':      lp,
+                    'open_mode':         scen_mode,
+                    'bid_at_open':       _bid_o,
+                    'ask_at_open':       _ask_o,
+                    'spread_at_open':    sprd_o,
+                    'zscore_at_open':    z_o,
+                    'std_at_open':       std_o,
+                    'mean_at_open':      mean_o,
+                    'leg_label':         f"{mtype} {side}",
                 }
                 opened_ids.append(pos_id)
                 oid_short = (res.order_id or '?')[:12]
@@ -2765,7 +2824,7 @@ async def run_single_scenario_task(scenario_id: str):
         opened_ids         = []
         open_detail_parts  = []
         for (mtype, side, entry_px, result, qty, ps, place_ms, lp,
-             _bid_o, _ask_o, sprd_o, z_o) in legs:
+             _bid_o, _ask_o, sprd_o, z_o, std_o, mean_o) in legs:
             pos_id = str(uuid.uuid4())[:8]
             test_positions[pos_id] = {
                 'id': pos_id, 'market_type': mtype, 'side': side,
@@ -2773,10 +2832,15 @@ async def run_single_scenario_task(scenario_id: str):
                 'order_id': result.order_id,
                 'entry_time': datetime.now(timezone.utc).isoformat(),
                 'pos_side': ps,
-                'target_price':   lp,
-                'open_mode':      scen_mode,
-                'spread_at_open': sprd_o,
-                'zscore_at_open': z_o,
+                'target_price':      lp,
+                'open_mode':         scen_mode,
+                'bid_at_open':       _bid_o,
+                'ask_at_open':       _ask_o,
+                'spread_at_open':    sprd_o,
+                'zscore_at_open':    z_o,
+                'std_at_open':       std_o,
+                'mean_at_open':      mean_o,
+                'leg_label':         f"{mtype} {side}",
             }
             opened_ids.append(pos_id)
             oid_short = (result.order_id or '?')[:12]
