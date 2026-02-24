@@ -1966,7 +1966,12 @@ async def _suite_open_order(order_type: str, quantity: float, forced_mode: str |
         place_ms = int((datetime.now(timezone.utc) - t_place_start).total_seconds() * 1000)
         if result.success:
             entry_price = tick.mid
-            return (market_type, side, entry_price, result, quantity, pos_side, place_ms, lp), None
+            sprd_now = round(engine.futures_tick.mid - engine.spot_tick.mid, 4) \
+                       if engine.spot_tick and engine.futures_tick else None
+            z_now    = round(engine.signal_generator.current_zscore, 4) \
+                       if engine.signal_generator else None
+            return (market_type, side, entry_price, result, quantity, pos_side, place_ms, lp,
+                    tick.bid, tick.ask, sprd_now, z_now), None
         return None, result.error
 
     legs: list = []
@@ -2024,6 +2029,12 @@ async def _suite_close_position(pos_id: str):
     original_oid    = pos.get('order_id')
     adapter         = engine.spot_adapter if market_type == "SPOT" else engine.futures_adapter
 
+    # Extra context captured when the position was opened
+    target_price    = pos.get('target_price')      # limit price submitted at open (None = MARKET)
+    open_mode       = pos.get('open_mode', 'MARKET')
+    spread_at_open  = pos.get('spread_at_open')    # futures_mid - spot_mid at open time
+    zscore_at_open  = pos.get('zscore_at_open')
+
     # Elapsed time from order placement to close/cancel
     try:
         entry_dt = datetime.fromisoformat(pos['entry_time'])
@@ -2065,7 +2076,10 @@ async def _suite_close_position(pos_id: str):
                 del test_positions[pos_id]
                 return True, f"cancelled (was pending){elapsed_str}" if cancelled else f"cancel-failed{elapsed_str}"
             elif state == "filled":
-                if filled_qty > 0:
+                if filled_qty > 0 and market_type != "FUTURES":
+                    # SPOT: accFillSz is in BTC — use actual fill qty for partial-fill accuracy.
+                    # FUTURES: accFillSz is in contracts (not BTC); trust pos['quantity'] which
+                    # is already stored in BTC from _suite_open_order.
                     quantity = filled_qty
                 open_fill_price = status.get("filled_price")  # actual fill price of open leg
             elif state == "canceled":
@@ -2083,6 +2097,13 @@ async def _suite_close_position(pos_id: str):
             close_lp = round(min(tick.bid * (1 + offset_bps), tick.ask * (1 - SAFETY)), 2)
         else:
             close_lp = round(max(tick.ask * (1 - offset_bps), tick.bid * (1 + SAFETY)), 2)
+
+    # Snapshot market state at the moment we decide to close (before placing the order)
+    _ts = engine.spot_tick
+    _tf = engine.futures_tick
+    spread_at_close = round(_tf.mid - _ts.mid, 4) if (_ts and _tf) else None
+    zscore_at_close = round(engine.signal_generator.current_zscore, 4) \
+                      if engine.signal_generator else None
 
     # Cross-margin SPOT MARKET BUY (closing a SELL position) needs sz in USDT.
     tick = engine.spot_tick if market_type == "SPOT" else engine.futures_tick
@@ -2118,18 +2139,71 @@ async def _suite_close_position(pos_id: str):
         pnl = (eff_close - eff_open) * quantity if pos['side'] == "BUY" \
               else (eff_open - eff_close) * quantity
 
-        # Drift = fill_price minus mid-at-placement (signed; shows slippage direction)
-        open_drift_str  = (f" ({open_fill_price  - mid_open:+.2f} vs mid)"
-                           if open_fill_price  is not None else "")
-        close_drift_str = (f" ({close_fill_price - mid_close:+.2f} vs mid)"
-                           if close_fill_price is not None else "")
+        # ── Fee calculation ──────────────────────────────────────────────────
+        close_exec_mode = config.exit_execution_mode
+        if market_type == "SPOT":
+            open_fee_bps  = config.spot_maker_fee_bps  if open_mode        == "LIMIT" else config.spot_taker_fee_bps
+            close_fee_bps = config.spot_maker_fee_bps  if close_exec_mode  == "LIMIT" else config.spot_taker_fee_bps
+        else:
+            open_fee_bps  = config.futures_maker_fee_bps if open_mode       == "LIMIT" else config.futures_taker_fee_bps
+            close_fee_bps = config.futures_maker_fee_bps if close_exec_mode == "LIMIT" else config.futures_taker_fee_bps
+        open_fee_usd  = (open_fee_bps  / 10_000) * eff_open  * quantity
+        close_fee_usd = (close_fee_bps / 10_000) * eff_close * quantity
+        total_fee_usd = open_fee_usd + close_fee_usd
+        net_pnl       = pnl - total_fee_usd
+
+        # ── Open-leg detail ──────────────────────────────────────────────────
+        # Drift vs mid (negative for buys = filled below mid = good; positive for sells = good)
+        open_vs_mid_str = f"{eff_open - mid_open:+.2f}" if open_fill_price is not None else "n/a"
+        if target_price is not None:
+            # LIMIT open: show target vs actual fill (slippage vs our limit price)
+            open_vs_tgt = eff_open - target_price
+            open_str = (
+                f"open: tgt=${target_price:.2f}  fill=${eff_open:.2f}"
+                f"  (Δtgt={open_vs_tgt:+.2f}, Δmid={open_vs_mid_str})"
+            )
+        else:
+            # MARKET open: show fill vs mid only
+            open_str = f"open: MARKET fill=${eff_open:.2f}  (Δmid={open_vs_mid_str})"
+
+        # ── Close-leg detail ─────────────────────────────────────────────────
+        close_vs_mid_str = f"{eff_close - mid_close:+.2f}" if close_fill_price is not None else "n/a"
+        if close_lp is not None:
+            # LIMIT close: show target vs actual fill
+            close_vs_tgt = eff_close - close_lp
+            close_str = (
+                f"close: tgt=${close_lp:.2f}  fill=${eff_close:.2f}"
+                f"  (Δtgt={close_vs_tgt:+.2f}, Δmid={close_vs_mid_str})"
+            )
+        else:
+            # MARKET close
+            close_str = f"close: MARKET fill=${eff_close:.2f}  (Δmid={close_vs_mid_str})"
+
+        # ── Spread & z-score context ─────────────────────────────────────────
+        # spread = futures_mid - spot_mid; z-score captures how far spread was from mean
+        spread_parts: list = []
+        if spread_at_open is not None:
+            z_o_str = f" z={zscore_at_open:+.2f}" if zscore_at_open is not None else ""
+            spread_parts.append(f"${spread_at_open:.2f}{z_o_str}")
+        if spread_at_close is not None:
+            z_c_str = f" z={zscore_at_close:+.2f}" if zscore_at_close is not None else ""
+            spread_parts.append(f"${spread_at_close:.2f}{z_c_str}")
+        spread_str = ("spread: " + " → ".join(spread_parts)) if spread_parts else None
+
+        # ── Fees & P&L ───────────────────────────────────────────────────────
+        fee_str = (
+            f"fees: ${open_fee_usd:.3f}+${close_fee_usd:.3f}=${total_fee_usd:.3f}"
+            f"  ({open_fee_bps}+{close_fee_bps} bps)"
+        )
+        pnl_str = f"gross=${pnl:+.2f}  net=${net_pnl:+.2f}{elapsed_str}"
+
+        detail_parts = [open_str, close_str]
+        if spread_str:
+            detail_parts.append(spread_str)
+        detail_parts.extend([fee_str, pnl_str])
 
         del test_positions[pos_id]
-        return True, (
-            f"open fill @ ${eff_open:.2f}{open_drift_str}  |  "
-            f"close fill @ ${eff_close:.2f}{close_drift_str}  |  "
-            f"pnl=${pnl:.2f}{elapsed_str}"
-        )
+        return True, "  |  ".join(detail_parts)
     return False, result.error
 
 
@@ -2356,7 +2430,8 @@ async def run_test_suite():
             # Register the placed leg, show its fill/drift, close it, then mark fail.
             opened_ids        = []
             open_detail_parts = []
-            for (mtype, side, entry_px, res, qty, ps, place_ms, lp) in legs:
+            for (mtype, side, entry_px, res, qty, ps, place_ms, lp,
+                 _bid_o, _ask_o, sprd_o, z_o) in legs:
                 pos_id = str(uuid.uuid4())[:8]
                 test_positions[pos_id] = {
                     'id': pos_id, 'market_type': mtype, 'side': side,
@@ -2364,6 +2439,10 @@ async def run_test_suite():
                     'order_id': res.order_id,
                     'entry_time': datetime.now(timezone.utc).isoformat(),
                     'pos_side': ps,
+                    'target_price':   lp,
+                    'open_mode':      scen_mode,
+                    'spread_at_open': sprd_o,
+                    'zscore_at_open': z_o,
                 }
                 opened_ids.append(pos_id)
                 oid_short = (res.order_id or '?')[:12]
@@ -2399,7 +2478,8 @@ async def run_test_suite():
         # Register positions in global test_positions (same dict the UI reads)
         opened_ids  = []
         open_detail_parts = []
-        for (mtype, side, entry_px, result, qty, ps, place_ms, lp) in legs:
+        for (mtype, side, entry_px, result, qty, ps, place_ms, lp,
+             _bid_o, _ask_o, sprd_o, z_o) in legs:
             pos_id = str(uuid.uuid4())[:8]
             test_positions[pos_id] = {
                 'id': pos_id, 'market_type': mtype, 'side': side,
@@ -2407,6 +2487,10 @@ async def run_test_suite():
                 'order_id': result.order_id,
                 'entry_time': datetime.now(timezone.utc).isoformat(),
                 'pos_side': ps,
+                'target_price':   lp,
+                'open_mode':      scen_mode,
+                'spread_at_open': sprd_o,
+                'zscore_at_open': z_o,
             }
             opened_ids.append(pos_id)
             oid_short = (result.order_id or '?')[:12]
@@ -2634,7 +2718,8 @@ async def run_single_scenario_task(scenario_id: str):
             # Register the placed leg, show its fill/drift, close it, then mark fail.
             opened_ids        = []
             open_detail_parts = []
-            for (mtype, side, entry_px, res, qty, ps, place_ms, lp) in legs:
+            for (mtype, side, entry_px, res, qty, ps, place_ms, lp,
+                 _bid_o, _ask_o, sprd_o, z_o) in legs:
                 pos_id = str(uuid.uuid4())[:8]
                 test_positions[pos_id] = {
                     'id': pos_id, 'market_type': mtype, 'side': side,
@@ -2642,6 +2727,10 @@ async def run_single_scenario_task(scenario_id: str):
                     'order_id': res.order_id,
                     'entry_time': datetime.now(timezone.utc).isoformat(),
                     'pos_side': ps,
+                    'target_price':   lp,
+                    'open_mode':      scen_mode,
+                    'spread_at_open': sprd_o,
+                    'zscore_at_open': z_o,
                 }
                 opened_ids.append(pos_id)
                 oid_short = (res.order_id or '?')[:12]
@@ -2675,7 +2764,8 @@ async def run_single_scenario_task(scenario_id: str):
         # Register positions
         opened_ids         = []
         open_detail_parts  = []
-        for (mtype, side, entry_px, result, qty, ps, place_ms, lp) in legs:
+        for (mtype, side, entry_px, result, qty, ps, place_ms, lp,
+             _bid_o, _ask_o, sprd_o, z_o) in legs:
             pos_id = str(uuid.uuid4())[:8]
             test_positions[pos_id] = {
                 'id': pos_id, 'market_type': mtype, 'side': side,
@@ -2683,6 +2773,10 @@ async def run_single_scenario_task(scenario_id: str):
                 'order_id': result.order_id,
                 'entry_time': datetime.now(timezone.utc).isoformat(),
                 'pos_side': ps,
+                'target_price':   lp,
+                'open_mode':      scen_mode,
+                'spread_at_open': sprd_o,
+                'zscore_at_open': z_o,
             }
             opened_ids.append(pos_id)
             oid_short = (result.order_id or '?')[:12]
