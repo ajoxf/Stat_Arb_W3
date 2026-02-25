@@ -819,6 +819,12 @@ def get_trades():
     return jsonify([t.to_dict() for t in trades])
 
 
+# Cache for account config (UID + account level) — refreshed at most once per 60 s
+_account_config_cache: dict = {}
+_account_config_cache_ts: float = 0.0
+_ACCOUNT_CONFIG_TTL = 60.0  # seconds
+
+
 @app.route('/api/account-info', methods=['GET'])
 def get_account_info():
     """Get detailed account information including margin requirements."""
@@ -929,10 +935,18 @@ def get_account_info():
                     account_data['futures_margin_used'] = pos_margin.get('imr', 0)
                     account_data['futures_unrealized_pnl'] = pos_margin.get('unrealized_pnl', 0)
 
-                # Fetch account config for UID
+                # Fetch account config for UID — cached to avoid rate-limiting
+                import time as _time
+                global _account_config_cache, _account_config_cache_ts
                 try:
-                    config_future = asyncio.run_coroutine_threadsafe(fetch_account_config(), loop)
-                    account_config = config_future.result(timeout=10)
+                    if _account_config_cache and (_time.monotonic() - _account_config_cache_ts) < _ACCOUNT_CONFIG_TTL:
+                        account_config = _account_config_cache
+                    else:
+                        config_future = asyncio.run_coroutine_threadsafe(fetch_account_config(), loop)
+                        account_config = config_future.result(timeout=10)
+                        if account_config:
+                            _account_config_cache = account_config
+                            _account_config_cache_ts = _time.monotonic()
 
                     if account_config:
                         account_data['uid'] = account_config.get('uid', '')

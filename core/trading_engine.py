@@ -635,16 +635,16 @@ class TradingEngine:
         spot_price = self.spot_tick.mid
         futures_price = self.futures_tick.mid
 
-        # Calculate P&L
+        # Calculate P&L  (spread = Futures - Spot)
         if trade.position_type == "LONG":
             # Long spread: bought spot, sold futures
-            # P&L = (exit_spread - entry_spread) * quantity
-            spread_change = signal.spread - trade.entry_spread
+            # Profit when spread falls: P&L = (entry_spread - exit_spread) * quantity
+            spread_change = trade.entry_spread - signal.spread
             pnl = spread_change * trade.quantity
         else:
             # Short spread: sold spot, bought futures
-            # P&L = (entry_spread - exit_spread) * quantity
-            spread_change = trade.entry_spread - signal.spread
+            # Profit when spread rises: P&L = (exit_spread - entry_spread) * quantity
+            spread_change = signal.spread - trade.entry_spread
             pnl = spread_change * trade.quantity
 
         pnl_percent = (pnl / trade.notional_usd) * 100 if trade.notional_usd > 0 else 0
