@@ -776,6 +776,17 @@ class TradingEngine:
 
                 for pos in positions:
                     if pos.quantity > 0:
+                        # Only track SWAP/FUTURES positions.
+                        # get_positions() returns ALL margin positions including pre-existing
+                        # spot margin positions that are not managed by this bot.
+                        # Spot margin positions can be $10M+ and must not be auto-closed.
+                        is_futures = any(x in pos.symbol for x in ('-SWAP', '-FUTURES', '-PERP'))
+                        if not is_futures:
+                            logger.debug(
+                                "Ignoring non-futures position in mismatch check: %s %s qty=%.4f",
+                                pos.side, pos.symbol, pos.quantity,
+                            )
+                            continue
                         result['exchange_positions'].append({
                             'symbol': pos.symbol,
                             'side': pos.side,
@@ -855,6 +866,19 @@ class TradingEngine:
             symbol = pos['symbol']
             side = pos['side']    # "LONG" or "SHORT"
             qty = pos['quantity'] # contracts (as reported by exchange)
+
+            # Safety: only auto-close SWAP/FUTURES positions.
+            # Spot margin positions on the account are not bot-managed and
+            # must never be touched by auto-close (could be $M+ user positions).
+            is_futures = any(x in symbol for x in ('-SWAP', '-FUTURES', '-PERP'))
+            if not is_futures:
+                logger.warning(
+                    "AUTO-CLOSE skipped: %s is not a SWAP/FUTURES position — "
+                    "only bot-managed futures orphans are auto-closed. "
+                    "Close this position manually if needed.",
+                    symbol,
+                )
+                continue
 
             close_side = "sell" if side == "LONG" else "buy"
             pos_side = "long" if side == "LONG" else "short"
