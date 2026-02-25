@@ -619,54 +619,54 @@ schema. Do not summarize into free text. Every field is required.
     }
   ],
 
+  "root_cause": "Low-conviction entry (z=2.08, barely above threshold=2.0) in high-spread-vol regime.",
+
+  "patterns": "5 of last 7 losses had entry_z < 2.2; above 2.2 the win rate is 71%.",
+
+  "execution_quality": "Fill lag was 340ms between legs causing adverse spread at entry; COR=0.72 meaning fees consumed most of the gross move.",
+
+  "regime_assessment": "Hurst at entry was 0.52 — borderline, not strongly mean-reverting; spread autocorrelation near zero indicates random walk conditions.",
+
   "recommendations": [
     {
-      "tier": 1,
       "type": "PARAMETER_CHANGE",
       "param": "entry_threshold",
       "current_value": 2.0,
       "suggested_value": 2.2,
       "confidence": 0.81,
-      "evidence_count": 5,
-      "evidence_summary": "5 of last 7 losses had entry_z < 2.2; above 2.2 win rate is 71%",
-      "counterfactual": "If threshold was 2.2, this trade would have been skipped (entry_z = 2.08)",
-      "expected_win_rate_delta": 0.08,
-      "rationale": "Raising threshold filters low-conviction entries that are net-negative in current regime"
+      "rationale": "5 of last 7 losses had entry_z < 2.2; raising threshold filters low-conviction entries in current regime."
     },
     {
-      "tier": 2,
-      "type": "FILTER_ADDITION",
-      "param": "time_of_day_block",
-      "current_value": null,
-      "suggested_value": "block_00_to_02_utc",
-      "confidence": 0.61,
-      "evidence_count": 3,
-      "evidence_summary": "3 losses in 00–02 UTC window, 0 wins. Low volume, erratic spreads.",
-      "counterfactual": "2 of 3 recent losses would have been skipped",
-      "expected_win_rate_delta": 0.04,
-      "rationale": "Asian session dead zone; spread is illiquid and driven by noise, not mean reversion"
+      "type": "FILTER_TOGGLE",
+      "param": "hurst_enabled",
+      "current_value": 0.0,
+      "suggested_value": 1.0,
+      "confidence": 0.74,
+      "rationale": "4 of last 5 losses occurred when Hurst was 0.50-0.54; enabling the filter would have blocked 3 of them."
+    },
+    {
+      "type": "POSITION_SIZE_CHANGE",
+      "param": "position_size_usd",
+      "current_value": 5000.0,
+      "suggested_value": 3500.0,
+      "confidence": 0.70,
+      "rationale": "On 3rd consecutive loss; reduce size until win rate stabilises above 50% over next 5 trades."
+    },
+    {
+      "type": "OBSERVATION",
+      "param": "funding_rate_spike",
+      "current_value": 0,
+      "suggested_value": 0,
+      "confidence": 0.65,
+      "rationale": "Funding rate spiked to +0.18% 90 min before this entry, potentially dominating the basis spread. Consider adding a funding_rate_threshold guard (e.g. skip entries when |funding| > 0.10%)."
     }
   ],
 
-  "non_parameter_observations": [
-    "Funding rate spiked to +0.15% 2h before this entry — consider adding funding_rate_threshold filter",
-    "Leg fill gap was 340ms for this trade; futures filled late causing adverse entry spread"
-  ],
-
-  "regime_state": {
-    "classification": "NEUTRAL",
-    "hurst_50bar": 0.52,
-    "spread_autocorrelation_lag1": -0.12,
-    "structural_break_detected": false,
-    "recommendation": "Continue trading but monitor Hurst; if it crosses 0.55, reduce size 30%"
-  },
-
-  "strategy_health_score": 64,
-  "health_trend": "DECLINING",
+  "health_score": 58,
 
   "confidence_score": 7,
 
-  "summary": "One sentence: what changed, what to watch, and the most important next action."
+  "summary": "Low-conviction entry in borderline regime eroded by fees; raise entry_threshold to 2.2, enable Hurst filter, and monitor funding rate spikes."
 }
 ```
 

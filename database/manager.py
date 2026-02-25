@@ -238,6 +238,25 @@ class DatabaseManager:
                 )
             """)
 
+            # AI insights requiring human review (OBSERVATION type + manually-applicable recs)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS ai_insights (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
+                    learning_id INTEGER,
+                    trade_id INTEGER,
+                    insight_type TEXT DEFAULT 'OBSERVATION',
+                    param TEXT,
+                    current_value TEXT,
+                    suggested_value TEXT,
+                    confidence REAL,
+                    rationale TEXT NOT NULL,
+                    status TEXT DEFAULT 'pending',
+                    applied_at TEXT,
+                    dismissed_at TEXT
+                )
+            """)
+
             # Insert default config if not exists
             cursor.execute("SELECT COUNT(*) FROM trading_config")
             if cursor.fetchone()[0] == 0:
@@ -280,6 +299,16 @@ class DatabaseManager:
                 cursor.execute("ALTER TABLE trading_config ADD COLUMN slippage_bps REAL DEFAULT 3.0")
             if 'auto_tune_enabled' not in existing_columns:
                 cursor.execute("ALTER TABLE trading_config ADD COLUMN auto_tune_enabled INTEGER DEFAULT 0")
+
+            # Migrate learnings table to include richer analysis fields
+            cursor.execute("PRAGMA table_info(learnings)")
+            learning_cols = {row[1] for row in cursor.fetchall()}
+            if 'execution_quality' not in learning_cols:
+                cursor.execute("ALTER TABLE learnings ADD COLUMN execution_quality TEXT")
+            if 'regime_assessment' not in learning_cols:
+                cursor.execute("ALTER TABLE learnings ADD COLUMN regime_assessment TEXT")
+            if 'health_score' not in learning_cols:
+                cursor.execute("ALTER TABLE learnings ADD COLUMN health_score INTEGER")
 
             # Re-enable STD filter and lower threshold for existing DBs where it was disabled
             # min_std_multiple=1.5 was too aggressive; 1.2 with LIMIT exits is more permissive
@@ -739,17 +768,74 @@ class DatabaseManager:
             cursor = conn.cursor()
             cursor.execute("""
                 INSERT INTO learnings
-                    (trade_id, root_cause, patterns, recommendations, confidence_score, summary)
-                VALUES (?, ?, ?, ?, ?, ?)
+                    (trade_id, root_cause, patterns, execution_quality,
+                     regime_assessment, recommendations, health_score,
+                     confidence_score, summary)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 trade_id,
                 analysis.get("root_cause", ""),
                 analysis.get("patterns", ""),
+                analysis.get("execution_quality", ""),
+                analysis.get("regime_assessment", ""),
                 _json.dumps(analysis.get("recommendations", [])),
+                analysis.get("health_score"),
                 analysis.get("confidence_score", 0),
                 analysis.get("summary", ""),
             ))
             return cursor.lastrowid
+
+    def save_ai_insight(
+        self,
+        learning_id: Optional[int],
+        trade_id: int,
+        insight_type: str,
+        param: str,
+        current_value: str,
+        suggested_value: str,
+        confidence: float,
+        rationale: str,
+    ) -> None:
+        """Store an AI observation/insight for human review. Deduplicates by param+status."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            # Skip if the same param already has a pending insight
+            cursor.execute(
+                "SELECT id FROM ai_insights WHERE param = ? AND status = 'pending' LIMIT 1",
+                (param,),
+            )
+            if cursor.fetchone():
+                return
+            cursor.execute("""
+                INSERT INTO ai_insights
+                    (learning_id, trade_id, insight_type, param,
+                     current_value, suggested_value, confidence, rationale)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                learning_id, trade_id, insight_type, param,
+                current_value, suggested_value, confidence, rationale,
+            ))
+
+    def get_pending_insights(self, limit: int = 30) -> List[Dict[str, Any]]:
+        """Return pending AI insights (newest first)."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM ai_insights WHERE status = 'pending' ORDER BY timestamp DESC LIMIT ?",
+                (limit,),
+            )
+            return [dict(row) for row in cursor.fetchall()]
+
+    def update_insight_status(self, insight_id: int, status: str) -> bool:
+        """Mark an insight as 'applied' or 'dismissed'. Returns True if found."""
+        ts_col = "applied_at" if status == "applied" else "dismissed_at"
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                f"UPDATE ai_insights SET status = ?, {ts_col} = ? WHERE id = ?",
+                (status, datetime.utcnow().isoformat(), insight_id),
+            )
+            return cursor.rowcount > 0
 
     def get_recent_learnings(self, limit: int = 10) -> List[Dict[str, Any]]:
         """Return the most recent learnings (newest first)."""

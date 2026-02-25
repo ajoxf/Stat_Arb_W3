@@ -1318,6 +1318,76 @@ def get_learning_log():
     return jsonify(log)
 
 
+@app.route('/api/ai-insights', methods=['GET'])
+def get_ai_insights():
+    """Return pending AI insights (observations + high-evidence filter/position suggestions)."""
+    status = request.args.get('status', 'pending')
+    limit  = request.args.get('limit', 30, type=int)
+    if status == 'pending':
+        return jsonify(db.get_pending_insights(limit=limit))
+    # All statuses
+    with db._get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM ai_insights ORDER BY timestamp DESC LIMIT ?", (limit,)
+        )
+        return jsonify([dict(r) for r in cursor.fetchall()])
+
+
+@app.route('/api/ai-insights/<int:insight_id>/apply', methods=['POST'])
+def apply_ai_insight(insight_id: int):
+    """
+    Apply a FILTER_TOGGLE insight directly from the dashboard.
+    Updates DB config + live engine config.
+    """
+    with db._get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM ai_insights WHERE id = ?", (insight_id,))
+        row = cursor.fetchone()
+
+    if not row:
+        return jsonify({'success': False, 'error': 'Insight not found'}), 404
+    insight = dict(row)
+
+    if insight['status'] != 'pending':
+        return jsonify({'success': False, 'error': 'Insight already acted on'}), 400
+
+    param           = insight['param']
+    suggested_value = insight['suggested_value']
+
+    try:
+        current_config = db.get_config()
+
+        # Determine the right type cast for this param
+        existing = getattr(current_config, param, None)
+        if isinstance(existing, bool):
+            new_val = suggested_value.lower() in ('1', '1.0', 'true', 'yes')
+        elif isinstance(existing, int):
+            new_val = int(float(suggested_value))
+        else:
+            new_val = float(suggested_value)
+
+        setattr(current_config, param, new_val)
+        db.save_config(current_config)
+        if engine:
+            setattr(engine.config, param, new_val)
+
+        db.update_insight_status(insight_id, 'applied')
+        logger.info("AI insight applied: %s = %s (from dashboard)", param, new_val)
+        return jsonify({'success': True, 'param': param, 'new_value': new_val})
+
+    except Exception as e:
+        logger.error("apply_ai_insight error: %s", e)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/ai-insights/<int:insight_id>/dismiss', methods=['DELETE'])
+def dismiss_ai_insight(insight_id: int):
+    """Dismiss an AI insight."""
+    found = db.update_insight_status(insight_id, 'dismissed')
+    return jsonify({'success': found})
+
+
 @app.route('/api/trades/csv', methods=['GET'])
 def download_trades_csv():
     """Download trade journal as CSV."""

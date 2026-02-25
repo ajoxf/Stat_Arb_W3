@@ -406,16 +406,31 @@
             </div>
         </div>
 
-        <!-- Recent Trades -->
-        <!-- AI Learning Log -->
-        <div class="card mb-3" id="learning-log-card">
+        <!-- AI Insights (observations + manual-apply recs) -->
+        <div class="card mb-3" id="ai-insights-card">
             <div class="card-header py-1 d-flex justify-content-between align-items-center">
-                <small><i class="bi bi-lightbulb me-2"></i>AI Learning Log</small>
-                <span id="auto-tune-badge" class="badge bg-secondary" style="font-size:0.65rem;">Auto-Tune OFF</span>
+                <small><i class="bi bi-lightbulb-fill me-1" style="color:#ffc107;"></i>AI Insights</small>
+                <span id="insights-count" class="badge bg-secondary" data-count="0" style="font-size:0.65rem;">0 pending</span>
             </div>
             <div class="card-body p-0">
-                <div id="learning-log-list" style="max-height:160px;overflow-y:auto;font-size:0.72rem;padding:6px 10px;">
-                    <div class="text-secondary text-center py-2">No learnings yet</div>
+                <div id="insights-list" style="max-height:150px;overflow-y:auto;font-size:0.72rem;padding:6px 10px;">
+                    <div class="text-secondary text-center py-2" style="font-size:0.7rem;">No insights yet — fires after first closed trade</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- AI Learning Log (auto-applied changes) -->
+        <div class="card mb-3" id="learning-log-card">
+            <div class="card-header py-1 d-flex justify-content-between align-items-center">
+                <small><i class="bi bi-cpu me-1"></i>Auto-Tune Log</small>
+                <div class="d-flex gap-1 align-items-center">
+                    <span id="health-score-badge" class="badge bg-secondary" style="font-size:0.62rem;">Health —</span>
+                    <span id="auto-tune-badge" class="badge bg-secondary" style="font-size:0.62rem;">Auto-Tune OFF</span>
+                </div>
+            </div>
+            <div class="card-body p-0">
+                <div id="learning-log-list" style="max-height:140px;overflow-y:auto;font-size:0.72rem;padding:6px 10px;">
+                    <div class="text-secondary text-center py-2">No changes yet</div>
                 </div>
             </div>
         </div>
@@ -833,89 +848,176 @@
         }
     });
 
-    // ── AI post-trade analysis ──────────────────────────────────────────
+    // ══════════════════════════════════════════════════════════════════
+    // AI LEARNING SYSTEM
+    // ══════════════════════════════════════════════════════════════════
+
+    // ── Socket events ─────────────────────────────────────────────────
+
     socket.on('trade_analysis', function(data) {
         const a = data.analysis || {};
-        addLearningEntry({
+        // Update health score badge
+        if (a.health_score != null) updateHealthScore(a.health_score);
+        // Add summary to auto-tune log
+        addTuneLogEntry({
             timestamp: data.timestamp,
             trade_id: data.trade_id,
-            summary: a.summary || '',
-            confidence_score: a.confidence_score || 0,
-            recommendations: a.recommendations || [],
-            type: 'analysis'
+            text: `💡 ${a.summary || 'Analysis complete'}`,
+            sub: `health=${a.health_score ?? '—'}/100  ·  conf=${a.confidence_score ?? '—'}/10`,
+            colour: '#0dcaf0',
         });
-        showToast('AI trade analysis ready — see Learning Log', 'info');
+        showToast(`AI analysis: ${a.summary || 'see Learning Log'}`, 'info');
     });
 
     socket.on('auto_tune', function(data) {
-        addLearningEntry({
+        const actionType = data.action_type || 'CHANGE';
+        const isCircuit = actionType === 'CIRCUIT_BREAKER';
+        const icon = isCircuit ? '🔴' : '⚙';
+        const colour = isCircuit ? '#dc3545' : '#ffc107';
+        const label = isCircuit ? 'Circuit breaker' : 'Auto-tuned';
+        addTuneLogEntry({
             timestamp: data.timestamp,
-            summary: `Auto-tuned: ${data.param}  ${data.old_value} → ${data.new_value}  (conf ${(data.avg_confidence*100).toFixed(0)}%)`,
-            rationale: data.rationale,
-            type: 'tune'
+            text: `${icon} ${label}: ${data.param}  ${_fmt(data.old_value)} → ${_fmt(data.new_value)}`,
+            sub: `conf ${(data.avg_confidence * 100).toFixed(0)}%  ·  ${data.rationale}`,
+            colour,
         });
-        showToast(`Auto-tune: ${data.param} → ${data.new_value}`, 'warning');
+        const toast_type = isCircuit ? 'danger' : 'warning';
+        showToast(`${label}: ${data.param} → ${_fmt(data.new_value)}`, toast_type);
     });
 
-    function addLearningEntry(item) {
+    socket.on('ai_insight', function(data) {
+        prependInsight({
+            id: null,   // new — no DB id yet until page reload
+            timestamp: data.timestamp,
+            insight_type: data.insight_type || 'OBSERVATION',
+            param: data.param,
+            confidence: data.confidence,
+            rationale: data.rationale,
+            status: 'pending',
+        });
+        const badge = document.getElementById('insights-count');
+        if (badge) {
+            const n = parseInt(badge.dataset.count || '0') + 1;
+            badge.dataset.count = n;
+            badge.textContent = `${n} pending`;
+            badge.className = 'badge bg-warning text-dark';
+        }
+        showToast('New AI insight — check Insights panel', 'info');
+    });
+
+    // ── Auto-Tune Log helpers ─────────────────────────────────────────
+
+    function addTuneLogEntry({ timestamp, trade_id, text, sub, colour }) {
         const list = document.getElementById('learning-log-list');
-        // Remove placeholder
-        const placeholder = list.querySelector('.text-secondary.text-center');
-        if (placeholder) placeholder.remove();
-
-        const ts = item.timestamp ? item.timestamp.substring(0, 16).replace('T', ' ') : '';
-        const isTune = item.type === 'tune';
-        const icon = isTune ? '⚙' : '💡';
-        const colour = isTune ? '#ffc107' : '#0dcaf0';
-
-        let recsHtml = '';
-        if (item.recommendations && item.recommendations.length > 0) {
-            recsHtml = item.recommendations.map(r =>
-                `<span style="opacity:0.8"> → ${r.param}: ${r.current_value}→${r.suggested_value} (${(r.confidence*100).toFixed(0)}%)</span>`
-            ).join('');
-        }
-        if (item.rationale) {
-            recsHtml += `<span style="opacity:0.7"> · ${item.rationale}</span>`;
-        }
-
+        list.querySelector('.text-secondary.text-center')?.remove();
+        const ts = timestamp ? timestamp.substring(0, 16).replace('T', ' ') : '';
         const row = document.createElement('div');
         row.style.cssText = 'padding:3px 0;border-bottom:1px solid rgba(255,255,255,0.06);';
         row.innerHTML =
-            `<span style="color:${colour};margin-right:4px;">${icon}</span>` +
-            `<span style="opacity:0.5;margin-right:6px;">${ts}</span>` +
-            (item.trade_id ? `<span style="opacity:0.5">#${item.trade_id} </span>` : '') +
-            `<span>${item.summary || ''}</span>` +
-            (item.confidence_score ? ` <span style="opacity:0.5">[${item.confidence_score}/10]</span>` : '') +
-            (recsHtml ? `<div style="padding-left:14px;font-size:0.68rem;">${recsHtml}</div>` : '');
-
+            `<div><span style="color:${colour || '#aaa'};margin-right:5px;">●</span>` +
+            `<span style="opacity:0.45;font-size:0.65rem;">${ts}</span>` +
+            (trade_id ? `<span style="opacity:0.4;font-size:0.65rem;"> #${trade_id}</span>` : '') +
+            ` <span>${text}</span></div>` +
+            (sub ? `<div style="padding-left:14px;opacity:0.55;font-size:0.67rem;">${sub}</div>` : '');
         list.insertBefore(row, list.firstChild);
     }
 
-    // Load existing learnings + log on page load
-    function loadLearningLog() {
-        Promise.all([
-            fetch('/api/learnings?limit=10').then(r => r.json()),
-            fetch('/api/learning-log?limit=10').then(r => r.json())
-        ]).then(([learnings, log]) => {
-            // Merge and sort by timestamp desc
-            const items = [
-                ...learnings.map(l => ({
-                    timestamp: l.timestamp, trade_id: l.trade_id,
-                    summary: l.summary, confidence_score: l.confidence_score,
-                    recommendations: l.recommendations || [], type: 'analysis'
-                })),
-                ...log.map(l => ({
-                    timestamp: l.timestamp,
-                    summary: `Auto-tuned: ${l.param}  ${l.old_value} → ${l.new_value}  (conf ${((l.avg_confidence||0)*100).toFixed(0)}%)`,
-                    rationale: l.rationale, type: 'tune'
-                }))
-            ].sort((a, b) => (a.timestamp || '').localeCompare(b.timestamp || ''));
+    // ── AI Insights helpers ───────────────────────────────────────────
 
-            items.forEach(item => addLearningEntry(item));
-        }).catch(() => {});
+    function prependInsight(item) {
+        const list = document.getElementById('insights-list');
+        list.querySelector('.text-secondary.text-center')?.remove();
+        const el = buildInsightEl(item);
+        if (el) list.insertBefore(el, list.firstChild);
     }
 
-    // Update auto-tune badge based on config
+    function buildInsightEl(item) {
+        if (!item) return null;
+        const ts  = item.timestamp ? item.timestamp.substring(0, 16).replace('T', ' ') : '';
+        const typeMap = {
+            FILTER_TOGGLE:        ['bg-primary',            'FILTER'],
+            POSITION_SIZE_CHANGE: ['bg-warning text-dark',  'POSITION'],
+            OBSERVATION:          ['bg-secondary',           'OBSERVE'],
+        };
+        const [badgeCls, label] = typeMap[item.insight_type] || ['bg-secondary', item.insight_type];
+        const canApply = item.id && (item.insight_type === 'FILTER_TOGGLE');
+        const conf = item.confidence ? ` · conf ${(item.confidence * 100).toFixed(0)}%` : '';
+        const param = item.param && item.param !== 'observation' ? `<strong>${item.param}</strong>: ` : '';
+
+        const div = document.createElement('div');
+        div.className = 'insight-item';
+        div.dataset.id = item.id || '';
+        div.style.cssText = 'padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.07);';
+        div.innerHTML = `
+            <div class="d-flex justify-content-between align-items-start gap-1">
+                <div style="flex:1;min-width:0;font-size:0.71rem;">
+                    <span class="badge ${badgeCls} me-1" style="font-size:0.58rem;">${label}</span>
+                    <span style="opacity:0.4;font-size:0.63rem;">${ts}</span>
+                    <div style="margin-top:2px;">${param}${item.rationale}
+                        <span style="opacity:0.45;font-size:0.65rem;">${conf}</span>
+                    </div>
+                </div>
+                <div style="white-space:nowrap;margin-left:4px;display:flex;gap:3px;">
+                    ${canApply ? `<button class="btn btn-xs py-0 btn-outline-success" style="font-size:0.58rem;" onclick="applyInsight(${item.id}, this)">Apply</button>` : ''}
+                    ${item.id ? `<button class="btn btn-xs py-0 btn-outline-secondary" style="font-size:0.58rem;" onclick="dismissInsight(${item.id}, this)">✕</button>` : ''}
+                </div>
+            </div>`;
+        return div;
+    }
+
+    function applyInsight(id, btn) {
+        btn.disabled = true;
+        btn.textContent = '…';
+        fetch(`/api/ai-insights/${id}/apply`, { method: 'POST' })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    document.querySelector(`.insight-item[data-id="${id}"]`)?.remove();
+                    adjustInsightCount(-1);
+                    showToast(`Applied: ${data.param} → ${data.new_value}`, 'success');
+                } else {
+                    btn.disabled = false; btn.textContent = 'Apply';
+                    showToast('Apply failed: ' + (data.error || '?'), 'danger');
+                }
+            }).catch(() => { btn.disabled = false; btn.textContent = 'Apply'; });
+    }
+
+    function dismissInsight(id, btn) {
+        btn.disabled = true;
+        fetch(`/api/ai-insights/${id}/dismiss`, { method: 'DELETE' })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    document.querySelector(`.insight-item[data-id="${id}"]`)?.remove();
+                    adjustInsightCount(-1);
+                }
+            }).catch(() => {});
+    }
+
+    function adjustInsightCount(delta) {
+        const badge = document.getElementById('insights-count');
+        if (!badge) return;
+        const n = Math.max(0, parseInt(badge.dataset.count || '0') + delta);
+        badge.dataset.count = n;
+        badge.textContent = `${n} pending`;
+        badge.className = n > 0 ? 'badge bg-warning text-dark' : 'badge bg-secondary';
+    }
+
+    // ── Health score badge ────────────────────────────────────────────
+
+    function updateHealthScore(score) {
+        const badge = document.getElementById('health-score-badge');
+        if (!badge) return;
+        let cls = 'bg-success';
+        if (score < 40)      cls = 'bg-danger';
+        else if (score < 60) cls = 'bg-warning text-dark';
+        else if (score < 80) cls = 'bg-info text-dark';
+        badge.textContent = `Health ${score}/100`;
+        badge.className = `badge ${cls}`;
+    }
+
+    // ── Auto-tune badge ───────────────────────────────────────────────
+
     function updateAutoTuneBadge(cfg) {
         const badge = document.getElementById('auto-tune-badge');
         if (!badge) return;
@@ -928,9 +1030,52 @@
         }
     }
 
+    // ── Format helper ─────────────────────────────────────────────────
+
+    function _fmt(v) {
+        if (v === null || v === undefined) return '—';
+        if (typeof v === 'boolean') return v ? 'ON' : 'OFF';
+        const n = parseFloat(v);
+        return isNaN(n) ? String(v) : (Number.isInteger(n) ? String(n) : n.toFixed(4).replace(/\.?0+$/, ''));
+    }
+
+    // ── Page load: hydrate both panels ───────────────────────────────
+
+    function loadLearningLog() {
+        fetch('/api/learning-log?limit=15').then(r => r.json()).then(log => {
+            log.slice().reverse().forEach(l => {
+                const isCircuit = !l.learning_ids || JSON.parse(l.learning_ids || '[]').length === 0;
+                addTuneLogEntry({
+                    timestamp: l.timestamp,
+                    text: `${isCircuit ? '🔴' : '⚙'} ${l.param}  ${_fmt(l.old_value)} → ${_fmt(l.new_value)}`,
+                    sub: `conf ${((l.avg_confidence||0)*100).toFixed(0)}%  ·  ${l.rationale || ''}`,
+                    colour: isCircuit ? '#dc3545' : '#ffc107',
+                });
+            });
+        }).catch(() => {});
+    }
+
+    function loadInsights() {
+        fetch('/api/ai-insights?status=pending&limit=20').then(r => r.json()).then(items => {
+            const list = document.getElementById('insights-list');
+            if (items.length === 0) return;
+            list.innerHTML = '';
+            items.forEach(item => {
+                const el = buildInsightEl(item);
+                if (el) list.appendChild(el);
+            });
+            document.getElementById('insights-count').dataset.count = items.length;
+            document.getElementById('insights-count').textContent = `${items.length} pending`;
+            if (items.length > 0) {
+                document.getElementById('insights-count').className = 'badge bg-warning text-dark';
+            }
+        }).catch(() => {});
+    }
+
     loadLearningLog();
+    loadInsights();
     fetch('/api/config').then(r => r.json()).then(cfg => updateAutoTuneBadge(cfg)).catch(() => {});
-    // ──────────────────────────────────────────────────────────────────
+    // ══════════════════════════════════════════════════════════════════
 
     // Fallback polling
     setInterval(function() {
