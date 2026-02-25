@@ -1465,19 +1465,33 @@
 
                     if (data.exchange_has_position && data.positions.length > 0) {
                         const pos = data.positions[0];
-                        msg = `Exchange has ${pos.side} position: ${pos.quantity} ${pos.symbol} @ $${pos.entry_price.toFixed(2)} (PnL: $${pos.unrealized_pnl.toFixed(2)})`;
+                        const isSwap = pos.is_swap;
+                        const posType = isSwap ? '' : 'spot margin ';
+                        const qtyDisplay = pos.quantity.toFixed(isSwap ? 0 : 6);
+                        msg = `Exchange has ${posType}${pos.side} position: ${qtyDisplay} ${pos.symbol} @ $${pos.entry_price.toFixed(2)} (PnL: $${pos.unrealized_pnl.toFixed(2)})`;
 
-                        actionsHtml = `
-                            <button class="btn btn-success btn-sm me-2" onclick="syncFromExchange()">
-                                <i class="bi bi-arrow-down-circle me-1"></i>Recover to Engine
-                            </button>
-                            <button class="btn btn-danger btn-sm me-2" onclick="closeExchangePosition('${pos.symbol}')">
-                                <i class="bi bi-x-circle me-1"></i>Close on Exchange
-                            </button>
-                            <button class="btn btn-outline-secondary btn-sm" onclick="dismissExchangePositionWarning()">
-                                <i class="bi bi-x"></i>
-                            </button>
-                        `;
+                        if (isSwap) {
+                            actionsHtml = `
+                                <button class="btn btn-success btn-sm me-2" onclick="syncFromExchange()">
+                                    <i class="bi bi-arrow-down-circle me-1"></i>Recover to Engine
+                                </button>
+                                <button class="btn btn-danger btn-sm me-2" onclick="closeExchangePosition('${pos.symbol}')">
+                                    <i class="bi bi-x-circle me-1"></i>Close on Exchange
+                                </button>
+                                <button class="btn btn-outline-secondary btn-sm" onclick="dismissExchangePositionWarning()">
+                                    <i class="bi bi-x"></i>
+                                </button>
+                            `;
+                        } else {
+                            actionsHtml = `
+                                <button class="btn btn-danger btn-sm me-2" onclick="closeExchangePosition('${pos.symbol}')">
+                                    <i class="bi bi-x-circle me-1"></i>Close Spot Margin
+                                </button>
+                                <button class="btn btn-outline-secondary btn-sm" onclick="dismissExchangePositionWarning()">
+                                    <i class="bi bi-x"></i>
+                                </button>
+                            `;
+                        }
                     } else if (data.engine_has_position) {
                         msg = `Engine shows ${data.engine_position} but no position on exchange. May have been closed manually.`;
 

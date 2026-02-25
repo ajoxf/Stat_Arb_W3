@@ -551,16 +551,45 @@ class OKXAdapter(ExchangeAdapter):
             positions = []
             if result and result.get("code") == "0" and result.get("data"):
                 for p in result["data"]:
-                    pos_qty = float(p.get("pos", 0))
-                    if pos_qty != 0:
-                        positions.append(Position(
-                            symbol=p.get("instId", ""),
-                            side="LONG" if pos_qty > 0 else "SHORT",
-                            quantity=abs(pos_qty),
-                            entry_price=float(p.get("avgPx", 0)),
-                            unrealized_pnl=float(p.get("upl", 0)),
-                            leverage=float(p.get("lever", 1)),
-                        ))
+                    inst_type = p.get("instType", "")   # MARGIN / SWAP / FUTURES
+                    inst_id   = p.get("instId", "")
+                    pos_raw   = float(p.get("pos", 0))
+                    pos_ccy   = p.get("posCcy", "")
+                    avg_px    = float(p.get("avgPx", 0) or 0)
+
+                    if pos_raw == 0:
+                        continue
+
+                    if inst_type == "MARGIN":
+                        # OKX returns 'pos' in *posCcy* units for MARGIN positions:
+                        #   LONG  (bought base): posCcy = base (BTC), pos = +BTC qty
+                        #   SHORT (sold base):   posCcy = quote (USDT), pos = +USDT received
+                        # Normalise to base-currency quantity with explicit side.
+                        base_ccy = inst_id.split("-")[0]  # "BTC" from "BTC-USDT"
+                        if pos_ccy and pos_ccy != base_ccy:
+                            # SHORT: pos is USDT-denominated → convert to base
+                            side = "SHORT"
+                            qty  = (pos_raw / avg_px) if avg_px > 0 else 0.0
+                        else:
+                            # LONG: pos is already in base currency
+                            side = "LONG"
+                            qty  = abs(pos_raw)
+                    else:
+                        # SWAP / FUTURES: pos = number of contracts (integer); sign = direction
+                        side = "LONG" if pos_raw > 0 else "SHORT"
+                        qty  = abs(pos_raw)
+
+                    if qty == 0:
+                        continue
+
+                    positions.append(Position(
+                        symbol=inst_id,
+                        side=side,
+                        quantity=qty,
+                        entry_price=avg_px,
+                        unrealized_pnl=float(p.get("upl", 0)),
+                        leverage=float(p.get("lever", 1)),
+                    ))
 
             return positions
 
