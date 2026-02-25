@@ -966,6 +966,11 @@ def get_account_info():
                             # This is a spot/margin position - get its leverage
                             account_data['actual_spot_leverage'] = pos.leverage
                             account_data['spot_leverage_source'] = 'exchange'
+
+                    # Account-balance upl is often 0 on demo / non-portfolio-margin accounts.
+                    # Fall back to summing unrealized_pnl across individual positions.
+                    if account_data['unrealized_pnl'] == 0 and positions:
+                        account_data['unrealized_pnl'] = sum(p.unrealized_pnl for p in positions)
                 except Exception as pos_err:
                     logger.warning("Error fetching positions: %s", pos_err)
 
