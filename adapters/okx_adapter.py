@@ -44,6 +44,10 @@ class OKXAdapter(ExchangeAdapter):
         self.base_url = self.BASE_URL
         # cross mode required for leveraged spot accounts; cash for simple 1x spot
         self._spot_td_mode = "cross" if spot_leverage > 1 else "cash"
+        # Position cache — avoids hammering /account/positions from multiple callers
+        self._positions_cache: Optional[List[Position]] = None
+        self._positions_cache_ts: float = 0.0
+        self._POSITIONS_TTL: float = 5.0  # seconds
 
     async def connect(self) -> bool:
         """Establish connection to OKX."""
@@ -78,8 +82,8 @@ class OKXAdapter(ExchangeAdapter):
 
     def _get_timestamp(self) -> str:
         """Get ISO timestamp for signing."""
-        return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.") + \
-               datetime.utcnow().strftime("%f")[:3] + "Z"
+        now = datetime.utcnow()
+        return now.strftime("%Y-%m-%dT%H:%M:%S.") + now.strftime("%f")[:3] + "Z"
 
     def _sign(self, timestamp: str, method: str, path: str, body: str = "") -> str:
         """Generate signature for request."""
@@ -542,6 +546,17 @@ class OKXAdapter(ExchangeAdapter):
     async def get_positions(self, symbol: Optional[str] = None) -> List[Position]:
         """Get open positions."""
         try:
+            # Return cached result if within TTL — prevents multiple concurrent callers
+            # (engine reconciler, account-info route, position-margin route) from all
+            # firing separate requests within the same polling cycle.
+            now = time.monotonic()
+            if (
+                symbol is None
+                and self._positions_cache is not None
+                and (now - self._positions_cache_ts) < self._POSITIONS_TTL
+            ):
+                return self._positions_cache
+
             params = {}
             if symbol:
                 params["instId"] = symbol
@@ -590,6 +605,11 @@ class OKXAdapter(ExchangeAdapter):
                         unrealized_pnl=float(p.get("upl", 0)),
                         leverage=float(p.get("lever", 1)),
                     ))
+
+            # Cache unfiltered (symbol=None) results only
+            if symbol is None:
+                self._positions_cache = positions
+                self._positions_cache_ts = time.monotonic()
 
             return positions
 
