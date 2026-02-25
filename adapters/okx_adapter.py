@@ -254,8 +254,10 @@ class OKXAdapter(ExchangeAdapter):
                     if ct_val <= 0:
                         return OrderResult(success=False, error=f"Invalid contract value {ct_val}")
                     # Convert BTC quantity to number of contracts
+                    # Use floor (int) not round — rounding up would make futures
+                    # larger than the spot leg, creating an unhedged short exposure.
                     contracts = quantity / ct_val
-                    sz = round(contracts)
+                    sz = int(contracts)
                     # Validate minimum 1 contract - don't silently inflate small positions
                     if sz < 1:
                         logger.error("SWAP quantity %.6f = %.2f contracts (ctVal=%.4f), minimum is 1",
