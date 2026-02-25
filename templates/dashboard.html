@@ -407,6 +407,19 @@
         </div>
 
         <!-- Recent Trades -->
+        <!-- AI Learning Log -->
+        <div class="card mb-3" id="learning-log-card">
+            <div class="card-header py-1 d-flex justify-content-between align-items-center">
+                <small><i class="bi bi-lightbulb me-2"></i>AI Learning Log</small>
+                <span id="auto-tune-badge" class="badge bg-secondary" style="font-size:0.65rem;">Auto-Tune OFF</span>
+            </div>
+            <div class="card-body p-0">
+                <div id="learning-log-list" style="max-height:160px;overflow-y:auto;font-size:0.72rem;padding:6px 10px;">
+                    <div class="text-secondary text-center py-2">No learnings yet</div>
+                </div>
+            </div>
+        </div>
+
         <div class="card">
             <div class="card-header py-1 d-flex justify-content-between align-items-center">
                 <small><i class="bi bi-journal-text me-2"></i>Recent Trades</small>
@@ -819,6 +832,105 @@
             updateMarginDisplay(0, 0);
         }
     });
+
+    // ── AI post-trade analysis ──────────────────────────────────────────
+    socket.on('trade_analysis', function(data) {
+        const a = data.analysis || {};
+        addLearningEntry({
+            timestamp: data.timestamp,
+            trade_id: data.trade_id,
+            summary: a.summary || '',
+            confidence_score: a.confidence_score || 0,
+            recommendations: a.recommendations || [],
+            type: 'analysis'
+        });
+        showToast('AI trade analysis ready — see Learning Log', 'info');
+    });
+
+    socket.on('auto_tune', function(data) {
+        addLearningEntry({
+            timestamp: data.timestamp,
+            summary: `Auto-tuned: ${data.param}  ${data.old_value} → ${data.new_value}  (conf ${(data.avg_confidence*100).toFixed(0)}%)`,
+            rationale: data.rationale,
+            type: 'tune'
+        });
+        showToast(`Auto-tune: ${data.param} → ${data.new_value}`, 'warning');
+    });
+
+    function addLearningEntry(item) {
+        const list = document.getElementById('learning-log-list');
+        // Remove placeholder
+        const placeholder = list.querySelector('.text-secondary.text-center');
+        if (placeholder) placeholder.remove();
+
+        const ts = item.timestamp ? item.timestamp.substring(0, 16).replace('T', ' ') : '';
+        const isTune = item.type === 'tune';
+        const icon = isTune ? '⚙' : '💡';
+        const colour = isTune ? '#ffc107' : '#0dcaf0';
+
+        let recsHtml = '';
+        if (item.recommendations && item.recommendations.length > 0) {
+            recsHtml = item.recommendations.map(r =>
+                `<span style="opacity:0.8"> → ${r.param}: ${r.current_value}→${r.suggested_value} (${(r.confidence*100).toFixed(0)}%)</span>`
+            ).join('');
+        }
+        if (item.rationale) {
+            recsHtml += `<span style="opacity:0.7"> · ${item.rationale}</span>`;
+        }
+
+        const row = document.createElement('div');
+        row.style.cssText = 'padding:3px 0;border-bottom:1px solid rgba(255,255,255,0.06);';
+        row.innerHTML =
+            `<span style="color:${colour};margin-right:4px;">${icon}</span>` +
+            `<span style="opacity:0.5;margin-right:6px;">${ts}</span>` +
+            (item.trade_id ? `<span style="opacity:0.5">#${item.trade_id} </span>` : '') +
+            `<span>${item.summary || ''}</span>` +
+            (item.confidence_score ? ` <span style="opacity:0.5">[${item.confidence_score}/10]</span>` : '') +
+            (recsHtml ? `<div style="padding-left:14px;font-size:0.68rem;">${recsHtml}</div>` : '');
+
+        list.insertBefore(row, list.firstChild);
+    }
+
+    // Load existing learnings + log on page load
+    function loadLearningLog() {
+        Promise.all([
+            fetch('/api/learnings?limit=10').then(r => r.json()),
+            fetch('/api/learning-log?limit=10').then(r => r.json())
+        ]).then(([learnings, log]) => {
+            // Merge and sort by timestamp desc
+            const items = [
+                ...learnings.map(l => ({
+                    timestamp: l.timestamp, trade_id: l.trade_id,
+                    summary: l.summary, confidence_score: l.confidence_score,
+                    recommendations: l.recommendations || [], type: 'analysis'
+                })),
+                ...log.map(l => ({
+                    timestamp: l.timestamp,
+                    summary: `Auto-tuned: ${l.param}  ${l.old_value} → ${l.new_value}  (conf ${((l.avg_confidence||0)*100).toFixed(0)}%)`,
+                    rationale: l.rationale, type: 'tune'
+                }))
+            ].sort((a, b) => (a.timestamp || '').localeCompare(b.timestamp || ''));
+
+            items.forEach(item => addLearningEntry(item));
+        }).catch(() => {});
+    }
+
+    // Update auto-tune badge based on config
+    function updateAutoTuneBadge(cfg) {
+        const badge = document.getElementById('auto-tune-badge');
+        if (!badge) return;
+        if (cfg && cfg.auto_tune_enabled) {
+            badge.textContent = 'Auto-Tune ON';
+            badge.className = 'badge bg-warning text-dark';
+        } else {
+            badge.textContent = 'Auto-Tune OFF';
+            badge.className = 'badge bg-secondary';
+        }
+    }
+
+    loadLearningLog();
+    fetch('/api/config').then(r => r.json()).then(cfg => updateAutoTuneBadge(cfg)).catch(() => {});
+    // ──────────────────────────────────────────────────────────────────
 
     // Fallback polling
     setInterval(function() {

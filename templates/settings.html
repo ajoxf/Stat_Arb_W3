@@ -116,6 +116,40 @@
 
                     <hr class="my-4" style="border-color: var(--border-color);">
 
+                    <!-- Self-Learning -->
+                    <div class="row mb-4">
+                        <div class="col-12">
+                            <h6 class="text-secondary mb-3">Self-Learning (AI Auto-Tune)</h6>
+                            <small class="text-secondary d-block mb-3">
+                                After every closed trade, Claude analyses the outcome and stores a structured learning.
+                                When <strong>Auto-Tune</strong> is on, it will automatically adjust parameters if
+                                3 or more consecutive analyses agree on the same change with &ge;70% confidence.
+                                Changes are clamped to safe corridors (max ±0.2 per adjustment).
+                                Requires <code>ANTHROPIC_API_KEY</code> in your environment.
+                            </small>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="form-check form-switch mb-2">
+                                <input class="form-check-input" type="checkbox" id="auto_tune_enabled" name="auto_tune_enabled" {% if config.auto_tune_enabled %}checked{% endif %}>
+                                <label class="form-check-label fw-semibold" for="auto_tune_enabled">Enable Auto-Tune Parameters</label>
+                            </div>
+                            <small class="text-secondary">
+                                When disabled, Claude still analyses every trade and the Learning Log is updated —
+                                but no parameters are changed automatically.
+                            </small>
+                        </div>
+                        <div class="col-md-6">
+                            <a href="/api/learning-log" target="_blank" class="btn btn-sm btn-outline-secondary me-2">
+                                <i class="bi bi-list-ul me-1"></i>View Learning Log (JSON)
+                            </a>
+                            <a href="/api/learnings" target="_blank" class="btn btn-sm btn-outline-secondary">
+                                <i class="bi bi-lightbulb me-1"></i>View Learnings (JSON)
+                            </a>
+                        </div>
+                    </div>
+
+                    <hr class="my-4" style="border-color: var(--border-color);">
+
                     <!-- Position Sizing -->
                     <div class="row mb-4">
                         <div class="col-12">
@@ -207,6 +241,17 @@
                             <label class="form-label">Futures Taker (bps)</label>
                             <input type="number" class="form-control fee-input" id="futures_taker_fee_bps" name="futures_taker_fee_bps" value="{{ config.futures_taker_fee_bps }}" step="0.5" min="0" max="50" oninput="updateFeeSummary()">
                             <small class="text-secondary">Market orders on Futures</small>
+                        </div>
+
+                        <!-- Slippage -->
+                        <div class="col-12 mb-2 mt-3">
+                            <span class="badge bg-secondary me-1">SLIPPAGE</span>
+                            <small class="text-secondary">Extra cost per leg even with LIMIT orders (queue position, amendment delays, market impact)</small>
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label">Slippage per Leg (bps)</label>
+                            <input type="number" class="form-control fee-input" id="slippage_bps" name="slippage_bps" value="{{ config.slippage_bps }}" step="0.5" min="0" max="20" oninput="updateFeeSummary()">
+                            <small class="text-secondary">Applied to all 4 legs (×4 round-trip)</small>
                         </div>
                     </div>
 
@@ -635,10 +680,11 @@
 
     // Live fee round-trip summary
     function updateFeeSummary() {
-        const spotMaker = parseFloat(document.getElementById('spot_maker_fee_bps').value) || 0;
-        const spotTaker = parseFloat(document.getElementById('spot_taker_fee_bps').value) || 0;
-        const futMaker  = parseFloat(document.getElementById('futures_maker_fee_bps').value) || 0;
-        const futTaker  = parseFloat(document.getElementById('futures_taker_fee_bps').value) || 0;
+        const spotMaker  = parseFloat(document.getElementById('spot_maker_fee_bps').value) || 0;
+        const spotTaker  = parseFloat(document.getElementById('spot_taker_fee_bps').value) || 0;
+        const futMaker   = parseFloat(document.getElementById('futures_maker_fee_bps').value) || 0;
+        const futTaker   = parseFloat(document.getElementById('futures_taker_fee_bps').value) || 0;
+        const slippage   = parseFloat(document.getElementById('slippage_bps').value) || 0;
 
         const entryMode = document.getElementById('entry_execution_mode').value;
         const exitMode  = document.getElementById('exit_execution_mode').value;
@@ -652,14 +698,16 @@
         const futExitFee  = exitMode === 'LIMIT' ? futMaker  : futTaker;
         const exitCost    = spotExitFee + futExitFee;
 
-        const totalCost  = entryCost + exitCost;
+        const totalSlippage = slippage * 4;  // 4 legs
+        const totalCost  = entryCost + exitCost + totalSlippage;
         const entryLabel = entryMode === 'LIMIT' ? 'maker' : 'taker';
         const exitLabel  = exitMode  === 'LIMIT' ? 'maker' : 'taker';
 
         document.getElementById('fee-summary-text').textContent =
-            `Entry (${entryLabel}): Spot ${spotEntryFee} + Futures ${futEntryFee} = ${entryCost} bps  ·  ` +
-            `Exit (${exitLabel}): Spot ${spotExitFee} + Futures ${futExitFee} = ${exitCost} bps  ·  ` +
-            `Round-trip: ${totalCost} bps (${(totalCost / 100).toFixed(3)}%)`;
+            `Entry (${entryLabel}): ${entryCost} bps  ·  ` +
+            `Exit (${exitLabel}): ${exitCost} bps  ·  ` +
+            `Slippage (4 legs): ${totalSlippage} bps  ·  ` +
+            `Total: ${totalCost} bps (${(totalCost / 100).toFixed(3)}%)`;
     }
 
     updateLimitSettingsVisibility(); // Initial state (also calls updateFeeSummary)
@@ -689,6 +737,8 @@
             spot_taker_fee_bps: parseFloat(document.getElementById('spot_taker_fee_bps').value),
             futures_maker_fee_bps: parseFloat(document.getElementById('futures_maker_fee_bps').value),
             futures_taker_fee_bps: parseFloat(document.getElementById('futures_taker_fee_bps').value),
+            slippage_bps: parseFloat(document.getElementById('slippage_bps').value),
+            auto_tune_enabled: document.getElementById('auto_tune_enabled').checked,
             paper_trading: document.getElementById('paper_trading').checked,
             entry_execution_mode: document.getElementById('entry_execution_mode').value,
             exit_execution_mode: document.getElementById('exit_execution_mode').value,
@@ -742,6 +792,8 @@
                 document.getElementById('spot_taker_fee_bps').value = config.spot_taker_fee_bps || 10.0;
                 document.getElementById('futures_maker_fee_bps').value = config.futures_maker_fee_bps || 2.0;
                 document.getElementById('futures_taker_fee_bps').value = config.futures_taker_fee_bps || 5.0;
+                document.getElementById('slippage_bps').value = config.slippage_bps ?? 3.0;
+                document.getElementById('auto_tune_enabled').checked = config.auto_tune_enabled || false;
                 document.getElementById('paper_trading').checked = config.paper_trading;
                 document.getElementById('entry_execution_mode').value = config.entry_execution_mode || 'LIMIT';
                 document.getElementById('exit_execution_mode').value = config.exit_execution_mode || 'MARKET';

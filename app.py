@@ -21,6 +21,7 @@ from models import TradingConfig, Exchange, Trade, MarketTick, Signal, CRYPTO_AS
 from core.signals import SignalGenerator
 from core.trading_engine import TradingEngine
 from core.post_trade_analyzer import PostTradeAnalyzer
+from core.auto_tuner import AutoTuner
 from database.manager import DatabaseManager
 from adapters import OKXAdapter, BinanceAdapter, BybitAdapter, OKXWebSocketManager
 
@@ -50,8 +51,12 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 # Initialize database
 db = DatabaseManager(os.getenv('DATABASE_PATH', 'trading.db'))
 
+# Auto-tuner: applies Claude's recommendations when auto_tune_enabled=True
+# engine is not yet initialised here — set after engine creation below
+auto_tuner = AutoTuner(db, engine=None, socketio=socketio)
+
 # Post-trade AI analyzer (fires after every real closed trade)
-post_trade_analyzer = PostTradeAnalyzer(db, socketio)
+post_trade_analyzer = PostTradeAnalyzer(db, socketio, auto_tuner=auto_tuner)
 
 # Initialize trading engine
 config = db.get_config()
@@ -89,6 +94,9 @@ def start_engine_loop():
     engine.on_signal = on_signal_callback
     engine.on_trade = on_trade_callback
     engine.on_error = on_error_callback
+
+    # Give the auto-tuner a reference to the live engine so it can update config in-process
+    auto_tuner.engine = engine
 
     # Set up SD touch callback on signal generator
     engine.signal_generator.on_sd_touch = on_sd_touch_callback
@@ -1280,6 +1288,34 @@ def download_exchange_orders_csv():
             return Response(f"Error: {e}", status=500)
 
     return Response("Event loop not running", status=500)
+
+
+@app.route('/api/learnings', methods=['GET'])
+def get_learnings():
+    """Return recent structured learnings from post-trade AI analysis."""
+    limit = request.args.get('limit', 20, type=int)
+    learnings = db.get_recent_learnings(limit=limit)
+    import json as _json
+    for lrn in learnings:
+        try:
+            lrn['recommendations'] = _json.loads(lrn.get('recommendations') or '[]')
+        except Exception:
+            lrn['recommendations'] = []
+    return jsonify(learnings)
+
+
+@app.route('/api/learning-log', methods=['GET'])
+def get_learning_log():
+    """Return the auto-tune parameter change history."""
+    limit = request.args.get('limit', 50, type=int)
+    log = db.get_learning_log(limit=limit)
+    import json as _json
+    for entry in log:
+        try:
+            entry['learning_ids'] = _json.loads(entry.get('learning_ids') or '[]')
+        except Exception:
+            entry['learning_ids'] = []
+    return jsonify(log)
 
 
 @app.route('/api/trades/csv', methods=['GET'])

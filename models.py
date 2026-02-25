@@ -120,6 +120,9 @@ class TradingConfig:
     # MARKET orders: ~5-10 bps market impact, more in high-vol conditions
     slippage_bps: float = 3.0
 
+    # Self-learning: automatically apply Claude's parameter recommendations
+    auto_tune_enabled: bool = False
+
     # Legacy field - now computed from taker/maker fees based on order mode
     estimated_costs_bps: float = 10.0  # Kept for backward compatibility
 
@@ -156,6 +159,7 @@ class TradingConfig:
             'taker_fee_bps': self.taker_fee_bps,
             'maker_fee_bps': self.maker_fee_bps,
             'slippage_bps': self.slippage_bps,
+            'auto_tune_enabled': self.auto_tune_enabled,
             'estimated_costs_bps': self.estimated_costs_bps,
             'entry_cooldown_seconds': self.entry_cooldown_seconds,
             'verify_exchange_position': self.verify_exchange_position,

@@ -197,14 +197,44 @@ class DatabaseManager:
                 ON spread_history (asset, timestamp DESC)
             """)
 
-            # Post-trade AI analysis log
+            # Post-trade AI analysis log (raw JSON / text)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS trade_analysis (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     trade_id INTEGER NOT NULL,
                     timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
                     analysis TEXT NOT NULL,
-                    model TEXT DEFAULT 'claude-opus-4-6'
+                    model TEXT DEFAULT 'claude-sonnet-4-6'
+                )
+            """)
+
+            # Structured learnings — one row per closed trade analysis
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS learnings (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    trade_id INTEGER NOT NULL,
+                    timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
+                    root_cause TEXT,
+                    patterns TEXT,
+                    recommendations TEXT,
+                    confidence_score INTEGER,
+                    summary TEXT
+                )
+            """)
+
+            # Audit log of every auto-tuned parameter change
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS learning_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
+                    param TEXT NOT NULL,
+                    old_value REAL NOT NULL,
+                    new_value REAL NOT NULL,
+                    avg_confidence REAL,
+                    rationale TEXT,
+                    learning_ids TEXT,
+                    trigger_trade_id INTEGER,
+                    reverted INTEGER DEFAULT 0
                 )
             """)
 
@@ -248,6 +278,8 @@ class DatabaseManager:
                 cursor.execute("ALTER TABLE trading_config ADD COLUMN futures_taker_fee_bps REAL DEFAULT 5.0")
             if 'slippage_bps' not in existing_columns:
                 cursor.execute("ALTER TABLE trading_config ADD COLUMN slippage_bps REAL DEFAULT 3.0")
+            if 'auto_tune_enabled' not in existing_columns:
+                cursor.execute("ALTER TABLE trading_config ADD COLUMN auto_tune_enabled INTEGER DEFAULT 0")
 
             # Re-enable STD filter and lower threshold for existing DBs where it was disabled
             # min_std_multiple=1.5 was too aggressive; 1.2 with LIMIT exits is more permissive
@@ -301,6 +333,7 @@ class DatabaseManager:
                     futures_maker_fee_bps=row["futures_maker_fee_bps"] if "futures_maker_fee_bps" in row.keys() else 2.0,
                     futures_taker_fee_bps=row["futures_taker_fee_bps"] if "futures_taker_fee_bps" in row.keys() else 5.0,
                     slippage_bps=row["slippage_bps"] if "slippage_bps" in row.keys() else 3.0,
+                    auto_tune_enabled=bool(row["auto_tune_enabled"]) if "auto_tune_enabled" in row.keys() else False,
                     estimated_costs_bps=row["estimated_costs_bps"],
                     entry_cooldown_seconds=row["entry_cooldown_seconds"] if "entry_cooldown_seconds" in row.keys() else 60,
                     verify_exchange_position=bool(row["verify_exchange_position"]) if "verify_exchange_position" in row.keys() else True,
@@ -345,6 +378,7 @@ class DatabaseManager:
                     futures_maker_fee_bps = ?,
                     futures_taker_fee_bps = ?,
                     slippage_bps = ?,
+                    auto_tune_enabled = ?,
                     estimated_costs_bps = ?,
                     entry_cooldown_seconds = ?,
                     verify_exchange_position = ?,
@@ -381,6 +415,7 @@ class DatabaseManager:
                 config.futures_maker_fee_bps,
                 config.futures_taker_fee_bps,
                 config.slippage_bps,
+                int(config.auto_tune_enabled),
                 config.estimated_costs_bps,
                 config.entry_cooldown_seconds,
                 int(config.verify_exchange_position),
@@ -696,6 +731,69 @@ class DatabaseManager:
             if row:
                 return dict(row)
             return None
+
+    def save_learning(self, trade_id: int, analysis: Dict[str, Any]) -> int:
+        """Persist a structured learning from post-trade analysis."""
+        import json as _json
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO learnings
+                    (trade_id, root_cause, patterns, recommendations, confidence_score, summary)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (
+                trade_id,
+                analysis.get("root_cause", ""),
+                analysis.get("patterns", ""),
+                _json.dumps(analysis.get("recommendations", [])),
+                analysis.get("confidence_score", 0),
+                analysis.get("summary", ""),
+            ))
+            return cursor.lastrowid
+
+    def get_recent_learnings(self, limit: int = 10) -> List[Dict[str, Any]]:
+        """Return the most recent learnings (newest first)."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM learnings ORDER BY timestamp DESC LIMIT ?",
+                (limit,)
+            )
+            return [dict(row) for row in cursor.fetchall()]
+
+    def save_learning_log(
+        self,
+        param: str,
+        old_value: float,
+        new_value: float,
+        avg_confidence: float,
+        rationale: str,
+        learning_ids: List[int],
+        trigger_trade_id: int,
+    ) -> None:
+        """Log an auto-tuned parameter change."""
+        import json as _json
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO learning_log
+                    (param, old_value, new_value, avg_confidence, rationale,
+                     learning_ids, trigger_trade_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                param, old_value, new_value, avg_confidence, rationale,
+                _json.dumps(learning_ids), trigger_trade_id,
+            ))
+
+    def get_learning_log(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """Return the auto-tune change history (newest first)."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM learning_log ORDER BY timestamp DESC LIMIT ?",
+                (limit,)
+            )
+            return [dict(row) for row in cursor.fetchall()]
 
     def log_sd_touch(self, event: SDTouchEvent) -> None:
         """Log SD touch event."""
