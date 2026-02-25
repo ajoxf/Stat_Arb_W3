@@ -94,6 +94,8 @@ class TradingEngine:
         self._last_position_verify: Optional[datetime] = None
         self._position_verify_interval = 60  # seconds between checks
         self._position_mismatch: Optional[Dict[str, Any]] = None
+        self._orphan_mismatch_count: int = 0  # consecutive detections of orphan futures
+        self._orphan_auto_close_threshold: int = 3  # close after 3 min of detected orphan
 
         # Order execution tracking for pattern detection
         self._spot_order_attempts = 0
@@ -791,14 +793,30 @@ class TradingEngine:
                 result['mismatch_reason'] = "Engine shows position but exchange has none (manually closed?)"
                 logger.warning("Position mismatch: Engine=%s but exchange has no positions",
                              self.state.current_position)
+                self._orphan_mismatch_count = 0  # not an orphan scenario
 
             elif not engine_has_position and exchange_has_position:
                 result['mismatch'] = True
                 total_size = sum(p['quantity'] for p in result['exchange_positions'])
                 total_pnl = sum(p['unrealized_pnl'] for p in result['exchange_positions'])
                 result['mismatch_reason'] = f"Exchange has {len(result['exchange_positions'])} position(s) but engine shows FLAT"
-                logger.warning("Position mismatch: Engine=FLAT but exchange has %d positions (size=%.2f, PnL=%.2f)",
-                             len(result['exchange_positions']), total_size, total_pnl)
+                self._orphan_mismatch_count += 1
+                logger.warning(
+                    "Position mismatch: Engine=FLAT but exchange has %d positions "
+                    "(size=%.2f, PnL=%.2f) [orphan_count=%d/%d]",
+                    len(result['exchange_positions']), total_size, total_pnl,
+                    self._orphan_mismatch_count, self._orphan_auto_close_threshold,
+                )
+                if self._orphan_mismatch_count >= self._orphan_auto_close_threshold:
+                    logger.warning(
+                        "Orphan threshold reached (%d checks) — auto-closing %d orphan position(s)",
+                        self._orphan_mismatch_count, len(result['exchange_positions']),
+                    )
+                    await self._auto_close_orphan_positions(result['exchange_positions'])
+                    self._orphan_mismatch_count = 0  # reset after attempt
+            else:
+                # No mismatch: reset orphan counter
+                self._orphan_mismatch_count = 0
 
             # Store mismatch state for status reporting
             self._position_mismatch = result if result['mismatch'] else None
@@ -821,6 +839,54 @@ class TradingEngine:
         elif (now - self._last_position_verify).total_seconds() >= self._position_verify_interval:
             # Time for another check
             await self.verify_position_sync()
+
+    async def _auto_close_orphan_positions(self, orphan_positions: list) -> None:
+        """
+        Close futures positions the engine has no record of (orphan state).
+
+        Called after N consecutive mismatch detections to limit losses on stuck
+        positions. Uses a market order with explicit posSide for hedge-mode accounts.
+        """
+        if not self.futures_adapter:
+            logger.error("Cannot auto-close orphans: no futures adapter")
+            return
+
+        for pos in orphan_positions:
+            symbol = pos['symbol']
+            side = pos['side']    # "LONG" or "SHORT"
+            qty = pos['quantity'] # contracts (as reported by exchange)
+
+            close_side = "sell" if side == "LONG" else "buy"
+            pos_side = "long" if side == "LONG" else "short"
+            qty_int = int(round(qty))  # OKX swap qty must be integer contracts
+
+            logger.warning(
+                "AUTO-CLOSE orphan %s %s: %s contracts (%.2f), PnL=%.2f",
+                side, symbol, qty_int, qty, pos['unrealized_pnl'],
+            )
+
+            if qty_int == 0:
+                logger.warning("Auto-close skipped: rounded qty=0 for %s (raw=%.4f)", symbol, qty)
+                continue
+
+            result = await self.futures_adapter.place_order(
+                symbol=symbol,
+                side=close_side.upper(),
+                order_type="MARKET",
+                quantity=qty_int,
+                pos_side=pos_side,
+                reduce_only=True,
+            )
+
+            if result.success:
+                logger.warning(
+                    "AUTO-CLOSE SUCCESS: closed orphan %s %s, order_id=%s",
+                    side, symbol, result.order_id,
+                )
+            else:
+                logger.error(
+                    "AUTO-CLOSE FAILED for %s %s: %s", side, symbol, result.error
+                )
 
     async def _verify_leverage_settings(self) -> bool:
         """
