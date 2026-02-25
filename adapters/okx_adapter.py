@@ -145,7 +145,8 @@ class OKXAdapter(ExchangeAdapter):
                         sub_msg = data_arr[0].get("sMsg", "")
                         if sub_code or sub_msg:
                             error = f"{error} (sCode={sub_code}: {sub_msg})"
-                    logger.warning("OKX API error: %s | Full response: %s", error, result)
+                    logger.warning("OKX API error [%s %s]: %s | Full response: %s",
+                                   method, path, error, result)
                     self._set_error(error)
 
                 return result
@@ -343,7 +344,7 @@ class OKXAdapter(ExchangeAdapter):
             if inst_type == "SPOT" and td_mode == "cross":
                 symbol_parts = symbol.split("-")
                 # BTC-USDT → quote = USDT; guard against malformed symbols
-                if len(symbol_parts) >= 2:
+                if len(symbol_parts) >= 2 and symbol_parts[1]:
                     order_data["ccy"] = symbol_parts[1]
                     # Market BUY: sz must be in USDT (quote currency) because ccy=USDT
                     if okx_ord_type == "market" and side.upper() == "BUY":
