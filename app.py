@@ -3235,7 +3235,7 @@ if __name__ == '__main__':
     time.sleep(1.0)
 
     # Log the server address
-    port = 5000
+    port = int(os.getenv("PORT", 5000))
     logger.info("=" * 50)
     logger.info("Dashboard available at: http://localhost:%d", port)
     logger.info("=" * 50)
