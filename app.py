@@ -474,9 +474,19 @@ def get_exchange_positions():
             future = asyncio.run_coroutine_threadsafe(fetch_positions(), loop)
             positions = future.result(timeout=10)
 
-            # Format positions for response
+            # Format positions for response — SWAP/FUTURES only.
+            # get_positions() returns ALL margin positions including pre-existing
+            # spot margin positions (e.g. large BTC-USDT held as collateral).
+            # This bot only manages BTC-USDT-SWAP (perpetual) positions.
             position_list = []
             for pos in positions:
+                is_futures = any(x in pos.symbol for x in ('-SWAP', '-FUTURES', '-PERP'))
+                if not is_futures:
+                    logger.debug(
+                        "exchange-positions: ignoring non-futures position %s qty=%.4f",
+                        pos.symbol, pos.quantity,
+                    )
+                    continue
                 position_list.append({
                     'symbol': pos.symbol,
                     'side': pos.side,
