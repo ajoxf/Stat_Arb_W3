@@ -343,12 +343,9 @@
         </div>
 
         <!-- Blocked Signal Indicator -->
-        <div id="blocked-signal-card" class="card mb-3" style="display: none; border-color: #dc3545;">
-            <div class="card-header py-1 d-flex justify-content-between align-items-center" style="background: rgba(220, 53, 69, 0.1);">
-                <small><i class="bi bi-exclamation-triangle me-2 text-danger"></i>Signal Blocked</small>
-                <button class="btn btn-sm py-0" onclick="dismissBlockedSignal()" style="font-size: 0.6rem; padding: 0 4px;">
-                    <i class="bi bi-x"></i>
-                </button>
+        <div id="blocked-signal-card" class="card mb-3" style="display: none;">
+            <div class="card-header py-1">
+                <small><i class="bi bi-slash-circle me-2 text-secondary"></i>Last Signal Blocked</small>
             </div>
             <div class="card-body py-2" style="font-size: 0.75rem;">
                 <div class="d-flex justify-content-between mb-1">
@@ -363,8 +360,8 @@
                     <span class="text-secondary">Time:</span>
                     <span id="blocked-signal-time" style="font-size: 0.65rem;">-</span>
                 </div>
-                <div class="mt-2 p-2" style="background: rgba(220, 53, 69, 0.1); border-radius: 4px;">
-                    <span class="text-danger" id="blocked-signal-reason">-</span>
+                <div class="mt-2 p-2" style="background: rgba(108, 117, 125, 0.1); border-radius: 4px;">
+                    <span class="text-secondary" id="blocked-signal-reason">-</span>
                 </div>
             </div>
         </div>
@@ -1423,11 +1420,7 @@
         document.getElementById('blocked-signal-reason').textContent = blockedSignal.reason || 'Unknown reason';
     }
 
-    function dismissBlockedSignal() {
-        document.getElementById('blocked-signal-card').style.display = 'none';
-    }
-
-    function updateFilterStatus(elementId, passed, value) {
+function updateFilterStatus(elementId, passed, value) {
         const el = document.getElementById(elementId);
         if (passed === undefined) {
             el.textContent = '-';
