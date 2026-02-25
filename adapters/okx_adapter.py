@@ -634,15 +634,25 @@ class OKXAdapter(ExchangeAdapter):
                 return OrderResult(success=True)  # No position to close
 
             pos = positions[0]
-            close_side = "sell" if pos.side == "LONG" else "buy"
+
+            close_data: Dict[str, Any] = {
+                "instId": symbol,
+                "mgnMode": "cross",
+            }
+
+            # OKX requires 'ccy' for cross-margin SPOT (MARGIN instType).
+            # For SWAP/FUTURES it is not needed. Derive ccy from the instId:
+            # "BTC-USDT" → quote currency = "USDT"
+            is_swap = any(x in symbol for x in ("-SWAP", "-FUTURES", "-PERP"))
+            if not is_swap:
+                parts = symbol.split("-")
+                if len(parts) >= 2:
+                    close_data["ccy"] = parts[-1]  # e.g. "USDT"
 
             result = await self._request(
                 "POST",
                 "/api/v5/trade/close-position",
-                data={
-                    "instId": symbol,
-                    "mgnMode": "cross",
-                },
+                data=close_data,
             )
 
             if result and result.get("code") == "0":
