@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_ANALYSIS_MODEL = "claude-opus-4-6"
+_ANALYSIS_MODEL = "claude-sonnet-4-6"
 _MAX_TOKENS = 1024
 
 
