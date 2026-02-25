@@ -249,8 +249,13 @@ class SignalGenerator:
         else:
             exit_cost_bps = spot_taker + fut_taker    # e.g. 10 + 5 = 15 bps
 
-        # Total round-trip cost in price terms
-        total_cost_bps = entry_cost_bps + exit_cost_bps  # e.g. 10 + 15 = 25 bps
+        # Slippage: applies to all 4 legs (spot+futures × entry+exit)
+        # Even with LIMIT orders there is queue/amendment slippage
+        slippage_per_leg = getattr(self.config, 'slippage_bps', 0.0)
+        total_slippage_bps = slippage_per_leg * 4
+
+        # Total round-trip cost in price terms (fees + slippage)
+        total_cost_bps = entry_cost_bps + exit_cost_bps + total_slippage_bps
         costs_price = (total_cost_bps / 10000) * spot_price
 
         # Profitability ratio: how many times STD covers the costs

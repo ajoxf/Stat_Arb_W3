@@ -20,6 +20,7 @@ from dotenv import load_dotenv
 from models import TradingConfig, Exchange, Trade, MarketTick, Signal, CRYPTO_ASSETS
 from core.signals import SignalGenerator
 from core.trading_engine import TradingEngine
+from core.post_trade_analyzer import PostTradeAnalyzer
 from database.manager import DatabaseManager
 from adapters import OKXAdapter, BinanceAdapter, BybitAdapter, OKXWebSocketManager
 
@@ -48,6 +49,9 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
 # Initialize database
 db = DatabaseManager(os.getenv('DATABASE_PATH', 'trading.db'))
+
+# Post-trade AI analyzer (fires after every real closed trade)
+post_trade_analyzer = PostTradeAnalyzer(db, socketio)
 
 # Initialize trading engine
 config = db.get_config()
@@ -254,6 +258,9 @@ def on_trade_callback(trade: Trade):
         # Paper trades are emitted to the socket for live dashboard view only.
         if not trade.is_paper:
             trade.id = db.save_trade(trade)
+            # Fire post-trade AI analysis for closed trades (non-blocking)
+            if not trade.is_open:
+                post_trade_analyzer.analyze_async(trade)
         # Always emit to socket so the dashboard shows real-time updates
         socketio.emit('trade', trade.to_dict(), namespace='/')
     except Exception as e:

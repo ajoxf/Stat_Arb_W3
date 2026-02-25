@@ -197,6 +197,17 @@ class DatabaseManager:
                 ON spread_history (asset, timestamp DESC)
             """)
 
+            # Post-trade AI analysis log
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS trade_analysis (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    trade_id INTEGER NOT NULL,
+                    timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
+                    analysis TEXT NOT NULL,
+                    model TEXT DEFAULT 'claude-opus-4-6'
+                )
+            """)
+
             # Insert default config if not exists
             cursor.execute("SELECT COUNT(*) FROM trading_config")
             if cursor.fetchone()[0] == 0:
@@ -235,6 +246,8 @@ class DatabaseManager:
                 cursor.execute("ALTER TABLE trading_config ADD COLUMN futures_maker_fee_bps REAL DEFAULT 2.0")
             if 'futures_taker_fee_bps' not in existing_columns:
                 cursor.execute("ALTER TABLE trading_config ADD COLUMN futures_taker_fee_bps REAL DEFAULT 5.0")
+            if 'slippage_bps' not in existing_columns:
+                cursor.execute("ALTER TABLE trading_config ADD COLUMN slippage_bps REAL DEFAULT 3.0")
 
             # Re-enable STD filter and lower threshold for existing DBs where it was disabled
             # min_std_multiple=1.5 was too aggressive; 1.2 with LIMIT exits is more permissive
@@ -287,6 +300,7 @@ class DatabaseManager:
                     spot_taker_fee_bps=row["spot_taker_fee_bps"] if "spot_taker_fee_bps" in row.keys() else 10.0,
                     futures_maker_fee_bps=row["futures_maker_fee_bps"] if "futures_maker_fee_bps" in row.keys() else 2.0,
                     futures_taker_fee_bps=row["futures_taker_fee_bps"] if "futures_taker_fee_bps" in row.keys() else 5.0,
+                    slippage_bps=row["slippage_bps"] if "slippage_bps" in row.keys() else 3.0,
                     estimated_costs_bps=row["estimated_costs_bps"],
                     entry_cooldown_seconds=row["entry_cooldown_seconds"] if "entry_cooldown_seconds" in row.keys() else 60,
                     verify_exchange_position=bool(row["verify_exchange_position"]) if "verify_exchange_position" in row.keys() else True,
@@ -330,6 +344,7 @@ class DatabaseManager:
                     spot_taker_fee_bps = ?,
                     futures_maker_fee_bps = ?,
                     futures_taker_fee_bps = ?,
+                    slippage_bps = ?,
                     estimated_costs_bps = ?,
                     entry_cooldown_seconds = ?,
                     verify_exchange_position = ?,
@@ -365,6 +380,7 @@ class DatabaseManager:
                 config.spot_taker_fee_bps,
                 config.futures_maker_fee_bps,
                 config.futures_taker_fee_bps,
+                config.slippage_bps,
                 config.estimated_costs_bps,
                 config.entry_cooldown_seconds,
                 int(config.verify_exchange_position),
@@ -658,6 +674,28 @@ class DatabaseManager:
                     asset, std_value, cost_threshold, profitability_ratio, passed
                 ) VALUES (?, ?, ?, ?, ?)
             """, (asset, std_value, cost_threshold, profitability_ratio, int(passed)))
+
+    def save_trade_analysis(self, trade_id: int, analysis: str, model: str = "claude-opus-4-6") -> None:
+        """Save post-trade AI analysis."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO trade_analysis (trade_id, analysis, model)
+                VALUES (?, ?, ?)
+            """, (trade_id, analysis, model))
+
+    def get_trade_analysis(self, trade_id: int) -> Optional[Dict[str, Any]]:
+        """Get AI analysis for a specific trade."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM trade_analysis WHERE trade_id = ? ORDER BY timestamp DESC LIMIT 1",
+                (trade_id,)
+            )
+            row = cursor.fetchone()
+            if row:
+                return dict(row)
+            return None
 
     def log_sd_touch(self, event: SDTouchEvent) -> None:
         """Log SD touch event."""

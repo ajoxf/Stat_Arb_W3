@@ -115,6 +115,11 @@ class TradingConfig:
     # Orphan leg recovery: try LIMIT order for unfilled leg before falling back to market
     orphan_recovery_timeout_sec: int = 60  # Seconds to try filling orphan leg as maker
 
+    # Slippage estimate per leg (applied to all 4 legs: spot+futures × entry+exit)
+    # LIMIT orders: ~2-3 bps queue/amendment slippage
+    # MARKET orders: ~5-10 bps market impact, more in high-vol conditions
+    slippage_bps: float = 3.0
+
     # Legacy field - now computed from taker/maker fees based on order mode
     estimated_costs_bps: float = 10.0  # Kept for backward compatibility
 
@@ -150,6 +155,7 @@ class TradingConfig:
             'futures_taker_fee_bps': self.futures_taker_fee_bps,
             'taker_fee_bps': self.taker_fee_bps,
             'maker_fee_bps': self.maker_fee_bps,
+            'slippage_bps': self.slippage_bps,
             'estimated_costs_bps': self.estimated_costs_bps,
             'entry_cooldown_seconds': self.entry_cooldown_seconds,
             'verify_exchange_position': self.verify_exchange_position,
