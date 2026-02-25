@@ -388,11 +388,12 @@ class OrderExecutor:
 
                 self._update_target_prices(spread_order, new_spot_tick, new_futures_tick)
 
-                # Amend orders if prices changed by more than 0.05% (5 bps)
-                # This prevents excessive order amendments on small price moves
+                # Amend orders if prices changed by more than 1 bps
+                # 5 bps was too coarse: on BTC that's ~$32, causing orders to sit
+                # unfilled for 60s when market trends away from the limit price
                 spot_change_pct = abs(spread_order.spot_leg.target_price - old_spot_price) / old_spot_price if old_spot_price else 0
                 futures_change_pct = abs(spread_order.futures_leg.target_price - old_futures_price) / old_futures_price if old_futures_price else 0
-                amend_threshold = 0.0005  # 0.05% = 5 basis points
+                amend_threshold = 0.0001  # 0.01% = 1 basis point (~$6.50 on BTC)
 
                 if spot_change_pct > amend_threshold or futures_change_pct > amend_threshold:
                     await self._amend_limit_orders(spread_order)
@@ -855,7 +856,7 @@ class OrderExecutor:
         leg: LegOrder,
         label: str,
         recovery_timeout_sec: int = 60,
-        price_step_bps: float = 1.0,
+        price_step_bps: float = 2.0,
         max_price_steps: int = 10,
     ) -> bool:
         """
