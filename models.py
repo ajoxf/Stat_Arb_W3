@@ -72,7 +72,7 @@ class TradingConfig:
     hurst_enabled: bool = True
     hurst_threshold: float = 0.5  # H < 0.5 = mean reverting
     std_filter_enabled: bool = True
-    min_std_multiple: float = 1.5  # STD must be > costs * multiple
+    min_std_multiple: float = 1.2  # STD must be > costs * multiple
 
     # Position sizing
     position_size_usd: float = 1000.0
@@ -90,7 +90,7 @@ class TradingConfig:
     # Separate modes for entries vs exits to optimize fee/slippage tradeoff
     order_execution_mode: str = "MARKET"  # Legacy field, kept for backward compatibility
     entry_execution_mode: str = "LIMIT"   # Entries: LIMIT for maker fees (less urgent)
-    exit_execution_mode: str = "MARKET"   # Exits: MARKET for speed (avoid slippage)
+    exit_execution_mode: str = "LIMIT"    # Exits: LIMIT for maker fees (saves ~5 bps vs MARKET)
     # Limit order settings
     limit_order_timeout_sec: int = 30  # Max time to wait for fill
     limit_order_price_offset_bps: float = 1.0  # Offset from best bid/ask in basis points

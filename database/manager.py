@@ -223,7 +223,10 @@ class DatabaseManager:
             if 'entry_execution_mode' not in existing_columns:
                 cursor.execute("ALTER TABLE trading_config ADD COLUMN entry_execution_mode TEXT DEFAULT 'LIMIT'")
             if 'exit_execution_mode' not in existing_columns:
-                cursor.execute("ALTER TABLE trading_config ADD COLUMN exit_execution_mode TEXT DEFAULT 'MARKET'")
+                cursor.execute("ALTER TABLE trading_config ADD COLUMN exit_execution_mode TEXT DEFAULT 'LIMIT'")
+            else:
+                # Migrate existing MARKET exits to LIMIT to reduce taker fee drain
+                cursor.execute("UPDATE trading_config SET exit_execution_mode = 'LIMIT' WHERE exit_execution_mode = 'MARKET' AND id = 1")
             if 'spot_maker_fee_bps' not in existing_columns:
                 cursor.execute("ALTER TABLE trading_config ADD COLUMN spot_maker_fee_bps REAL DEFAULT 8.0")
             if 'spot_taker_fee_bps' not in existing_columns:
@@ -232,6 +235,15 @@ class DatabaseManager:
                 cursor.execute("ALTER TABLE trading_config ADD COLUMN futures_maker_fee_bps REAL DEFAULT 2.0")
             if 'futures_taker_fee_bps' not in existing_columns:
                 cursor.execute("ALTER TABLE trading_config ADD COLUMN futures_taker_fee_bps REAL DEFAULT 5.0")
+
+            # Re-enable STD filter and lower threshold for existing DBs where it was disabled
+            # min_std_multiple=1.5 was too aggressive; 1.2 with LIMIT exits is more permissive
+            cursor.execute("""
+                UPDATE trading_config
+                SET std_filter_enabled = 1,
+                    min_std_multiple = CASE WHEN min_std_multiple >= 1.5 THEN 1.2 ELSE min_std_multiple END
+                WHERE id = 1 AND std_filter_enabled = 0
+            """)
 
             logger.info("Database initialized: %s", self.db_path)
 
@@ -266,7 +278,7 @@ class DatabaseManager:
                     algo_enabled=bool(row["algo_enabled"]),
                     order_execution_mode=row["order_execution_mode"] if "order_execution_mode" in row.keys() else "MARKET",
                     entry_execution_mode=row["entry_execution_mode"] if "entry_execution_mode" in row.keys() else "LIMIT",
-                    exit_execution_mode=row["exit_execution_mode"] if "exit_execution_mode" in row.keys() else "MARKET",
+                    exit_execution_mode=row["exit_execution_mode"] if "exit_execution_mode" in row.keys() else "LIMIT",
                     limit_order_timeout_sec=row["limit_order_timeout_sec"] if "limit_order_timeout_sec" in row.keys() else 30,
                     limit_order_price_offset_bps=row["limit_order_price_offset_bps"] if "limit_order_price_offset_bps" in row.keys() else 1.0,
                     taker_fee_bps=row["taker_fee_bps"] if "taker_fee_bps" in row.keys() else 5.0,
