@@ -259,6 +259,17 @@ class Trade:
     spot_order_id: str = ""
     futures_order_id: str = ""
 
+    # Execution timing (populated after live order fill)
+    entry_placed_at: Optional[datetime] = None   # When orders were sent to exchange
+    entry_filled_at: Optional[datetime] = None   # When both legs confirmed filled
+    entry_latency_ms: Optional[float] = None     # placed → filled in ms
+    exit_placed_at: Optional[datetime] = None
+    exit_filled_at: Optional[datetime] = None
+    exit_latency_ms: Optional[float] = None
+
+    # Margin
+    margin_usd: float = 0.0  # Futures margin requirement (notional / leverage)
+
     # Status
     is_open: bool = True
     is_paper: bool = True
@@ -285,6 +296,13 @@ class Trade:
             'pnl_percent': self.pnl_percent,
             'spot_order_id': self.spot_order_id,
             'futures_order_id': self.futures_order_id,
+            'entry_placed_at': self.entry_placed_at.isoformat() if self.entry_placed_at else None,
+            'entry_filled_at': self.entry_filled_at.isoformat() if self.entry_filled_at else None,
+            'entry_latency_ms': self.entry_latency_ms,
+            'exit_placed_at': self.exit_placed_at.isoformat() if self.exit_placed_at else None,
+            'exit_filled_at': self.exit_filled_at.isoformat() if self.exit_filled_at else None,
+            'exit_latency_ms': self.exit_latency_ms,
+            'margin_usd': self.margin_usd,
             'is_open': self.is_open,
             'is_paper': self.is_paper,
         }

@@ -99,32 +99,71 @@ class TelegramNotifier:
             return
         try:
             direction = trade.position_type
-            entry_time_str = (
+            C = 13
+            SEP = "\u2500" * 24
+
+            entry_str = (
                 trade.entry_time.strftime("%Y-%m-%d %H:%M:%S UTC")
                 if trade.entry_time else "—"
             )
+            placed_str = (
+                trade.entry_placed_at.strftime("%H:%M:%S.%f")[:-3] + " UTC"
+                if trade.entry_placed_at else ("simulated" if trade.is_paper else "—")
+            )
+            filled_str = (
+                trade.entry_filled_at.strftime("%H:%M:%S.%f")[:-3] + " UTC"
+                if trade.entry_filled_at else ("simulated" if trade.is_paper else "—")
+            )
+            latency_str = (
+                f"{trade.entry_latency_ms:.0f} ms"
+                if trade.entry_latency_ms is not None else ("simulated" if trade.is_paper else "—")
+            )
+
             spread_bps = 0.0
             if trade.entry_spot_price > 0:
                 spread_bps = (trade.entry_spread / trade.entry_spot_price) * 10000
 
-            C = 11
+            leverage_x = round(trade.notional_usd / trade.margin_usd) if trade.margin_usd > 0 else 0
+            margin_str = (
+                f"${trade.margin_usd:,.2f}  ({leverage_x}x)"
+                if leverage_x > 0 else f"${trade.margin_usd:,.2f}"
+            )
+
             rows = [
                 f"{'ID':<{C}}#{trade.id or 'pending'}",
-                f"{'Time':<{C}}{entry_time_str}",
-                f"{'Size':<{C}}{trade.quantity:.6f} {trade.asset}  (${trade.notional_usd:,.2f})",
-                "",
-                f"{'Spot':<{C}}${trade.entry_spot_price:,.4f}",
-                f"{'Futures':<{C}}${trade.entry_futures_price:,.4f}",
+                f"{'Entry Time':<{C}}{entry_str}",
+                SEP,
+                f"{'Lots':<{C}}{trade.quantity:.6f} {trade.asset}",
+                f"{'Notional':<{C}}${trade.notional_usd:,.2f}",
+                f"{'Margin Req':<{C}}{margin_str}",
+                SEP,
+                f"{'Spot Entry':<{C}}${trade.entry_spot_price:,.4f}",
+                f"{'Fut Entry':<{C}}${trade.entry_futures_price:,.4f}",
                 f"{'Spread':<{C}}{trade.entry_spread:+.4f}  ({spread_bps:+.2f} bps)",
+                SEP,
                 f"{'Z-score':<{C}}{trade.entry_zscore:+.4f}",
             ]
             if signal:
                 std = getattr(signal, 'spread_std', None)
+                spread_mean = getattr(signal, 'spread_mean', None)
+                hurst = getattr(signal, 'hurst', None)
+                hurst_ok = getattr(signal, 'hurst_ok', None)
+                regime = getattr(signal, 'regime', None)
                 if std:
                     rows.append(f"{'Spread SD':<{C}}{std:.6f}")
-                regime = getattr(signal, 'regime', None)
+                if spread_mean:
+                    rows.append(f"{'Spread Mean':<{C}}{spread_mean:+.4f}")
+                if hurst is not None:
+                    hurst_tag = "  [mean-rev]" if hurst_ok else "  [trending]" if hurst_ok is False else ""
+                    rows.append(f"{'Hurst':<{C}}{hurst:.4f}{hurst_tag}")
                 if regime:
                     rows.append(f"{'Regime':<{C}}{regime}")
+            rows += [
+                SEP,
+                f"{'Orders at':<{C}}{placed_str}",
+                f"{'Filled at':<{C}}{filled_str}",
+                f"{'Latency':<{C}}{latency_str}",
+            ]
             parts = [
                 f"<b>TRADE ENTRY  ·  {direction} {trade.asset}</b>",
                 "<pre>" + "\n".join(rows) + "</pre>",
@@ -142,11 +181,13 @@ class TelegramNotifier:
         try:
             direction = trade.position_type
             exit_reason = trade.exit_reason or "EXIT"
+            C = 14
+            SEP = "\u2500" * 24
 
-            exit_time_str = "—"
+            exit_str = "—"
             duration_str = "—"
             if trade.exit_time:
-                exit_time_str = trade.exit_time.strftime("%Y-%m-%d %H:%M:%S UTC")
+                exit_str = trade.exit_time.strftime("%Y-%m-%d %H:%M:%S UTC")
                 if trade.entry_time:
                     total_sec = int((trade.exit_time - trade.entry_time).total_seconds())
                     if total_sec < 3600:
@@ -155,6 +196,19 @@ class TelegramNotifier:
                         duration_str = f"{total_sec // 3600}h {(total_sec % 3600) // 60}m"
                     else:
                         duration_str = f"{total_sec // 86400}d {(total_sec % 86400) // 3600}h"
+
+            placed_str = (
+                trade.exit_placed_at.strftime("%H:%M:%S.%f")[:-3] + " UTC"
+                if trade.exit_placed_at else ("simulated" if trade.is_paper else "—")
+            )
+            filled_str = (
+                trade.exit_filled_at.strftime("%H:%M:%S.%f")[:-3] + " UTC"
+                if trade.exit_filled_at else ("simulated" if trade.is_paper else "—")
+            )
+            latency_str = (
+                f"{trade.exit_latency_ms:.0f} ms"
+                if trade.exit_latency_ms is not None else ("simulated" if trade.is_paper else "—")
+            )
 
             entry_spread = trade.entry_spread
             exit_spread = trade.exit_spread
@@ -166,24 +220,27 @@ class TelegramNotifier:
             est_fees = trade.notional_usd * 0.0020
             result = "PROFIT" if trade.pnl_usd >= 0 else "LOSS"
 
-            C = 15
-            SEP = "\u2500" * 24
             rows = [
                 f"{'Reason':<{C}}{exit_reason}",
                 f"{'Duration':<{C}}{duration_str}",
-                f"{'Exit Time':<{C}}{exit_time_str}",
-                "",
-                f"{'Entry Spot':<{C}}${trade.entry_spot_price:,.4f}",
-                f"{'Exit Spot':<{C}}${trade.exit_spot_price:,.4f}",
-                f"{'Entry Futures':<{C}}${trade.entry_futures_price:,.4f}",
-                f"{'Exit Futures':<{C}}${trade.exit_futures_price:,.4f}",
-                "",
+                f"{'Exit Time':<{C}}{exit_str}",
+                SEP,
+                f"{'Spot Entry':<{C}}${trade.entry_spot_price:,.4f}",
+                f"{'Spot Exit':<{C}}${trade.exit_spot_price:,.4f}",
+                f"{'Fut Entry':<{C}}${trade.entry_futures_price:,.4f}",
+                f"{'Fut Exit':<{C}}${trade.exit_futures_price:,.4f}",
+                SEP,
                 f"{'Entry Spread':<{C}}{entry_spread:+.4f}  (Z: {trade.entry_zscore:+.4f})",
                 f"{'Exit Spread':<{C}}{exit_spread:+.4f}  (Z: {trade.exit_zscore:+.4f})",
+                f"{'Spread Chg':<{C}}{spread_change:+.4f}",
                 SEP,
-                f"{'Gross':<{C}}${gross_pnl:+.4f}",
+                f"{'Orders at':<{C}}{placed_str}",
+                f"{'Filled at':<{C}}{filled_str}",
+                f"{'Latency':<{C}}{latency_str}",
+                SEP,
+                f"{'Gross PnL':<{C}}${gross_pnl:+.4f}",
                 f"{'Est. Fees':<{C}}-${est_fees:.4f}",
-                f"{'Net':<{C}}${trade.pnl_usd:+.4f}  ({trade.pnl_percent:+.4f}%)",
+                f"{'Net PnL':<{C}}${trade.pnl_usd:+.4f}  ({trade.pnl_percent:+.4f}%)",
             ]
             parts = [
                 f"<b>TRADE EXIT  ·  {direction} {trade.asset}  ·  {result}</b>",
@@ -204,10 +261,31 @@ class TelegramNotifier:
         try:
             sig_type = signal.signal_type
             ts = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
-            C = 9
+            C = 13
             rows = [
                 f"{'Z-score':<{C}}{signal.zscore:+.4f}",
                 f"{'Spread':<{C}}{signal.spread:+.6f}",
+            ]
+            spread_mean = getattr(signal, 'spread_mean', None)
+            spread_std = getattr(signal, 'spread_std', None)
+            hurst = getattr(signal, 'hurst', None)
+            hurst_ok = getattr(signal, 'hurst_ok', None)
+            std_ok = getattr(signal, 'std_filter_ok', None)
+            if spread_mean:
+                rows.append(f"{'Spread Mean':<{C}}{spread_mean:+.6f}")
+            if spread_std:
+                rows.append(f"{'Spread SD':<{C}}{spread_std:.6f}")
+            if hurst is not None:
+                hurst_tag = "  [mean-rev]" if hurst_ok else "  [trending]" if hurst_ok is False else ""
+                rows.append(f"{'Hurst':<{C}}{hurst:.4f}{hurst_tag}")
+            filters = []
+            if hurst_ok is not None:
+                filters.append(f"hurst={'OK' if hurst_ok else 'FAIL'}")
+            if std_ok is not None:
+                filters.append(f"std={'OK' if std_ok else 'FAIL'}")
+            if filters:
+                rows.append(f"{'Filters':<{C}}{', '.join(filters)}")
+            rows += [
                 f"{'Regime':<{C}}{getattr(signal, 'regime', 'N/A')}",
                 f"{'Time':<{C}}{ts}",
             ]
@@ -427,16 +505,49 @@ class TelegramNotifier:
         current_z = sig.get("zscore", 0.0)
         current_spread = sig.get("spread", 0.0)
 
-        C = 15
+        margin_usd = open_trade.get("margin_usd", 0)
+        entry_latency = open_trade.get("entry_latency_ms")
+        placed_str = open_trade.get("entry_placed_at") or ("simulated" if open_trade.get("is_paper") else "—")
+        if placed_str and len(placed_str) > 10:
+            placed_str = placed_str[11:23] + " UTC"  # ISO → HH:MM:SS.mmm UTC
+        filled_str = open_trade.get("entry_filled_at") or ("simulated" if open_trade.get("is_paper") else "—")
+        if filled_str and len(filled_str) > 10:
+            filled_str = filled_str[11:23] + " UTC"
+        latency_str = f"{entry_latency:.0f} ms" if entry_latency is not None else "—"
+
+        leverage_x = round(notional / margin_usd) if margin_usd > 0 else 0
+        margin_str = f"${margin_usd:,.2f}  ({leverage_x}x)" if leverage_x > 0 else f"${margin_usd:,.2f}"
+
+        spot_tick = status.get("spot_tick") or {}
+        futures_tick = status.get("futures_tick") or {}
+        current_spot = spot_tick.get("last", 0)
+        current_fut = futures_tick.get("last", 0)
+
+        C = 14
+        SEP = "\u2500" * 24
         rows = [
             f"{position} {asset}",
             "",
-            f"{'Size':<{C}}{qty:.6f} {asset}  (${notional:,.2f})",
+            f"{'Lots':<{C}}{qty:.6f} {asset}",
+            f"{'Notional':<{C}}${notional:,.2f}",
+            f"{'Margin Req':<{C}}{margin_str}",
             f"{'Entry Time':<{C}}{entry_time}",
-            f"{'Entry Spot':<{C}}${entry_spot:,.4f}",
-            f"{'Entry Futures':<{C}}${entry_fut:,.4f}",
+            SEP,
+            f"{'Spot Entry':<{C}}${entry_spot:,.4f}",
+            f"{'Fut Entry':<{C}}${entry_fut:,.4f}",
             f"{'Entry Spread':<{C}}{entry_spread:+.4f}  (Z: {entry_z:+.4f})",
-            f"{'Current':<{C}}{current_spread:+.4f}  (Z: {current_z:+.4f})",
+            SEP,
+        ]
+        if current_spot:
+            rows.append(f"{'Spot Now':<{C}}${current_spot:,.4f}")
+        if current_fut:
+            rows.append(f"{'Fut Now':<{C}}${current_fut:,.4f}")
+        rows.append(f"{'Spread Now':<{C}}{current_spread:+.4f}  (Z: {current_z:+.4f})")
+        rows += [
+            SEP,
+            f"{'Orders at':<{C}}{placed_str}",
+            f"{'Filled at':<{C}}{filled_str}",
+            f"{'Latency':<{C}}{latency_str}",
         ]
         self._send(
             f"<b>OPEN POSITIONS  ·  {ts}</b>\n"

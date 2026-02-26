@@ -991,6 +991,18 @@ class TradingEngine:
                 # Update actual fill prices
                 trade.entry_spot_price = spread_order.spot_leg.filled_price
                 trade.entry_futures_price = spread_order.futures_leg.filled_price
+                # Execution timing
+                trade.entry_placed_at = spread_order.created_at
+                fill_ts = (spread_order.spot_leg.last_update or
+                           spread_order.futures_leg.last_update)
+                if fill_ts and spread_order.created_at:
+                    trade.entry_filled_at = fill_ts
+                    trade.entry_latency_ms = round(
+                        (fill_ts - spread_order.created_at).total_seconds() * 1000, 1
+                    )
+                # Margin requirement
+                leverage = max(getattr(self.config, 'futures_leverage', 1), 1)
+                trade.margin_usd = round(trade.notional_usd / leverage, 2)
                 logger.info("ENTRY SUCCESS: mode=%s, spot_id=%s @ $%.2f, futures_id=%s @ $%.2f",
                             self.config.order_execution_mode,
                             trade.spot_order_id, trade.entry_spot_price,
@@ -1168,6 +1180,15 @@ class TradingEngine:
                 # Update actual exit prices from fills
                 trade.exit_spot_price = spread_order.spot_leg.filled_price
                 trade.exit_futures_price = spread_order.futures_leg.filled_price
+                # Execution timing
+                trade.exit_placed_at = spread_order.created_at
+                fill_ts = (spread_order.spot_leg.last_update or
+                           spread_order.futures_leg.last_update)
+                if fill_ts and spread_order.created_at:
+                    trade.exit_filled_at = fill_ts
+                    trade.exit_latency_ms = round(
+                        (fill_ts - spread_order.created_at).total_seconds() * 1000, 1
+                    )
                 logger.info("Exit orders executed: mode=%s", self.config.order_execution_mode)
                 return True
             else:
