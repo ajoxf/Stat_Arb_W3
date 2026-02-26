@@ -106,29 +106,32 @@ class TelegramNotifier:
             if trade.entry_spot_price > 0:
                 spread_bps = (trade.entry_spread / trade.entry_spot_price) * 10000
 
-            lines = [
-                f"<b>TRADE ENTRY  ·  {direction} {trade.asset}</b>",
-                "────────────────────────",
-                f"ID        #{trade.id or 'pending'}",
-                f"Time      {entry_time_str}",
-                f"Size      {trade.quantity:.6f} {trade.asset}  (${trade.notional_usd:,.2f})",
+            C = 11
+            rows = [
+                f"{'ID':<{C}}#{trade.id or 'pending'}",
+                f"{'Time':<{C}}{entry_time_str}",
+                f"{'Size':<{C}}{trade.quantity:.6f} {trade.asset}  (${trade.notional_usd:,.2f})",
                 "",
-                f"Spot      ${trade.entry_spot_price:,.4f}",
-                f"Futures   ${trade.entry_futures_price:,.4f}",
-                f"Spread    {trade.entry_spread:+.4f}  ({spread_bps:+.2f} bps)",
-                f"Z-score   {trade.entry_zscore:+.4f}",
+                f"{'Spot':<{C}}${trade.entry_spot_price:,.4f}",
+                f"{'Futures':<{C}}${trade.entry_futures_price:,.4f}",
+                f"{'Spread':<{C}}{trade.entry_spread:+.4f}  ({spread_bps:+.2f} bps)",
+                f"{'Z-score':<{C}}{trade.entry_zscore:+.4f}",
             ]
             if signal:
                 std = getattr(signal, 'spread_std', None)
                 if std:
-                    lines.append(f"Spread SD  {std:.6f}")
+                    rows.append(f"{'Spread SD':<{C}}{std:.6f}")
                 regime = getattr(signal, 'regime', None)
                 if regime:
-                    lines.append(f"Regime    {regime}")
-            if trade.is_paper:
-                lines += ["────────────────────────", "<i>Paper Trading</i>"]
+                    rows.append(f"{'Regime':<{C}}{regime}")
 
-            self._send("\n".join(lines))
+            parts = [
+                f"<b>TRADE ENTRY  ·  {direction} {trade.asset}</b>",
+                "<pre>" + "\n".join(rows) + "</pre>",
+            ]
+            if trade.is_paper:
+                parts.append("<i>Paper Trading</i>")
+            self._send("\n".join(parts))
         except Exception as e:
             logger.error("Error building trade entry notification: %s", e)
 
@@ -161,32 +164,34 @@ class TelegramNotifier:
             )
             gross_pnl = spread_change * trade.quantity
             est_fees = trade.notional_usd * 0.0020
-
             result = "PROFIT" if trade.pnl_usd >= 0 else "LOSS"
 
-            lines = [
+            C = 15
+            SEP = "\u2500" * 24
+            rows = [
+                f"{'Reason':<{C}}{exit_reason}",
+                f"{'Duration':<{C}}{duration_str}",
+                f"{'Exit Time':<{C}}{exit_time_str}",
+                "",
+                f"{'Entry Spot':<{C}}${trade.entry_spot_price:,.4f}",
+                f"{'Exit Spot':<{C}}${trade.exit_spot_price:,.4f}",
+                f"{'Entry Futures':<{C}}${trade.entry_futures_price:,.4f}",
+                f"{'Exit Futures':<{C}}${trade.exit_futures_price:,.4f}",
+                "",
+                f"{'Entry Spread':<{C}}{entry_spread:+.4f}  (Z: {trade.entry_zscore:+.4f})",
+                f"{'Exit Spread':<{C}}{exit_spread:+.4f}  (Z: {trade.exit_zscore:+.4f})",
+                SEP,
+                f"{'Gross':<{C}}${gross_pnl:+.4f}",
+                f"{'Est. Fees':<{C}}-${est_fees:.4f}",
+                f"{'Net':<{C}}${trade.pnl_usd:+.4f}  ({trade.pnl_percent:+.4f}%)",
+            ]
+            parts = [
                 f"<b>TRADE EXIT  ·  {direction} {trade.asset}  ·  {result}</b>",
-                "────────────────────────",
-                f"Reason    {exit_reason}",
-                f"Duration  {duration_str}",
-                f"Exit      {exit_time_str}",
-                "",
-                f"Entry Spot     ${trade.entry_spot_price:,.4f}",
-                f"Exit Spot      ${trade.exit_spot_price:,.4f}",
-                f"Entry Futures  ${trade.entry_futures_price:,.4f}",
-                f"Exit Futures   ${trade.exit_futures_price:,.4f}",
-                "",
-                f"Entry Spread   {entry_spread:+.4f}  (Z: {trade.entry_zscore:+.4f})",
-                f"Exit Spread    {exit_spread:+.4f}  (Z: {trade.exit_zscore:+.4f})",
-                "────────────────────────",
-                f"Gross     ${gross_pnl:+.4f}",
-                f"Est. Fees  -${est_fees:.4f}",
-                f"<b>Net       ${trade.pnl_usd:+.4f}  ({trade.pnl_percent:+.4f}%)</b>",
+                "<pre>" + "\n".join(rows) + "</pre>",
             ]
             if trade.is_paper:
-                lines += ["────────────────────────", "<i>Paper Trading</i>"]
-
-            self._send("\n".join(lines))
+                parts.append("<i>Paper Trading</i>")
+            self._send("\n".join(parts))
         except Exception as e:
             logger.error("Error building trade exit notification: %s", e)
 
@@ -199,15 +204,17 @@ class TelegramNotifier:
         try:
             sig_type = signal.signal_type
             ts = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
-            msg = (
+            C = 9
+            rows = [
+                f"{'Z-score':<{C}}{signal.zscore:+.4f}",
+                f"{'Spread':<{C}}{signal.spread:+.6f}",
+                f"{'Regime':<{C}}{getattr(signal, 'regime', 'N/A')}",
+                f"{'Time':<{C}}{ts}",
+            ]
+            self._send(
                 f"<b>SIGNAL  ·  {sig_type}</b>\n"
-                "────────────────────────\n"
-                f"Z-score  {signal.zscore:+.4f}\n"
-                f"Spread   {signal.spread:+.6f}\n"
-                f"Regime   {getattr(signal, 'regime', 'N/A')}\n"
-                f"Time     {ts}"
+                "<pre>" + "\n".join(rows) + "</pre>"
             )
-            self._send(msg)
         except Exception as e:
             logger.error("Error building signal notification: %s", e)
 
@@ -217,13 +224,10 @@ class TelegramNotifier:
             return
         try:
             ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-            msg = (
-                f"<b>SYSTEM ERROR</b>\n"
-                "────────────────────────\n"
-                f"{ts}\n\n"
-                f"{error_msg[:500]}"
+            self._send(
+                "<b>SYSTEM ERROR</b>\n"
+                f"<pre>{ts}\n\n{error_msg[:500]}</pre>"
             )
-            self._send(msg)
         except Exception as e:
             logger.error("Error building error notification: %s", e)
 
@@ -232,11 +236,10 @@ class TelegramNotifier:
         if not self._token or not self._chat_id:
             return False
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-        msg = (
-            "<b>Nexus Stat-Arb</b>\n"
-            "────────────────────────\n"
+        SEP = "\u2500" * 24
+        body = (
             f"Connected and ready.  {ts}\n\n"
-            "<b>Commands</b>\n"
+            f"Commands\n{SEP}\n"
             "/status     engine &amp; algo state\n"
             "/positions  open positions\n"
             "/trades     recent closed trades\n"
@@ -244,7 +247,8 @@ class TelegramNotifier:
             "/pnl        P&amp;L summary\n"
             "/eod        end-of-day report"
         )
-        return send_telegram_message(self._token, self._chat_id, msg)
+        return send_telegram_message(self._token, self._chat_id,
+                                     f"<b>Nexus Stat-Arb</b>\n<pre>{body}</pre>")
 
     # ------------------------------------------------------------------
     # Command Polling
@@ -344,11 +348,10 @@ class TelegramNotifier:
 
     def _cmd_start(self) -> None:
         """Handle /start and /help commands."""
-        self._send(
-            "<b>Nexus Stat-Arb Bot</b>\n"
-            "────────────────────────\n"
-            "Notifications active.  Use a command below.\n\n"
-            "<b>Commands</b>\n"
+        SEP = "\u2500" * 24
+        body = (
+            f"Notifications active.\n\n"
+            f"Commands\n{SEP}\n"
             "/status     engine &amp; algo state\n"
             "/positions  open positions\n"
             "/trades     recent closed trades\n"
@@ -356,6 +359,7 @@ class TelegramNotifier:
             "/pnl        P&amp;L summary\n"
             "/eod        end-of-day report"
         )
+        self._send(f"<b>Nexus Stat-Arb Bot</b>\n<pre>{body}</pre>")
 
     def _cmd_status(self) -> None:
         """Handle /status command."""
@@ -368,26 +372,26 @@ class TelegramNotifier:
         asset = status.get("asset", "N/A")
         error = status.get("error", "")
 
-        mode_str = "Paper" if paper else "Live"
-
         sig = status.get("signal") or {}
         zscore = sig.get("zscore", 0.0)
         regime = sig.get("regime", "N/A")
 
-        msg_lines = [
-            f"<b>SYSTEM STATUS</b>  ·  {ts}",
-            "────────────────────────",
-            f"Engine    {'Running' if is_running else 'Stopped'}",
-            f"Algo      {'Enabled' if algo_enabled else 'Disabled'}",
-            f"Mode      {mode_str}",
-            f"Asset     {asset}",
-            f"Position  {position}",
-            f"Z-score   {zscore:+.4f}",
-            f"Regime    {regime}",
+        C = 10
+        rows = [
+            f"{'Engine':<{C}}{'Running' if is_running else 'Stopped'}",
+            f"{'Algo':<{C}}{'Enabled' if algo_enabled else 'Disabled'}",
+            f"{'Mode':<{C}}{'Paper' if paper else 'Live'}",
+            f"{'Asset':<{C}}{asset}",
+            f"{'Position':<{C}}{position}",
+            f"{'Z-score':<{C}}{zscore:+.4f}",
+            f"{'Regime':<{C}}{regime}",
         ]
         if error:
-            msg_lines += ["────────────────────────", f"<b>Error</b>  {error[:200]}"]
-        self._send("\n".join(msg_lines))
+            rows += ["\u2500" * 24, f"Error:  {error[:200]}"]
+        self._send(
+            f"<b>SYSTEM STATUS  ·  {ts}</b>\n"
+            "<pre>" + "\n".join(rows) + "</pre>"
+        )
 
     def _cmd_positions(self) -> None:
         """Handle /positions command."""
@@ -398,9 +402,8 @@ class TelegramNotifier:
 
         if position == "NONE" or not open_trade:
             self._send(
-                f"<b>OPEN POSITIONS</b>  ·  {ts}\n"
-                "────────────────────────\n"
-                "No open positions."
+                f"<b>OPEN POSITIONS  ·  {ts}</b>\n"
+                "<pre>No open positions.</pre>"
             )
             return
 
@@ -417,18 +420,21 @@ class TelegramNotifier:
         current_z = sig.get("zscore", 0.0)
         current_spread = sig.get("spread", 0.0)
 
-        msg = (
-            f"<b>OPEN POSITIONS</b>  ·  {ts}\n"
-            "────────────────────────\n"
-            f"<b>{position} {asset}</b>\n\n"
-            f"Size          {qty:.6f} {asset}  (${notional:,.2f})\n"
-            f"Entry Time    {entry_time}\n"
-            f"Entry Spot    ${entry_spot:,.4f}\n"
-            f"Entry Futures ${entry_fut:,.4f}\n"
-            f"Entry Spread  {entry_spread:+.4f}  (Z: {entry_z:+.4f})\n"
-            f"Current       {current_spread:+.4f}  (Z: {current_z:+.4f})"
+        C = 15
+        rows = [
+            f"{position} {asset}",
+            "",
+            f"{'Size':<{C}}{qty:.6f} {asset}  (${notional:,.2f})",
+            f"{'Entry Time':<{C}}{entry_time}",
+            f"{'Entry Spot':<{C}}${entry_spot:,.4f}",
+            f"{'Entry Futures':<{C}}${entry_fut:,.4f}",
+            f"{'Entry Spread':<{C}}{entry_spread:+.4f}  (Z: {entry_z:+.4f})",
+            f"{'Current':<{C}}{current_spread:+.4f}  (Z: {current_z:+.4f})",
+        ]
+        self._send(
+            f"<b>OPEN POSITIONS  ·  {ts}</b>\n"
+            "<pre>" + "\n".join(rows) + "</pre>"
         )
-        self._send(msg)
 
     def _cmd_trades(self) -> None:
         """Handle /trades command - show 5 most recent closed trades."""
@@ -440,25 +446,29 @@ class TelegramNotifier:
 
         if not closed:
             self._send(
-                f"<b>RECENT TRADES</b>  ·  {ts}\n"
-                "────────────────────────\n"
-                "No closed trades yet."
+                f"<b>RECENT TRADES  ·  {ts}</b>\n"
+                "<pre>No closed trades yet.</pre>"
             )
             return
 
-        lines = [f"<b>RECENT TRADES</b>  ·  {ts}", "────────────────────────"]
-        for t in closed:
+        SEP = "\u2500" * 24
+        rows = []
+        for i, t in enumerate(closed):
+            if i > 0:
+                rows.append(SEP)
             pnl = t.get("pnl_usd", 0)
             pct = t.get("pnl_percent", 0)
             result = "PROFIT" if pnl >= 0 else "LOSS"
-            lines.append(
-                f"<b>#{t.get('id')}  {t.get('position_type')} {t.get('asset')}</b>  "
-                f"${pnl:+.2f}  ({pct:+.2f}%)  {result}\n"
-                f"Exit: {t.get('exit_reason')}  ·  "
-                f"Z-in: {t.get('entry_zscore', 0):+.2f}  "
-                f"Z-out: {t.get('exit_zscore', 0):+.2f}"
-            )
-        self._send("\n".join(lines))
+            rows += [
+                f"#{t.get('id')}  {t.get('position_type')} {t.get('asset')}",
+                f"PnL      ${pnl:+.2f}  ({pct:+.2f}%)  {result}",
+                f"Exit     {t.get('exit_reason')}",
+                f"Z        {t.get('entry_zscore', 0):+.2f}  ->  {t.get('exit_zscore', 0):+.2f}",
+            ]
+        self._send(
+            f"<b>RECENT TRADES  ·  {ts}</b>\n"
+            "<pre>" + "\n".join(rows) + "</pre>"
+        )
 
     def _cmd_balance(self) -> None:
         """Handle /balance command."""
@@ -467,9 +477,8 @@ class TelegramNotifier:
 
         if not balance_data or not balance_data.get("connected"):
             self._send(
-                f"<b>ACCOUNT BALANCE</b>  ·  {ts}\n"
-                "────────────────────────\n"
-                "Exchange not connected or API keys not configured."
+                f"<b>ACCOUNT BALANCE  ·  {ts}</b>\n"
+                "<pre>Exchange not connected or API keys not configured.</pre>"
             )
             return
 
@@ -482,17 +491,19 @@ class TelegramNotifier:
         exchange = balance_data.get("exchange", "N/A")
         mode = "Demo" if balance_data.get("is_demo") else "Live"
 
-        msg = (
-            f"<b>ACCOUNT BALANCE</b>  ·  {ts}\n"
-            "────────────────────────\n"
-            f"Exchange    {exchange}  ({mode})\n"
-            f"Equity      ${equity:,.2f}\n"
-            f"Available   ${available:,.2f}\n"
-            f"Used        ${margin_used:,.2f}\n"
-            f"Margin      {margin_ratio:.1f}%  [{health}]\n"
-            f"Unrealized  ${upnl:+.2f}"
+        C = 12
+        rows = [
+            f"{'Exchange':<{C}}{exchange}  ({mode})",
+            f"{'Equity':<{C}}${equity:,.2f}",
+            f"{'Available':<{C}}${available:,.2f}",
+            f"{'Used':<{C}}${margin_used:,.2f}",
+            f"{'Margin':<{C}}{margin_ratio:.1f}%  [{health}]",
+            f"{'Unrealized':<{C}}${upnl:+.2f}",
+        ]
+        self._send(
+            f"<b>ACCOUNT BALANCE  ·  {ts}</b>\n"
+            "<pre>" + "\n".join(rows) + "</pre>"
         )
-        self._send(msg)
 
     def _cmd_pnl(self) -> None:
         """Handle /pnl command - comprehensive P&L summary."""
@@ -509,28 +520,27 @@ class TelegramNotifier:
         avg_win = (sum(t["pnl_usd"] for t in winners) / len(winners)) if winners else 0
         avg_loss = (sum(t["pnl_usd"] for t in losers) / len(losers)) if losers else 0
 
-        # Today's trades
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         today_trades = [t for t in closed if (t.get("exit_time") or "").startswith(today)]
         today_pnl = sum(t.get("pnl_usd", 0) for t in today_trades)
-
-        daily_pnl = balance_data.get("daily_pnl", today_pnl)
         upnl = balance_data.get("unrealized_pnl", 0)
 
-        msg = (
-            f"<b>P&amp;L SUMMARY</b>  ·  {ts}\n"
-            "────────────────────────\n"
-            f"Closed Trades  {len(closed)}\n"
-            f"Win Rate       {win_rate:.1f}%  "
-            f"({len(winners)}W / {len(losers)}L)\n"
-            f"Avg Win        ${avg_win:+.2f}\n"
-            f"Avg Loss       ${avg_loss:+.2f}\n"
-            "────────────────────────\n"
-            f"Today          ${today_pnl:+.2f}  ({len(today_trades)} trades)\n"
-            f"All-time       ${total_pnl:+.2f}\n"
-            f"Unrealized     ${upnl:+.2f}"
+        C = 15
+        SEP = "\u2500" * 24
+        rows = [
+            f"{'Closed Trades':<{C}}{len(closed)}",
+            f"{'Win Rate':<{C}}{win_rate:.1f}%  ({len(winners)}W / {len(losers)}L)",
+            f"{'Avg Win':<{C}}${avg_win:+.2f}",
+            f"{'Avg Loss':<{C}}${avg_loss:+.2f}",
+            SEP,
+            f"{'Today':<{C}}${today_pnl:+.2f}  ({len(today_trades)} trades)",
+            f"{'All-time':<{C}}${total_pnl:+.2f}",
+            f"{'Unrealized':<{C}}${upnl:+.2f}",
+        ]
+        self._send(
+            f"<b>P&amp;L SUMMARY  ·  {ts}</b>\n"
+            "<pre>" + "\n".join(rows) + "</pre>"
         )
-        self._send(msg)
 
     def _cmd_eod(self) -> None:
         """Handle /eod command - end-of-day summary."""
@@ -554,20 +564,23 @@ class TelegramNotifier:
         regime = sig.get("regime", "N/A")
         zscore = sig.get("zscore", 0.0)
 
-        msg_lines = [
-            f"<b>END OF DAY  ·  {ts}</b>",
-            "────────────────────────",
-            f"Trades      {len(today_closed)}  ({today_wins} wins)",
-            f"P&amp;L        ${today_pnl:+.2f}",
-            "────────────────────────",
-            f"Equity      ${equity:,.2f}",
-            f"Unrealized  ${upnl:+.2f}",
-            "────────────────────────",
-            f"Position    {position}  ({asset})",
-            f"Z-score     {zscore:+.4f}",
-            f"Regime      {regime}",
+        C = 12
+        SEP = "\u2500" * 24
+        rows = [
+            f"{'Trades':<{C}}{len(today_closed)}  ({today_wins} wins)",
+            f"{'PnL':<{C}}${today_pnl:+.2f}",
+            SEP,
+            f"{'Equity':<{C}}${equity:,.2f}",
+            f"{'Unrealized':<{C}}${upnl:+.2f}",
+            SEP,
+            f"{'Position':<{C}}{position}  ({asset})",
+            f"{'Z-score':<{C}}{zscore:+.4f}",
+            f"{'Regime':<{C}}{regime}",
         ]
-        self._send("\n".join(msg_lines))
+        self._send(
+            f"<b>END OF DAY  ·  {ts}</b>\n"
+            "<pre>" + "\n".join(rows) + "</pre>"
+        )
 
     # ------------------------------------------------------------------
     # Internal helpers
