@@ -1549,10 +1549,16 @@ def test_telegram():
     from datetime import datetime, timezone as _tz
     ts = datetime.now(_tz.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     msg = (
-        f"\u2705 <b>Nexus Stat-Arb \u2014 Telegram Connected</b>\n\n"
-        f"Notifications are active.\n<b>Time:</b> {ts}\n\n"
-        f"<b>Available commands:</b>\n"
-        f"/status /positions /trades /balance /pnl /eod"
+        "<b>Nexus Stat-Arb</b>\n"
+        "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
+        f"Connected and ready.  {ts}\n\n"
+        "<b>Commands</b>\n"
+        "/status     engine &amp; algo state\n"
+        "/positions  open positions\n"
+        "/trades     recent closed trades\n"
+        "/balance    account balance\n"
+        "/pnl        P&amp;L summary\n"
+        "/eod        end-of-day report"
     )
     try:
         url = f"https://api.telegram.org/bot{token}/sendMessage"
