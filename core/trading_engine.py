@@ -590,6 +590,7 @@ class TradingEngine:
         quantity = self.config.position_size_usd / spot_price
 
         # Create trade record
+        _leverage = max(getattr(self.config, 'futures_leverage', 1), 1)
         trade = Trade(
             asset=self.config.asset,
             position_type=position_type,
@@ -600,6 +601,7 @@ class TradingEngine:
             entry_zscore=signal.zscore,
             quantity=quantity,
             notional_usd=self.config.position_size_usd,
+            margin_usd=round(self.config.position_size_usd / _leverage, 2),
             is_open=True,
             is_paper=self.state.paper_trading,
         )
@@ -1000,9 +1002,6 @@ class TradingEngine:
                     trade.entry_latency_ms = round(
                         (fill_ts - spread_order.created_at).total_seconds() * 1000, 1
                     )
-                # Margin requirement
-                leverage = max(getattr(self.config, 'futures_leverage', 1), 1)
-                trade.margin_usd = round(trade.notional_usd / leverage, 2)
                 logger.info("ENTRY SUCCESS: mode=%s, spot_id=%s @ $%.2f, futures_id=%s @ $%.2f",
                             self.config.order_execution_mode,
                             trade.spot_order_id, trade.entry_spot_price,

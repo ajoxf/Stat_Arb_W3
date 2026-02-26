@@ -149,9 +149,9 @@ class TelegramNotifier:
                 hurst = getattr(signal, 'hurst', None)
                 hurst_ok = getattr(signal, 'hurst_ok', None)
                 regime = getattr(signal, 'regime', None)
-                if std:
+                if std is not None:
                     rows.append(f"{'Spread SD':<{C}}{std:.6f}")
-                if spread_mean:
+                if spread_mean is not None:
                     rows.append(f"{'Spread Mean':<{C}}{spread_mean:+.4f}")
                 if hurst is not None:
                     hurst_tag = "  [mean-rev]" if hurst_ok else "  [trending]" if hurst_ok is False else ""
@@ -555,11 +555,10 @@ class TelegramNotifier:
         )
 
     def _cmd_trades(self) -> None:
-        """Handle /trades command - show 5 most recent closed trades."""
+        """Handle /trades command - show 5 most recent closed trades with full detail."""
         trades = self.get_trades_cb() if self.get_trades_cb else []
         ts = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
 
-        # Filter to closed trades only, most recent first
         closed = [t for t in trades if not t.get("is_open", True)][:5]
 
         if not closed:
@@ -569,20 +568,68 @@ class TelegramNotifier:
             )
             return
 
+        C = 14
         SEP = "\u2500" * 24
         rows = []
         for i, t in enumerate(closed):
             if i > 0:
                 rows.append(SEP)
+
             pnl = t.get("pnl_usd", 0)
             pct = t.get("pnl_percent", 0)
             result = "PROFIT" if pnl >= 0 else "LOSS"
+
+            # Duration from ISO timestamps
+            duration_str = "—"
+            entry_t = t.get("entry_time")
+            exit_t = t.get("exit_time")
+            if entry_t and exit_t:
+                try:
+                    e = datetime.fromisoformat(entry_t)
+                    x = datetime.fromisoformat(exit_t)
+                    total_sec = int((x - e).total_seconds())
+                    if total_sec < 3600:
+                        duration_str = f"{total_sec // 60}m {total_sec % 60}s"
+                    elif total_sec < 86400:
+                        duration_str = f"{total_sec // 3600}h {(total_sec % 3600) // 60}m"
+                    else:
+                        duration_str = f"{total_sec // 86400}d {(total_sec % 86400) // 3600}h"
+                except Exception:
+                    pass
+
+            entry_spread = t.get("entry_spread", 0)
+            exit_spread = t.get("exit_spread", 0)
+            entry_z = t.get("entry_zscore", 0)
+            exit_z = t.get("exit_zscore", 0)
+            entry_spot = t.get("entry_spot_price", 0)
+            exit_spot = t.get("exit_spot_price", 0)
+            entry_fut = t.get("entry_futures_price", 0)
+            exit_fut = t.get("exit_futures_price", 0)
+            entry_spread_bps = (entry_spread / entry_spot * 10000) if entry_spot else 0
+
             rows += [
-                f"#{t.get('id')}  {t.get('position_type')} {t.get('asset')}",
-                f"{'PnL':<7}${pnl:+.2f}  ({pct:+.2f}%)  {result}",
-                f"{'Exit':<7}{t.get('exit_reason')}",
-                f"{'Z':<7}{t.get('entry_zscore', 0):+.2f} -> {t.get('exit_zscore', 0):+.2f}",
+                f"#{t.get('id')}  {t.get('position_type')} {t.get('asset')}  {result}",
+                SEP,
+                f"{'Exit':<{C}}{t.get('exit_reason', 'EXIT')}",
+                f"{'Duration':<{C}}{duration_str}",
+                SEP,
+                f"{'Spot Entry':<{C}}${entry_spot:,.4f}",
+                f"{'Spot Exit':<{C}}${exit_spot:,.4f}",
+                f"{'Fut Entry':<{C}}${entry_fut:,.4f}",
+                f"{'Fut Exit':<{C}}${exit_fut:,.4f}",
+                SEP,
+                f"{'Entry Spread':<{C}}{entry_spread:+.4f}  ({entry_spread_bps:+.2f} bps)",
+                f"{'Exit Spread':<{C}}{exit_spread:+.4f}",
+                f"{'Entry Z':<{C}}{entry_z:+.4f}",
+                f"{'Exit Z':<{C}}{exit_z:+.4f}",
+                SEP,
+                f"{'Net PnL':<{C}}${pnl:+.2f}  ({pct:+.2f}%)  {result}",
             ]
+            # Show execution latency if available (live trades only)
+            exit_lat = t.get("exit_latency_ms")
+            if exit_lat is not None:
+                rows.append(f"{'Exit Latency':<{C}}{exit_lat:.0f} ms")
+
         self._send(
             f"<b>RECENT TRADES  ·  {ts}</b>\n"
             "<pre>" + "\n".join(rows) + "</pre>"
