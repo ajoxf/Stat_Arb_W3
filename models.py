@@ -126,6 +126,14 @@ class TradingConfig:
     # Legacy field - now computed from taker/maker fees based on order mode
     estimated_costs_bps: float = 10.0  # Kept for backward compatibility
 
+    # Telegram notifications
+    telegram_enabled: bool = False
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
+    telegram_notify_trades: bool = True
+    telegram_notify_signals: bool = False
+    telegram_notify_errors: bool = True
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             'id': self.id,
@@ -164,6 +172,12 @@ class TradingConfig:
             'entry_cooldown_seconds': self.entry_cooldown_seconds,
             'verify_exchange_position': self.verify_exchange_position,
             'orphan_recovery_timeout_sec': self.orphan_recovery_timeout_sec,
+            'telegram_enabled': self.telegram_enabled,
+            'telegram_bot_token': self.telegram_bot_token,
+            'telegram_chat_id': self.telegram_chat_id,
+            'telegram_notify_trades': self.telegram_notify_trades,
+            'telegram_notify_signals': self.telegram_notify_signals,
+            'telegram_notify_errors': self.telegram_notify_errors,
         }
 
     @classmethod

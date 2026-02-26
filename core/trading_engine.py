@@ -16,6 +16,7 @@ from models import (
 from core.signals import SignalGenerator
 from core.order_executor import OrderExecutor
 from core.trade_logger import get_trade_logger
+from core.telegram_bot import get_notifier
 from adapters.base import ExchangeAdapter
 from adapters.okx_websocket import OKXWebSocketManager
 
@@ -116,6 +117,9 @@ class TradingEngine:
         self.state.algo_enabled = config.algo_enabled
         if self.order_executor:
             self.order_executor.update_config(config)
+
+        # Push updated Telegram settings to notifier
+        get_notifier().update_config(config)
 
         # Apply leverage settings if adapters are configured
         # Note: This may be called from Flask thread without an event loop
@@ -338,6 +342,7 @@ class TradingEngine:
                 error_msg = f"Error in main loop: {str(e)}"
                 logger.exception(error_msg)
                 self.state.error = error_msg
+                get_notifier().notify_error(error_msg)
                 if self.on_error:
                     self.on_error(error_msg)
                 await asyncio.sleep(1)  # Wait before retrying
@@ -481,6 +486,10 @@ class TradingEngine:
         logger.debug("Processing signal: %s (zscore=%.4f, position=%s)",
                      signal.signal_type, signal.zscore, self.state.current_position)
 
+        # Notify Telegram for actionable signals (entry/exit/stop-loss)
+        if signal.signal_type in ("LONG", "SHORT", "EXIT", "STOP_LOSS"):
+            get_notifier().notify_signal(signal)
+
         if signal.signal_type in ("LONG", "SHORT"):
             await self._open_position(signal)
         elif signal.signal_type in ("EXIT", "STOP_LOSS"):
@@ -618,6 +627,8 @@ class TradingEngine:
         logger.info("Opened %s position: qty=%.6f, spot=%.2f, futures=%.2f, spread=%.6f, zscore=%.4f",
                     position_type, quantity, spot_price, futures_price, signal.spread, signal.zscore)
 
+        get_notifier().notify_trade_entry(trade, signal)
+
         if self.on_trade:
             self.on_trade(trade)
 
@@ -670,6 +681,8 @@ class TradingEngine:
 
         logger.info("Closed %s position: pnl=$%.2f (%.2f%%), reason=%s, zscore=%.4f",
                     trade.position_type, pnl, pnl_percent, signal.signal_type, signal.zscore)
+
+        get_notifier().notify_trade_exit(trade)
 
         # Reset state
         self.state.current_position = "NONE"
@@ -1050,14 +1063,16 @@ class TradingEngine:
 
         # Pattern: Spot failing >50% while futures failing <20%
         if spot_fail_rate > 0.5 and futures_fail_rate < 0.2:
-            logger.critical(
-                "🚨 SPOT-ONLY FAILURE PATTERN DETECTED! "
-                "Spot: %d/%d failed (%.0f%%), Futures: %d/%d failed (%.0f%%). "
-                "Check spot adapter, symbol config, or exchange permissions.",
-                self._spot_order_failures, self._spot_order_attempts, spot_fail_rate * 100,
-                self._futures_order_failures, self._futures_order_attempts, futures_fail_rate * 100
+            critical_msg = (
+                f"SPOT-ONLY FAILURE PATTERN DETECTED! "
+                f"Spot: {self._spot_order_failures}/{self._spot_order_attempts} failed "
+                f"({spot_fail_rate*100:.0f}%), Futures: {self._futures_order_failures}/"
+                f"{self._futures_order_attempts} failed ({futures_fail_rate*100:.0f}%). "
+                f"Check spot adapter, symbol config, or exchange permissions."
             )
+            logger.critical("🚨 %s", critical_msg)
             self.state.error = f"CRITICAL: Spot orders failing {spot_fail_rate*100:.0f}% of the time"
+            get_notifier().notify_error(critical_msg)
 
             # Log to CSV for post-analysis
             csv_logger = get_trade_logger()

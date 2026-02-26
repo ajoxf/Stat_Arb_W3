@@ -299,6 +299,18 @@ class DatabaseManager:
                 cursor.execute("ALTER TABLE trading_config ADD COLUMN slippage_bps REAL DEFAULT 3.0")
             if 'auto_tune_enabled' not in existing_columns:
                 cursor.execute("ALTER TABLE trading_config ADD COLUMN auto_tune_enabled INTEGER DEFAULT 0")
+            if 'telegram_enabled' not in existing_columns:
+                cursor.execute("ALTER TABLE trading_config ADD COLUMN telegram_enabled INTEGER DEFAULT 0")
+            if 'telegram_bot_token' not in existing_columns:
+                cursor.execute("ALTER TABLE trading_config ADD COLUMN telegram_bot_token TEXT DEFAULT ''")
+            if 'telegram_chat_id' not in existing_columns:
+                cursor.execute("ALTER TABLE trading_config ADD COLUMN telegram_chat_id TEXT DEFAULT ''")
+            if 'telegram_notify_trades' not in existing_columns:
+                cursor.execute("ALTER TABLE trading_config ADD COLUMN telegram_notify_trades INTEGER DEFAULT 1")
+            if 'telegram_notify_signals' not in existing_columns:
+                cursor.execute("ALTER TABLE trading_config ADD COLUMN telegram_notify_signals INTEGER DEFAULT 0")
+            if 'telegram_notify_errors' not in existing_columns:
+                cursor.execute("ALTER TABLE trading_config ADD COLUMN telegram_notify_errors INTEGER DEFAULT 1")
 
             # Migrate learnings table to include richer analysis fields
             cursor.execute("PRAGMA table_info(learnings)")
@@ -367,6 +379,12 @@ class DatabaseManager:
                     entry_cooldown_seconds=row["entry_cooldown_seconds"] if "entry_cooldown_seconds" in row.keys() else 60,
                     verify_exchange_position=bool(row["verify_exchange_position"]) if "verify_exchange_position" in row.keys() else True,
                     orphan_recovery_timeout_sec=row["orphan_recovery_timeout_sec"] if "orphan_recovery_timeout_sec" in row.keys() else 60,
+                    telegram_enabled=bool(row["telegram_enabled"]) if "telegram_enabled" in row.keys() else False,
+                    telegram_bot_token=row["telegram_bot_token"] if "telegram_bot_token" in row.keys() else "",
+                    telegram_chat_id=row["telegram_chat_id"] if "telegram_chat_id" in row.keys() else "",
+                    telegram_notify_trades=bool(row["telegram_notify_trades"]) if "telegram_notify_trades" in row.keys() else True,
+                    telegram_notify_signals=bool(row["telegram_notify_signals"]) if "telegram_notify_signals" in row.keys() else False,
+                    telegram_notify_errors=bool(row["telegram_notify_errors"]) if "telegram_notify_errors" in row.keys() else True,
                 )
 
             return TradingConfig()
@@ -411,7 +429,13 @@ class DatabaseManager:
                     estimated_costs_bps = ?,
                     entry_cooldown_seconds = ?,
                     verify_exchange_position = ?,
-                    orphan_recovery_timeout_sec = ?
+                    orphan_recovery_timeout_sec = ?,
+                    telegram_enabled = ?,
+                    telegram_bot_token = ?,
+                    telegram_chat_id = ?,
+                    telegram_notify_trades = ?,
+                    telegram_notify_signals = ?,
+                    telegram_notify_errors = ?
                 WHERE id = 1
             """, (
                 config.asset,
@@ -449,6 +473,12 @@ class DatabaseManager:
                 config.entry_cooldown_seconds,
                 int(config.verify_exchange_position),
                 config.orphan_recovery_timeout_sec,
+                int(config.telegram_enabled),
+                config.telegram_bot_token,
+                config.telegram_chat_id,
+                int(config.telegram_notify_trades),
+                int(config.telegram_notify_signals),
+                int(config.telegram_notify_errors),
             ))
             logger.info("Config saved")
 

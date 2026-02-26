@@ -352,6 +352,89 @@
 
                 <hr class="my-4" style="border-color: var(--border-color);">
 
+                <!-- Telegram Notifications -->
+                <div class="mt-4" id="telegram-section">
+                    <h6 class="text-secondary mb-3"><i class="bi bi-telegram me-2"></i>Telegram Notifications</h6>
+                    <small class="text-secondary d-block mb-3">
+                        Receive real-time trade alerts and run interactive commands directly in Telegram.
+                        Create a bot via <strong>@BotFather</strong> and get your Chat ID from <strong>@userinfobot</strong>.
+                    </small>
+
+                    <div class="row mb-3">
+                        <div class="col-12">
+                            <div class="form-check form-switch mb-3">
+                                <input class="form-check-input" type="checkbox" id="tg_enabled" {% if config.telegram_enabled %}checked{% endif %}>
+                                <label class="form-check-label fw-semibold" for="tg_enabled">Enable Telegram Notifications</label>
+                            </div>
+                        </div>
+
+                        <div class="col-md-6">
+                            <label class="form-label">Bot Token</label>
+                            <input type="password" class="form-control" id="tg_token"
+                                   placeholder="123456789:ABCdefGHIjklMNOpqrsTUVwxyz"
+                                   value="{{ config.telegram_bot_token }}">
+                            <small class="text-secondary">From @BotFather → /newbot</small>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">Chat ID</label>
+                            <input type="text" class="form-control" id="tg_chat_id"
+                                   placeholder="e.g. 123456789"
+                                   value="{{ config.telegram_chat_id }}">
+                            <small class="text-secondary">Your personal Telegram chat ID from @userinfobot</small>
+                        </div>
+                    </div>
+
+                    <div class="row mb-3">
+                        <div class="col-12">
+                            <label class="form-label text-secondary">Notification Types</label>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="form-check form-switch">
+                                <input class="form-check-input" type="checkbox" id="tg_notify_trades" {% if config.telegram_notify_trades %}checked{% endif %}>
+                                <label class="form-check-label" for="tg_notify_trades">Trade Entry &amp; Exit</label>
+                            </div>
+                            <small class="text-secondary">Alert on every trade open/close</small>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="form-check form-switch">
+                                <input class="form-check-input" type="checkbox" id="tg_notify_signals" {% if config.telegram_notify_signals %}checked{% endif %}>
+                                <label class="form-check-label" for="tg_notify_signals">Trading Signals</label>
+                            </div>
+                            <small class="text-secondary">Alert on LONG/SHORT/EXIT/STOP signals</small>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="form-check form-switch">
+                                <input class="form-check-input" type="checkbox" id="tg_notify_errors" {% if config.telegram_notify_errors %}checked{% endif %}>
+                                <label class="form-check-label" for="tg_notify_errors">System Errors</label>
+                            </div>
+                            <small class="text-secondary">Alert on critical engine errors</small>
+                        </div>
+                    </div>
+
+                    <div class="alert alert-info py-2 px-3 mb-3" style="font-size:0.82rem;">
+                        <strong>Bot Commands</strong> (send to your bot once connected):<br>
+                        <code>/status</code> — engine &amp; signal status &nbsp;|&nbsp;
+                        <code>/positions</code> — open positions &nbsp;|&nbsp;
+                        <code>/trades</code> — recent trades<br>
+                        <code>/balance</code> — account balance &nbsp;|&nbsp;
+                        <code>/pnl</code> — P&amp;L summary &nbsp;|&nbsp;
+                        <code>/eod</code> — end-of-day report
+                    </div>
+
+                    <div id="tg-save-result" class="mb-3" style="display:none;"></div>
+
+                    <div class="d-flex gap-2">
+                        <button type="button" class="btn btn-primary" onclick="saveTelegramConfig()">
+                            <i class="bi bi-floppy me-1"></i>Save &amp; Test
+                        </button>
+                        <button type="button" class="btn btn-outline-secondary" onclick="saveTelegramConfig(false)">
+                            <i class="bi bi-floppy me-1"></i>Save Only
+                        </button>
+                    </div>
+                </div>
+
+                <hr class="my-4" style="border-color: var(--border-color);">
+
                 <!-- Manual Order Testing -->
                 <div class="mt-4">
                     <h6 class="text-secondary mb-3"><i class="bi bi-tools me-2"></i>Manual Order Testing</h6>
@@ -767,6 +850,67 @@
             showToast('Error: ' + error.message, 'danger');
         });
     });
+
+    // ========== Telegram ==========
+    function saveTelegramConfig(doTest = true) {
+        const enabled   = document.getElementById('tg_enabled').checked;
+        const token     = document.getElementById('tg_token').value.trim();
+        const chatId    = document.getElementById('tg_chat_id').value.trim();
+        const trades    = document.getElementById('tg_notify_trades').checked;
+        const signals   = document.getElementById('tg_notify_signals').checked;
+        const errors    = document.getElementById('tg_notify_errors').checked;
+
+        const resultEl = document.getElementById('tg-save-result');
+        resultEl.style.display = 'block';
+        resultEl.className = 'alert alert-info py-2 px-3 mb-3';
+        resultEl.textContent = doTest ? 'Saving and sending test message…' : 'Saving…';
+
+        fetch('/api/telegram/config', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                telegram_enabled: enabled,
+                telegram_bot_token: token,
+                telegram_chat_id: chatId,
+                telegram_notify_trades: trades,
+                telegram_notify_signals: signals,
+                telegram_notify_errors: errors,
+            })
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (!data.success) {
+                resultEl.className = 'alert alert-danger py-2 px-3 mb-3';
+                resultEl.textContent = 'Save failed: ' + (data.error || 'Unknown error');
+                return;
+            }
+            if (!doTest) {
+                resultEl.className = 'alert alert-success py-2 px-3 mb-3';
+                resultEl.textContent = 'Settings saved.';
+                return;
+            }
+            // Send test message
+            return fetch('/api/telegram/test', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ token: token, chat_id: chatId })
+            })
+            .then(r => r.json())
+            .then(td => {
+                if (td.success) {
+                    resultEl.className = 'alert alert-success py-2 px-3 mb-3';
+                    resultEl.textContent = 'Settings saved. Test message sent successfully!';
+                } else {
+                    resultEl.className = 'alert alert-warning py-2 px-3 mb-3';
+                    resultEl.textContent = 'Settings saved, but test message failed: ' + (td.error || 'Check token and chat ID');
+                }
+            });
+        })
+        .catch(err => {
+            resultEl.className = 'alert alert-danger py-2 px-3 mb-3';
+            resultEl.textContent = 'Error: ' + err.message;
+        });
+    }
 
     function resetForm() {
         fetch('/api/config')

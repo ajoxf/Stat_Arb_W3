@@ -22,6 +22,7 @@ from core.signals import SignalGenerator
 from core.trading_engine import TradingEngine
 from core.post_trade_analyzer import PostTradeAnalyzer
 from core.auto_tuner import AutoTuner
+from core.telegram_bot import get_notifier
 from database.manager import DatabaseManager
 from adapters import OKXAdapter, BinanceAdapter, BybitAdapter, OKXWebSocketManager
 
@@ -77,6 +78,44 @@ def run_async_loop(loop: asyncio.AbstractEventLoop):
     loop.run_forever()
 
 
+def _get_balance_for_telegram() -> Dict[str, Any]:
+    """Fetch account balance data for Telegram /balance command."""
+    try:
+        adapter = engine.spot_adapter or engine.futures_adapter
+        if not adapter or not loop:
+            return {}
+
+        async def _fetch():
+            if hasattr(adapter, 'get_account_info'):
+                return await adapter.get_account_info()
+            return None
+
+        future = asyncio.run_coroutine_threadsafe(_fetch(), loop)
+        account = future.result(timeout=10)
+        if account:
+            stats = db.get_trade_statistics()
+            return {
+                'connected': True,
+                'exchange': getattr(adapter, 'exchange_type', 'OKX').upper(),
+                'is_demo': getattr(adapter, 'is_testnet', True),
+                'total_equity': account.total_equity,
+                'available_margin': account.available_margin,
+                'margin_used': account.margin_used,
+                'margin_ratio': account.margin_ratio,
+                'unrealized_pnl': account.unrealized_pnl,
+                'margin_health': (
+                    'SAFE' if account.margin_ratio > 500
+                    else 'WARNING' if account.margin_ratio > 150
+                    else 'DANGER' if account.margin_ratio > 0
+                    else 'N/A'
+                ),
+                'daily_pnl': stats.get('daily_pnl', 0) if stats else 0,
+            }
+    except Exception as e:
+        logger.warning("Error fetching balance for Telegram: %s", e)
+    return {}
+
+
 def start_engine_loop():
     """Start the trading engine in a background thread."""
     global loop, engine_thread, ws_manager
@@ -100,6 +139,15 @@ def start_engine_loop():
 
     # Set up SD touch callback on signal generator
     engine.signal_generator.on_sd_touch = on_sd_touch_callback
+
+    # Configure Telegram notifier with current config and wire up data callbacks
+    _telegram = get_notifier()
+    _telegram.update_config(config)
+    _telegram.get_status_cb = lambda: engine.get_status()
+    _telegram.get_trades_cb = lambda: [t.to_dict() for t in db.get_trades(limit=20)]
+    _telegram.get_balance_cb = _get_balance_for_telegram
+    # Start command polling in a background daemon thread
+    _telegram.start_polling()
 
     # Load spread history from database for recovery
     spread_history = db.get_spread_history(config.asset, limit=config.lookback_period)
@@ -358,7 +406,7 @@ def save_config():
         config = TradingConfig.from_dict(data)
         db.save_config(config)
 
-        # Update engine
+        # Update engine (also pushes Telegram config to notifier via update_config)
         engine.update_config(config)
 
         return jsonify({'success': True, 'config': config.to_dict()})
@@ -1480,6 +1528,51 @@ def get_active_orders():
         'execution_mode': config.order_execution_mode,
         'is_executing': engine.order_executor._executing if engine.order_executor else False,
     })
+
+
+# ============== Telegram API Endpoints ==============
+
+@app.route('/api/telegram/test', methods=['POST'])
+def test_telegram():
+    """Test Telegram connection by sending a test message."""
+    data = request.json or {}
+    token = data.get('token', '').strip()
+    chat_id = data.get('chat_id', '').strip()
+
+    if not token or not chat_id:
+        return jsonify({'success': False, 'error': 'token and chat_id are required'}), 400
+
+    from core.telegram_bot import TelegramNotifier
+    tmp = TelegramNotifier()
+    tmp._token = token
+    tmp._chat_id = chat_id
+    tmp._enabled = True
+    ok = tmp.notify_test()
+
+    return jsonify({'success': ok, 'error': None if ok else 'Failed to send message — check token and chat_id'})
+
+
+@app.route('/api/telegram/config', methods=['POST'])
+def save_telegram_config():
+    """Save Telegram settings independently (without a full config save)."""
+    global config
+    data = request.json or {}
+
+    try:
+        config.telegram_enabled = bool(data.get('telegram_enabled', False))
+        config.telegram_bot_token = str(data.get('telegram_bot_token', '')).strip()
+        config.telegram_chat_id = str(data.get('telegram_chat_id', '')).strip()
+        config.telegram_notify_trades = bool(data.get('telegram_notify_trades', True))
+        config.telegram_notify_signals = bool(data.get('telegram_notify_signals', False))
+        config.telegram_notify_errors = bool(data.get('telegram_notify_errors', True))
+
+        db.save_config(config)
+        engine.update_config(config)  # also updates the notifier
+
+        return jsonify({'success': True})
+    except Exception as e:
+        logger.error("Error saving Telegram config: %s", e)
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 # ============== Manual Order Testing ==============
