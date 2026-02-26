@@ -967,20 +967,20 @@ class DatabaseManager:
         with self._get_connection() as conn:
             cursor = conn.cursor()
 
-            # Total trades
-            cursor.execute("SELECT COUNT(*) FROM trades WHERE is_open = 0")
+            # Real (non-paper) closed trades only
+            cursor.execute("SELECT COUNT(*) FROM trades WHERE is_open = 0 AND is_paper = 0")
             total_trades = cursor.fetchone()[0]
 
             # Winning trades
-            cursor.execute("SELECT COUNT(*) FROM trades WHERE is_open = 0 AND pnl_usd > 0")
+            cursor.execute("SELECT COUNT(*) FROM trades WHERE is_open = 0 AND is_paper = 0 AND pnl_usd > 0")
             winning_trades = cursor.fetchone()[0]
 
             # Total P&L
-            cursor.execute("SELECT SUM(pnl_usd) FROM trades WHERE is_open = 0")
+            cursor.execute("SELECT SUM(pnl_usd) FROM trades WHERE is_open = 0 AND is_paper = 0")
             total_pnl = cursor.fetchone()[0] or 0
 
             # Average P&L
-            cursor.execute("SELECT AVG(pnl_usd) FROM trades WHERE is_open = 0")
+            cursor.execute("SELECT AVG(pnl_usd) FROM trades WHERE is_open = 0 AND is_paper = 0")
             avg_pnl = cursor.fetchone()[0] or 0
 
             # Win rate

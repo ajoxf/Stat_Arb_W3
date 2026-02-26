@@ -98,7 +98,7 @@ class TelegramNotifier:
             return
         try:
             direction = trade.position_type  # LONG or SHORT
-            direction_icon = "" if direction == "LONG" else ""
+            direction_icon = "📈" if direction == "LONG" else "📉"
             entry_time_str = ""
             if trade.entry_time:
                 entry_time_str = trade.entry_time.strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -143,8 +143,8 @@ class TelegramNotifier:
             direction = trade.position_type
             exit_reason = trade.exit_reason or "EXIT"
 
-            icon = "" if trade.pnl_usd >= 0 else ""
-            direction_icon = "" if direction == "LONG" else ""
+            icon = "✅" if trade.pnl_usd >= 0 else "❌"
+            direction_icon = "📈" if direction == "LONG" else "📉"
 
             exit_time_str = ""
             duration_str = ""
@@ -212,7 +212,7 @@ class TelegramNotifier:
             return
         try:
             sig_type = signal.signal_type
-            icons = {"LONG": "", "SHORT": "", "EXIT": "⏹️", "STOP_LOSS": ""}
+            icons = {"LONG": "📈", "SHORT": "📉", "EXIT": "⏹️", "STOP_LOSS": "🛑"}
             icon = icons.get(sig_type, "")
             ts = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
 
@@ -234,7 +234,7 @@ class TelegramNotifier:
         try:
             ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
             msg = (
-                f" <b>SYSTEM ERROR</b>\n"
+                f"🚨 <b>SYSTEM ERROR</b>\n"
                 f"<b>Time:</b> {ts}\n"
                 f"<b>Error:</b> {error_msg[:500]}"
             )
@@ -248,7 +248,7 @@ class TelegramNotifier:
             return False
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
         msg = (
-            f" <b>Nexus Stat-Arb — Telegram Connected</b>\n\n"
+            f"✅ <b>Nexus Stat-Arb \u2014 Telegram Connected</b>\n\n"
             f"Notifications are active.\n"
             f"<b>Time:</b> {ts}\n\n"
             f"<b>Available commands:</b>\n"
@@ -381,8 +381,8 @@ class TelegramNotifier:
         asset = status.get("asset", "N/A")
         error = status.get("error", "")
 
-        run_icon = "" if is_running else "⏹️"
-        algo_icon = "" if algo_enabled else ""
+        run_icon = "✅" if is_running else "⏹️"
+        algo_icon = "✅" if algo_enabled else "❌"
         mode_str = "PAPER" if paper else "LIVE"
 
         sig = status.get("signal") or {}
@@ -390,7 +390,7 @@ class TelegramNotifier:
         regime = sig.get("regime", "N/A")
 
         msg_lines = [
-            f" <b>System Status</b>  [{ts}]",
+            f"📊 <b>System Status</b>  [{ts}]",
             "",
             f"<b>Engine:</b>  {run_icon} {'Running' if is_running else 'Stopped'}",
             f"<b>Algo:</b>    {algo_icon} {'Enabled' if algo_enabled else 'Disabled'}",
@@ -412,7 +412,7 @@ class TelegramNotifier:
         ts = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
 
         if position == "NONE" or not open_trade:
-            self._send(f" <b>Open Positions</b>  [{ts}]\n\nNo open positions.")
+            self._send(f"📊 <b>Open Positions</b>  [{ts}]\n\nNo open positions.")
             return
 
         asset = status.get("asset", "N/A")
@@ -429,7 +429,7 @@ class TelegramNotifier:
         current_spread = sig.get("spread", 0.0)
 
         msg = (
-            f" <b>Open Positions</b>  [{ts}]\n\n"
+            f"📊 <b>Open Positions</b>  [{ts}]\n\n"
             f"<b>{position} {asset}</b>\n"
             f"<b>Size:</b> {qty:.6f} {asset} (${notional:,.2f})\n"
             f"<b>Entry Time:</b> {entry_time}\n"
@@ -449,14 +449,14 @@ class TelegramNotifier:
         closed = [t for t in trades if not t.get("is_open", True)][:5]
 
         if not closed:
-            self._send(f" <b>Recent Trades</b>  [{ts}]\n\nNo closed trades yet.")
+            self._send(f"📋 <b>Recent Trades</b>  [{ts}]\n\nNo closed trades yet.")
             return
 
-        lines = [f" <b>Recent Trades</b>  [{ts}]", ""]
+        lines = [f"📋 <b>Recent Trades</b>  [{ts}]", ""]
         for t in closed:
             pnl = t.get("pnl_usd", 0)
             pct = t.get("pnl_percent", 0)
-            icon = "" if pnl >= 0 else ""
+            icon = "✅" if pnl >= 0 else "❌"
             lines.append(
                 f"{icon} <b>#{t.get('id')} {t.get('position_type')} {t.get('asset')}</b> "
                 f"${pnl:+.2f} ({pct:+.2f}%)\n"
@@ -473,7 +473,7 @@ class TelegramNotifier:
 
         if not balance_data or not balance_data.get("connected"):
             self._send(
-                f" <b>Account Balance</b>  [{ts}]\n\n"
+                f"💰 <b>Account Balance</b>  [{ts}]\n\n"
                 "Exchange not connected or API keys not configured."
             )
             return
@@ -487,10 +487,10 @@ class TelegramNotifier:
         exchange = balance_data.get("exchange", "N/A")
         mode = "DEMO" if balance_data.get("is_demo") else "LIVE"
 
-        health_icon = {"SAFE": "", "WARNING": "", "DANGER": ""}.get(health, "")
+        health_icon = {"SAFE": "✅", "WARNING": "⚠️", "DANGER": "🚨"}.get(health, "")
 
         msg = (
-            f" <b>Account Balance</b>  [{ts}]\n\n"
+            f"💰 <b>Account Balance</b>  [{ts}]\n\n"
             f"<b>Exchange:</b> {exchange} ({mode})\n"
             f"<b>Total Equity:</b> ${equity:,.2f}\n"
             f"<b>Available:</b>   ${available:,.2f}\n"
@@ -523,11 +523,11 @@ class TelegramNotifier:
         daily_pnl = balance_data.get("daily_pnl", today_pnl)
         upnl = balance_data.get("unrealized_pnl", 0)
 
-        total_icon = "" if total_pnl >= 0 else ""
-        today_icon = "" if today_pnl >= 0 else ""
+        total_icon = "✅" if total_pnl >= 0 else "❌"
+        today_icon = "✅" if today_pnl >= 0 else "❌"
 
         msg = (
-            f" <b>P&amp;L Summary</b>  [{ts}]\n\n"
+            f"📊 <b>P&amp;L Summary</b>  [{ts}]\n\n"
             f"<b>Closed Trades:</b> {len(closed)}\n"
             f"<b>Win Rate:</b>      {win_rate:.1f}%  "
             f"({len(winners)} wins / {len(losers)} losses)\n"
@@ -560,10 +560,10 @@ class TelegramNotifier:
         regime = sig.get("regime", "N/A")
         zscore = sig.get("zscore", 0.0)
 
-        pnl_icon = "" if today_pnl >= 0 else ""
+        pnl_icon = "✅" if today_pnl >= 0 else "❌"
 
         msg_lines = [
-            f" <b>End-of-Day Summary</b>",
+            f"📊 <b>End-of-Day Summary</b>",
             f"<b>{ts}</b>",
             "",
             f"<b>Today's Trades:</b> {len(today_closed)}  ({today_wins} wins)",

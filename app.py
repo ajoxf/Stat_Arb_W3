@@ -161,11 +161,14 @@ def start_engine_loop():
     keep_count = max(config.lookback_period * 2, 2000)
     db.cleanup_old_spread_history(config.asset, keep_count=keep_count)
 
-    # Recover open position from database (if any)
+    # Recover open position from database (real trades only — paper positions
+    # are not carried over after a restart since they have no real exchange state)
     open_trades = db.get_trades(limit=1, open_only=True)
     if open_trades:
         open_trade = open_trades[0]
-        if open_trade.asset == config.asset:
+        if open_trade.is_paper:
+            logger.info("Ignoring open paper trade in recovery (id=%s)", open_trade.id)
+        elif open_trade.asset == config.asset:
             engine.open_trade = open_trade
             engine.state.current_position = open_trade.position_type
             engine.signal_generator.set_position(open_trade.position_type)
@@ -310,13 +313,13 @@ def on_signal_callback(signal: Signal):
 def on_trade_callback(trade: Trade):
     """Handle trade updates."""
     try:
-        # Only save real (non-paper) trades to the journal database.
-        # Paper trades are emitted to the socket for live dashboard view only.
-        if not trade.is_paper:
-            trade.id = db.save_trade(trade)
-            # Fire post-trade AI analysis for closed trades (non-blocking)
-            if not trade.is_open:
-                post_trade_analyzer.analyze_async(trade)
+        # Save all trades (paper and real) so Telegram commands like /trades,
+        # /pnl, /eod work in paper-trading mode. The is_paper flag lets stats
+        # queries exclude paper trades from real P&L calculations.
+        trade.id = db.save_trade(trade)
+        # Fire post-trade AI analysis for real closed trades only
+        if not trade.is_paper and not trade.is_open:
+            post_trade_analyzer.analyze_async(trade)
         # Always emit to socket so the dashboard shows real-time updates
         socketio.emit('trade', trade.to_dict(), namespace='/')
     except Exception as e:
