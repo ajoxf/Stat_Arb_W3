@@ -330,6 +330,8 @@ class TelegramNotifier:
         command = text.split("@")[0]  # Strip bot username suffix if present
 
         handlers = {
+            "/start": self._cmd_start,
+            "/help": self._cmd_start,
             "/status": self._cmd_status,
             "/positions": self._cmd_positions,
             "/trades": self._cmd_trades,
@@ -354,6 +356,19 @@ class TelegramNotifier:
     # ------------------------------------------------------------------
     # Command Handlers
     # ------------------------------------------------------------------
+
+    def _cmd_start(self) -> None:
+        """Handle /start and /help commands."""
+        self._send(
+            "\u2705 <b>Nexus Stat-Arb Bot</b>\n\n"
+            "Notifications are active. Available commands:\n\n"
+            "/status \u2014 engine &amp; algo state\n"
+            "/positions \u2014 open positions\n"
+            "/trades \u2014 recent closed trades\n"
+            "/balance \u2014 account balance\n"
+            "/pnl \u2014 P&amp;L summary\n"
+            "/eod \u2014 end-of-day summary"
+        )
 
     def _cmd_status(self) -> None:
         """Handle /status command."""
