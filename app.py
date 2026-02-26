@@ -1535,6 +1535,7 @@ def get_active_orders():
 @app.route('/api/telegram/test', methods=['POST'])
 def test_telegram():
     """Test Telegram connection by sending a test message."""
+    import requests as _requests
     data = request.json or {}
     token = data.get('token', '').strip()
     chat_id = data.get('chat_id', '').strip()
@@ -1542,14 +1543,31 @@ def test_telegram():
     if not token or not chat_id:
         return jsonify({'success': False, 'error': 'token and chat_id are required'}), 400
 
-    from core.telegram_bot import TelegramNotifier
-    tmp = TelegramNotifier()
-    tmp._token = token
-    tmp._chat_id = chat_id
-    tmp._enabled = True
-    ok = tmp.notify_test()
-
-    return jsonify({'success': ok, 'error': None if ok else 'Failed to send message — check token and chat_id'})
+    from datetime import datetime, timezone as _tz
+    ts = datetime.now(_tz.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    msg = (
+        f"\u2705 <b>Nexus Stat-Arb \u2014 Telegram Connected</b>\n\n"
+        f"Notifications are active.\n<b>Time:</b> {ts}\n\n"
+        f"<b>Available commands:</b>\n"
+        f"/status /positions /trades /balance /pnl /eod"
+    )
+    try:
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        resp = _requests.post(url, json={
+            "chat_id": chat_id,
+            "text": msg,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True,
+        }, timeout=10)
+        if resp.status_code == 200:
+            return jsonify({'success': True, 'error': None})
+        try:
+            err_desc = resp.json().get('description', resp.text[:300])
+        except Exception:
+            err_desc = resp.text[:300]
+        return jsonify({'success': False, 'error': f"Telegram error ({resp.status_code}): {err_desc}"})
+    except Exception as e:
+        return jsonify({'success': False, 'error': f"Request failed: {e}"})
 
 
 @app.route('/api/telegram/config', methods=['POST'])
