@@ -1374,22 +1374,26 @@ def anthropic_status():
 @app.route('/api/anthropic/key', methods=['POST'])
 def save_anthropic_key():
     """Save Anthropic API key to .env file and update running environment."""
-    data = request.json or {}
-    key = (data.get('key') or '').strip()
-    if not key:
-        return jsonify({'success': False, 'error': 'No key provided'}), 400
-    if not key.startswith('sk-ant-'):
-        return jsonify({'success': False, 'error': 'Invalid key format — should start with sk-ant-'}), 400
+    try:
+        data = request.json or {}
+        key = (data.get('key') or '').strip()
+        if not key:
+            return jsonify({'success': False, 'error': 'No key provided'})
+        if not key.startswith('sk-ant-'):
+            return jsonify({'success': False, 'error': 'Invalid key — must start with sk-ant-'})
 
-    env_path = os.path.join(os.path.dirname(__file__), '.env')
-    _upsert_env_var(env_path, 'ANTHROPIC_API_KEY', key)
+        env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
+        _upsert_env_var(env_path, 'ANTHROPIC_API_KEY', key)
 
-    os.environ['ANTHROPIC_API_KEY'] = key
-    post_trade_analyzer._api_key = key
-    logger.info("Anthropic API key updated via dashboard")
+        os.environ['ANTHROPIC_API_KEY'] = key
+        post_trade_analyzer._api_key = key
+        logger.info("Anthropic API key updated via dashboard")
 
-    preview = key[:8] + '...' + key[-4:]
-    return jsonify({'success': True, 'preview': preview})
+        preview = key[:8] + '...' + key[-4:]
+        return jsonify({'success': True, 'preview': preview})
+    except Exception as exc:
+        logger.exception("Error saving Anthropic API key")
+        return jsonify({'success': False, 'error': str(exc)})
 
 
 @app.route('/api/anthropic/test', methods=['POST'])

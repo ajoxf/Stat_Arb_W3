@@ -1328,18 +1328,31 @@
             }
         });
 
+        function fetchWithTimeout(url, opts, timeoutMs) {
+            const controller = new AbortController();
+            const id = setTimeout(() => controller.abort(), timeoutMs);
+            return fetch(url, {...opts, signal: controller.signal})
+                .finally(() => clearTimeout(id));
+        }
+
         // Save key
         saveBtn.addEventListener('click', function() {
             const key = input.value.trim();
             if (!key) { setFeedback('Please paste your API key first.', 'warning'); return; }
             saveBtn.disabled = true;
             saveBtn.textContent = 'Saving...';
-            fetch('/api/anthropic/key', {
+            feedback.style.display = 'none';
+            fetchWithTimeout('/api/anthropic/key', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({key})
+            }, 10000)
+            .then(r => {
+                if (!r.ok && r.headers.get('content-type') && !r.headers.get('content-type').includes('json')) {
+                    throw new Error('Server error ' + r.status);
+                }
+                return r.json();
             })
-            .then(r => r.json())
             .then(d => {
                 if (d.success) {
                     setFeedback('Key saved and active — no restart needed.', 'success');
@@ -1349,7 +1362,7 @@
                     setFeedback('Error: ' + d.error, 'danger');
                 }
             })
-            .catch(() => setFeedback('Network error saving key.', 'danger'))
+            .catch(err => setFeedback(err.name === 'AbortError' ? 'Request timed out. Is the app running?' : ('Error: ' + err.message), 'danger'))
             .finally(() => { saveBtn.disabled = false; saveBtn.textContent = 'Save Key'; });
         });
 
@@ -1358,18 +1371,19 @@
             testBtn.disabled = true;
             testBtn.textContent = 'Testing...';
             setFeedback('Sending test request to Claude API...', 'secondary');
-            fetch('/api/anthropic/test', {method: 'POST'})
+            fetchWithTimeout('/api/anthropic/test', {method: 'POST'}, 30000)
             .then(r => r.json())
             .then(d => {
                 if (d.success) {
-                    setFeedback('Connection successful! Using model: ' + d.model, 'success');
-                    badge.className = 'badge ms-2 bg-success';
+                    setFeedback('Connection successful! API is working correctly.', 'success');
+                    setBadge(true, badge.textContent.replace('Connected — ', ''));
                 } else {
                     setFeedback('Test failed: ' + d.error, 'danger');
                     badge.className = 'badge ms-2 bg-danger';
+                    badge.textContent = 'Connection Failed';
                 }
             })
-            .catch(() => setFeedback('Network error during test.', 'danger'))
+            .catch(err => setFeedback(err.name === 'AbortError' ? 'Test timed out (30s). Check network or API status.' : ('Error: ' + err.message), 'danger'))
             .finally(() => { testBtn.disabled = false; testBtn.textContent = 'Test Connection'; });
         });
     })();
