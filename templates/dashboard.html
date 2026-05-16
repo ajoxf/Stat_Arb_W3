@@ -285,6 +285,21 @@
                         </div>
                     </div>
                 </div>
+                <!-- Half-Life row -->
+                <div class="row g-1 mb-2">
+                    <div class="col-6">
+                        <div class="text-center p-1" style="background: var(--bg-tertiary); border-radius: 4px;">
+                            <div class="fw-bold" style="font-size: 0.9rem;" id="half-life-value">—</div>
+                            <div style="font-size: 0.65rem;" class="text-secondary">Half-Life (periods)</div>
+                        </div>
+                    </div>
+                    <div class="col-6">
+                        <div class="text-center p-1" style="background: var(--bg-tertiary); border-radius: 4px;">
+                            <div class="fw-bold text-warning" style="font-size: 0.9rem;" id="suggested-lookback-value">—</div>
+                            <div style="font-size: 0.65rem;" class="text-secondary">Suggested Lookback</div>
+                        </div>
+                    </div>
+                </div>
                 <!-- Data Collection Progress -->
                 <div class="d-flex align-items-center" style="font-size: 0.75rem;">
                     <span class="text-secondary me-2">Data:</span>
@@ -1272,6 +1287,24 @@
         hurstEl.textContent = hurst.toFixed(4);
         hurstEl.classList.remove('price-up', 'price-down', 'price-neutral');
         hurstEl.classList.add(hurst < 0.5 ? 'price-up' : hurst > 0.5 ? 'price-down' : 'price-neutral');
+
+        // Half-Life and Suggested Lookback
+        const hlEl = document.getElementById('half-life-value');
+        const slEl = document.getElementById('suggested-lookback-value');
+        if (hlEl) {
+            const hl = data.half_life;
+            if (hl != null) {
+                hlEl.textContent = hl.toFixed(1);
+                hlEl.className = 'fw-bold ' + (hl < 50 ? 'price-up' : hl < 200 ? 'text-warning' : 'price-down');
+            } else {
+                hlEl.textContent = '—';
+                hlEl.className = 'fw-bold text-secondary';
+            }
+        }
+        if (slEl) {
+            const sl = data.suggested_lookback;
+            slEl.textContent = sl != null ? sl + ' pts' : '—';
+        }
 
         const regimeDisplayEl = document.getElementById('regime-display');
         if (regimeDisplayEl) {
