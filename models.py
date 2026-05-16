@@ -238,6 +238,8 @@ class Trade:
     entry_futures_price: float = 0.0
     entry_spread: float = 0.0
     entry_zscore: float = 0.0
+    entry_spread_mean: float = 0.0   # Rolling mean at entry time — used as exit target
+    entry_spread_std: float = 0.0    # Rolling std at entry time — for reference
 
     # Exit details
     exit_time: Optional[datetime] = None
@@ -284,6 +286,8 @@ class Trade:
             'entry_futures_price': self.entry_futures_price,
             'entry_spread': self.entry_spread,
             'entry_zscore': self.entry_zscore,
+            'entry_spread_mean': self.entry_spread_mean,
+            'entry_spread_std': self.entry_spread_std,
             'exit_time': self.exit_time.isoformat() if self.exit_time else None,
             'exit_spot_price': self.exit_spot_price,
             'exit_futures_price': self.exit_futures_price,

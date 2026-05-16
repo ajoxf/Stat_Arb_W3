@@ -599,6 +599,8 @@ class TradingEngine:
             entry_futures_price=futures_price,
             entry_spread=signal.spread,
             entry_zscore=signal.zscore,
+            entry_spread_mean=signal.spread_mean,
+            entry_spread_std=signal.spread_std,
             quantity=quantity,
             notional_usd=self.config.position_size_usd,
             margin_usd=round(self.config.position_size_usd / _leverage, 2),
@@ -624,7 +626,11 @@ class TradingEngine:
 
         self.open_trade = trade
         self.state.current_position = position_type
-        self.signal_generator.set_position(position_type)
+        self.signal_generator.set_position(
+            position_type,
+            entry_mean=signal.spread_mean,
+            entry_std=signal.spread_std,
+        )
 
         logger.info("Opened %s position: qty=%.6f, spot=%.2f, futures=%.2f, spread=%.6f, zscore=%.4f",
                     position_type, quantity, spot_price, futures_price, signal.spread, signal.zscore)
@@ -1229,6 +1235,8 @@ class TradingEngine:
             'sl_cooldown_sec': self._stop_loss_cooldown_sec,
             'executing_trade': self._executing_trade,
             'position_mismatch': self._position_mismatch,
+            'entry_execution_mode': getattr(self.config, 'entry_execution_mode', 'LIMIT'),
+            'exit_execution_mode': getattr(self.config, 'exit_execution_mode', 'LIMIT'),
         }
 
     def get_spread_history(self, n: int = 100) -> List[float]:

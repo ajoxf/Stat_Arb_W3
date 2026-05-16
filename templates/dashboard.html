@@ -385,7 +385,7 @@
         <div class="card mb-3">
             <div class="card-header py-1 d-flex justify-content-between align-items-center">
                 <small><i class="bi bi-hourglass-split me-2"></i>Active Orders</small>
-                <span id="execution-mode-badge" class="badge bg-secondary" style="font-size: 0.65rem;">{{ config.order_execution_mode }}</span>
+                <span id="execution-mode-badge" class="badge bg-success" style="font-size: 0.65rem;" title="Entry / Exit execution mode">LIMIT / LIMIT</span>
             </div>
             <div class="card-body p-2">
                 <div id="no-active-orders" class="text-center text-secondary py-1">
@@ -1977,8 +1977,12 @@ function updateFilterStatus(elementId, passed, value) {
                 const modeBadge = document.getElementById('execution-mode-badge');
 
                 if (modeBadge) {
-                    modeBadge.textContent = data.execution_mode || 'MARKET';
-                    modeBadge.className = 'badge ' + (data.execution_mode === 'LIMIT' ? 'bg-warning' : 'bg-primary');
+                    const entryMode = data.entry_execution_mode || 'LIMIT';
+                    const exitMode  = data.exit_execution_mode  || 'LIMIT';
+                    modeBadge.textContent = entryMode + ' / ' + exitMode;
+                    const allLimit = entryMode === 'LIMIT' && exitMode === 'LIMIT';
+                    modeBadge.className = 'badge ' + (allLimit ? 'bg-success' : 'bg-warning');
+                    modeBadge.title = 'Entry: ' + entryMode + '  |  Exit: ' + exitMode;
                 }
 
                 if (data.orders && data.orders.length > 0) {

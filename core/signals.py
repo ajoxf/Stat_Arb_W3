@@ -66,6 +66,9 @@ class SignalGenerator:
 
         # Track current position for exit signals
         self.current_position: str = "NONE"
+        # Mean and std locked in at entry — used as exit target
+        self.entry_mean: Optional[float] = None
+        self.entry_std: Optional[float] = None
 
         # Track blocked signals for diagnostics
         self.last_blocked_signal: Optional[Dict[str, Any]] = None
@@ -85,9 +88,21 @@ class SignalGenerator:
             self.spot_prices = deque(old_spots[-self.lookback:], maxlen=self.lookback)
             self.futures_prices = deque(old_futures[-self.lookback:], maxlen=self.lookback)
 
-    def set_position(self, position: str) -> None:
-        """Set current position for exit signal calculation."""
+    def set_position(self, position: str,
+                     entry_mean: Optional[float] = None,
+                     entry_std: Optional[float] = None) -> None:
+        """Set current position for exit signal calculation.
+
+        Pass entry_mean/entry_std when opening a position so the exit target
+        is the mean *at entry time*, not the current rolling mean.
+        """
         self.current_position = position
+        if position == "NONE":
+            self.entry_mean = None
+            self.entry_std = None
+        elif entry_mean is not None:
+            self.entry_mean = entry_mean
+            self.entry_std = entry_std
 
     def add_tick(self, spot_tick: MarketTick, futures_tick: MarketTick) -> None:
         """Add a new tick and update calculations."""
@@ -436,17 +451,28 @@ class SignalGenerator:
                                 self.current_zscore, blocked_reason)
 
         elif self.current_position == "LONG":
-            # Exit signals for LONG position - filters do NOT apply
-            # Entered when z >= +entry, exit when z <= +exit (returns toward 0)
-            if self.current_zscore <= self.config.exit_threshold:
+            # Exit when spread returns to the mean locked in at entry time.
+            # Using entry_mean (not current_mean) ensures we target the same
+            # reference point the trade was opened against.
+            exit_mean = self.entry_mean if self.entry_mean is not None else self.current_mean
+            exit_std  = self.entry_std  if self.entry_std  is not None else self.current_std
+            exit_zscore = (
+                (self.current_spread - exit_mean) / exit_std
+                if exit_std > 0 else self.current_zscore
+            )
+            if exit_zscore <= self.config.exit_threshold:
                 signal_type = "EXIT"
             elif self.current_zscore >= self.config.stop_loss_threshold:
                 signal_type = "STOP_LOSS"
 
         elif self.current_position == "SHORT":
-            # Exit signals for SHORT position - filters do NOT apply
-            # Entered when z <= -entry, exit when z >= -exit (returns toward 0)
-            if self.current_zscore >= -self.config.exit_threshold:
+            exit_mean = self.entry_mean if self.entry_mean is not None else self.current_mean
+            exit_std  = self.entry_std  if self.entry_std  is not None else self.current_std
+            exit_zscore = (
+                (self.current_spread - exit_mean) / exit_std
+                if exit_std > 0 else self.current_zscore
+            )
+            if exit_zscore >= -self.config.exit_threshold:
                 signal_type = "EXIT"
             elif self.current_zscore <= -self.config.stop_loss_threshold:
                 signal_type = "STOP_LOSS"
@@ -682,6 +708,8 @@ class SignalGenerator:
         self.last_sd_level = 0.0
         self.sd_touch_events.clear()
         self.current_position = "NONE"
+        self.entry_mean = None
+        self.entry_std = None
         self.last_stats_update = None
         self._stats_initialized = False
         self.last_blocked_signal = None
