@@ -125,9 +125,31 @@
                                 When <strong>Auto-Tune</strong> is on, it will automatically adjust parameters if
                                 3 or more consecutive analyses agree on the same change with &ge;70% confidence.
                                 Changes are clamped to safe corridors (max ±0.2 per adjustment).
-                                Requires <code>ANTHROPIC_API_KEY</code> in your environment.
                             </small>
                         </div>
+
+                        <!-- Claude API Key entry -->
+                        <div class="col-12 mb-3">
+                            <label class="form-label fw-semibold">
+                                Claude AI API Key
+                                <span id="anthropic-status-badge" class="badge ms-2 bg-secondary" style="font-size:0.65rem;">Checking...</span>
+                            </label>
+                            <div class="input-group">
+                                <input type="password" class="form-control" id="anthropic-key-input"
+                                    placeholder="sk-ant-api03-..." autocomplete="off">
+                                <button class="btn btn-outline-primary" type="button" id="anthropic-toggle-eye" title="Show/hide key">
+                                    <i class="bi bi-eye" id="anthropic-eye-icon"></i>
+                                </button>
+                                <button class="btn btn-primary" type="button" id="anthropic-save-btn">Save Key</button>
+                                <button class="btn btn-outline-secondary" type="button" id="anthropic-test-btn">Test Connection</button>
+                            </div>
+                            <small id="anthropic-key-hint" class="text-secondary">
+                                Get your key at <a href="https://console.anthropic.com/keys" target="_blank">console.anthropic.com/keys</a>.
+                                Saved to <code>.env</code> — persists across restarts.
+                            </small>
+                            <div id="anthropic-feedback" class="mt-1" style="font-size:0.82rem;display:none;"></div>
+                        </div>
+
                         <div class="col-md-6">
                             <div class="form-check form-switch mb-2">
                                 <input class="form-check-input" type="checkbox" id="auto_tune_enabled" name="auto_tune_enabled" {% if config.auto_tune_enabled %}checked{% endif %}>
@@ -138,8 +160,8 @@
                                 but no parameters are changed automatically.
                             </small>
                         </div>
-                        <div class="col-md-6">
-                            <a href="/api/learning-log" target="_blank" class="btn btn-sm btn-outline-secondary me-2">
+                        <div class="col-md-6 d-flex align-items-start gap-2 flex-wrap">
+                            <a href="/api/learning-log" target="_blank" class="btn btn-sm btn-outline-secondary">
                                 <i class="bi bi-list-ul me-1"></i>View Learning Log (JSON)
                             </a>
                             <a href="/api/learnings" target="_blank" class="btn btn-sm btn-outline-secondary">
@@ -1262,5 +1284,94 @@
             });
         }
     });
+
+    // ── Anthropic API Key Management ──────────────────────────────────────────
+    (function() {
+        const badge   = document.getElementById('anthropic-status-badge');
+        const input   = document.getElementById('anthropic-key-input');
+        const saveBtn = document.getElementById('anthropic-save-btn');
+        const testBtn = document.getElementById('anthropic-test-btn');
+        const feedback = document.getElementById('anthropic-feedback');
+        const eyeBtn  = document.getElementById('anthropic-toggle-eye');
+        const eyeIcon = document.getElementById('anthropic-eye-icon');
+
+        function setFeedback(msg, type) {
+            feedback.textContent = msg;
+            feedback.className = 'mt-1 text-' + type;
+            feedback.style.display = 'block';
+        }
+
+        function setBadge(configured, preview) {
+            if (configured) {
+                badge.className = 'badge ms-2 bg-success';
+                badge.textContent = 'Connected — ' + preview;
+            } else {
+                badge.className = 'badge ms-2 bg-danger';
+                badge.textContent = 'Not Configured';
+            }
+        }
+
+        // Check current status on page load
+        fetch('/api/anthropic/status')
+            .then(r => r.json())
+            .then(d => setBadge(d.configured, d.preview))
+            .catch(() => { badge.className = 'badge ms-2 bg-secondary'; badge.textContent = 'Unknown'; });
+
+        // Show/hide key toggle
+        eyeBtn.addEventListener('click', function() {
+            if (input.type === 'password') {
+                input.type = 'text';
+                eyeIcon.className = 'bi bi-eye-slash';
+            } else {
+                input.type = 'password';
+                eyeIcon.className = 'bi bi-eye';
+            }
+        });
+
+        // Save key
+        saveBtn.addEventListener('click', function() {
+            const key = input.value.trim();
+            if (!key) { setFeedback('Please paste your API key first.', 'warning'); return; }
+            saveBtn.disabled = true;
+            saveBtn.textContent = 'Saving...';
+            fetch('/api/anthropic/key', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({key})
+            })
+            .then(r => r.json())
+            .then(d => {
+                if (d.success) {
+                    setFeedback('Key saved and active — no restart needed.', 'success');
+                    setBadge(true, d.preview);
+                    input.value = '';
+                } else {
+                    setFeedback('Error: ' + d.error, 'danger');
+                }
+            })
+            .catch(() => setFeedback('Network error saving key.', 'danger'))
+            .finally(() => { saveBtn.disabled = false; saveBtn.textContent = 'Save Key'; });
+        });
+
+        // Test connection
+        testBtn.addEventListener('click', function() {
+            testBtn.disabled = true;
+            testBtn.textContent = 'Testing...';
+            setFeedback('Sending test request to Claude API...', 'secondary');
+            fetch('/api/anthropic/test', {method: 'POST'})
+            .then(r => r.json())
+            .then(d => {
+                if (d.success) {
+                    setFeedback('Connection successful! Using model: ' + d.model, 'success');
+                    badge.className = 'badge ms-2 bg-success';
+                } else {
+                    setFeedback('Test failed: ' + d.error, 'danger');
+                    badge.className = 'badge ms-2 bg-danger';
+                }
+            })
+            .catch(() => setFeedback('Network error during test.', 'danger'))
+            .finally(() => { testBtn.disabled = false; testBtn.textContent = 'Test Connection'; });
+        });
+    })();
 </script>
 {% endblock %}

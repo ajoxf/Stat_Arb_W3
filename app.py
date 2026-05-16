@@ -1361,6 +1361,81 @@ def download_exchange_orders_csv():
     return Response("Event loop not running", status=500)
 
 
+@app.route('/api/anthropic/status', methods=['GET'])
+def anthropic_status():
+    """Return whether the Anthropic API key is configured."""
+    key = os.getenv('ANTHROPIC_API_KEY', '')
+    if key:
+        preview = key[:8] + '...' + key[-4:] if len(key) > 12 else '***'
+        return jsonify({'configured': True, 'preview': preview})
+    return jsonify({'configured': False, 'preview': None})
+
+
+@app.route('/api/anthropic/key', methods=['POST'])
+def save_anthropic_key():
+    """Save Anthropic API key to .env file and update running environment."""
+    data = request.json or {}
+    key = (data.get('key') or '').strip()
+    if not key:
+        return jsonify({'success': False, 'error': 'No key provided'}), 400
+    if not key.startswith('sk-ant-'):
+        return jsonify({'success': False, 'error': 'Invalid key format — should start with sk-ant-'}), 400
+
+    env_path = os.path.join(os.path.dirname(__file__), '.env')
+    _upsert_env_var(env_path, 'ANTHROPIC_API_KEY', key)
+
+    os.environ['ANTHROPIC_API_KEY'] = key
+    post_trade_analyzer._api_key = key
+    logger.info("Anthropic API key updated via dashboard")
+
+    preview = key[:8] + '...' + key[-4:]
+    return jsonify({'success': True, 'preview': preview})
+
+
+@app.route('/api/anthropic/test', methods=['POST'])
+def test_anthropic_key():
+    """Test the Anthropic API key with a minimal API call."""
+    key = os.getenv('ANTHROPIC_API_KEY', '')
+    if not key:
+        return jsonify({'success': False, 'error': 'No API key configured'}), 400
+    try:
+        import anthropic as _anthropic
+        client = _anthropic.Anthropic(api_key=key)
+        msg = client.messages.create(
+            model='claude-haiku-4-5-20251001',
+            max_tokens=5,
+            messages=[{'role': 'user', 'content': 'hi'}],
+        )
+        return jsonify({'success': True, 'model': msg.model})
+    except ImportError:
+        return jsonify({'success': False, 'error': 'anthropic package not installed — run: pip install anthropic'}), 500
+    except Exception as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 400
+
+
+def _upsert_env_var(env_path: str, var_name: str, value: str) -> None:
+    """Write or update a single variable in a .env file."""
+    lines: list = []
+    if os.path.exists(env_path):
+        with open(env_path, 'r') as f:
+            lines = f.readlines()
+
+    key_prefix = f'{var_name}='
+    found = False
+    for i, line in enumerate(lines):
+        if line.startswith(key_prefix):
+            lines[i] = f'{key_prefix}{value}\n'
+            found = True
+            break
+    if not found:
+        if lines and not lines[-1].endswith('\n'):
+            lines.append('\n')
+        lines.append(f'{key_prefix}{value}\n')
+
+    with open(env_path, 'w') as f:
+        f.writelines(lines)
+
+
 @app.route('/api/learnings', methods=['GET'])
 def get_learnings():
     """Return recent structured learnings from post-trade AI analysis."""
