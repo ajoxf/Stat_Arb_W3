@@ -3,6 +3,7 @@ Signal generation module for crypto statistical arbitrage.
 Implements Z-score calculation, Hurst exponent, and STD filter.
 """
 
+import math
 import numpy as np
 from collections import deque
 from datetime import datetime
@@ -50,6 +51,7 @@ class SignalGenerator:
         self.current_mean: float = 0.0
         self.current_std: float = 0.0
         self.current_hurst: float = 0.5
+        self.current_half_life: float = float('inf')  # periods; inf = not mean-reverting
 
         # Stats update timing
         self.last_stats_update: Optional[datetime] = None
@@ -132,15 +134,17 @@ class SignalGenerator:
             self.current_mean = float(np.mean(spreads))
             self.current_std = float(np.std(spreads, ddof=1))
 
-            # Update Hurst if we have enough data
+            # Update Hurst and half-life if we have enough data
             if len(self.spread_history) >= 20:
                 self.current_hurst = self._calculate_hurst(spreads)
+                self.current_half_life = self._calculate_half_life(spreads)
 
             self.last_stats_update = now
             self._stats_initialized = True
 
-            logger.debug("Stats updated: mean=%.6f, std=%.6f, hurst=%.4f",
-                        self.current_mean, self.current_std, self.current_hurst)
+            logger.debug("Stats updated: mean=%.6f, std=%.6f, hurst=%.4f, half_life=%.1f",
+                        self.current_mean, self.current_std, self.current_hurst,
+                        self.current_half_life if self.current_half_life != float('inf') else -1)
 
         # Always update z-score with current spread
         if self.current_std > 0:
@@ -206,6 +210,48 @@ class SignalGenerator:
             return hurst
         except Exception:
             return 0.5
+
+    def _calculate_half_life(self, series: np.ndarray) -> float:
+        """
+        Calculate the half-life of mean reversion via OLS on the OU process.
+
+        Models: spread[t+1] - spread[t] = theta * (mean - spread[t]) + noise
+        If theta > 0 the process is mean-reverting with half-life = ln(2) / theta.
+
+        A half-life of N periods means the spread reverts halfway to the mean
+        in N ticks.  Use 2-5x the half-life as the lookback window so the window
+        is long enough to capture a full reversion cycle without being so long
+        that it smooths out tradeable dislocations.
+
+        Returns half-life in periods (same units as lookback_period).
+        Returns float('inf') when the series is not mean-reverting (theta <= 0).
+        """
+        n = len(series)
+        if n < 10:
+            return float('inf')
+
+        spread_lag = series[:-1]                    # spread[t]
+        spread_diff = series[1:] - series[:-1]      # spread[t+1] - spread[t]
+        x = np.mean(spread_lag) - spread_lag        # (mean - spread[t])
+        y = spread_diff
+
+        try:
+            # OLS without intercept (matches QuantInsti OU formulation):
+            # theta = sum(x * y) / sum(x^2)
+            denom = np.dot(x, x)
+            if denom == 0:
+                return float('inf')
+            theta = np.dot(x, y) / denom
+
+            if theta <= 0:
+                return float('inf')  # trending or random — no mean reversion
+
+            hl = math.log(2) / theta
+            # Clamp: at least 1 period, at most the full window length
+            hl = max(1.0, min(hl, float(n)))
+            return round(hl, 1)
+        except Exception:
+            return float('inf')
 
     def _check_std_filter(self) -> Tuple[bool, float]:
         """
@@ -328,6 +374,7 @@ class SignalGenerator:
                 regime="COLLECTING",
                 current_position=self.current_position,
                 timestamp=timestamp,
+                half_life=self.current_half_life,
             )
 
         # Check filters
@@ -416,6 +463,7 @@ class SignalGenerator:
             regime=regime,
             current_position=self.current_position,
             timestamp=timestamp,
+            half_life=self.current_half_life,
         )
 
     def get_spread_history(self, n: int = 100) -> List[float]:
@@ -466,12 +514,19 @@ class SignalGenerator:
         else:
             regime = "NEUTRAL"
 
+        # Suggested lookback based on half-life: 2.5x HL is a reasonable midpoint
+        # of the conventional 2-5x range.  None when HL is infinite (no mean reversion).
+        hl = self.current_half_life
+        suggested_lookback = round(2.5 * hl) if hl != float('inf') and hl > 0 else None
+
         return {
             'zscore': round(self.current_zscore, 4),
             'spread': round(self.current_spread, 6),
             'spread_mean': round(self.current_mean, 6),
             'spread_std': round(self.current_std, 6),
             'hurst': round(self.current_hurst, 4),
+            'half_life': round(hl, 1) if hl != float('inf') else None,
+            'suggested_lookback': suggested_lookback,
             'hurst_ok': hurst_ok if data_ready else None,
             'std_filter_ok': std_ok if data_ready else None,
             'std_ratio': round(std_ratio, 2) if std_ratio != float('inf') else None,
@@ -510,6 +565,109 @@ class SignalGenerator:
 
         logger.info("Loaded %d spread values from history", len(self.spread_history))
 
+    def optimize_parameters(
+        self,
+        spread_history: Optional[List[float]] = None,
+        lookback_range: Optional[List[int]] = None,
+        threshold_range: Optional[List[float]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Grid search over (lookback, entry_threshold) to find the combination that
+        maximises mean-reversion PnL on a 70% training slice, then validates on
+        the held-out 30% test slice.
+
+        The simulation is intentionally simple: enter when |Z| > threshold, exit
+        when Z crosses zero.  Fee costs are NOT deducted — the goal is relative
+        comparison across parameter pairs, not absolute P&L prediction.
+
+        Returns a dict with:
+          best_lookback, best_threshold, train_pnl, test_pnl,
+          half_life, suggested_lookback, grid (raw results for heatmap)
+        """
+        spreads = spread_history if spread_history is not None else list(self.spread_history)
+        spreads = np.array(spreads, dtype=float)
+
+        if len(spreads) < 30:
+            return {'error': 'Not enough data (need >= 30 points)', 'grid': []}
+
+        # Default search space
+        if lookback_range is None:
+            lookback_range = [int(x) for x in np.linspace(5, min(50, len(spreads) // 3), 6)]
+            lookback_range = sorted(set(max(3, v) for v in lookback_range))
+        if threshold_range is None:
+            threshold_range = [round(x, 2) for x in np.linspace(0.5, 2.5, 5)]
+
+        # 70 / 30 split
+        split = int(len(spreads) * 0.7)
+        train = spreads[:split]
+        test = spreads[split:]
+
+        def _sim(data: np.ndarray, lookback: int, threshold: float) -> float:
+            total = 0.0
+            position = 0        # 0=flat, 1=long, -1=short
+            entry_spread = 0.0
+            for i in range(lookback, len(data)):
+                window = data[i - lookback:i]
+                mu = np.mean(window)
+                sigma = np.std(window, ddof=1)
+                if sigma <= 0:
+                    continue
+                z = (data[i] - mu) / sigma
+                if position == 0:
+                    if z >= threshold:
+                        position = 1
+                        entry_spread = data[i]
+                    elif z <= -threshold:
+                        position = -1
+                        entry_spread = data[i]
+                elif position == 1 and z <= 0:
+                    total += entry_spread - data[i]
+                    position = 0
+                elif position == -1 and z >= 0:
+                    total += data[i] - entry_spread
+                    position = 0
+            return total
+
+        # Grid search on training set
+        best_pnl = float('-inf')
+        best_lb = lookback_range[0]
+        best_thr = threshold_range[0]
+        grid = []
+
+        for lb in lookback_range:
+            for thr in threshold_range:
+                pnl = _sim(train, lb, thr)
+                grid.append({'lookback': lb, 'threshold': thr, 'train_pnl': round(pnl, 6)})
+                if pnl > best_pnl:
+                    best_pnl = pnl
+                    best_lb = lb
+                    best_thr = thr
+
+        test_pnl = _sim(test, best_lb, best_thr)
+
+        # Half-life from full history
+        hl = self._calculate_half_life(spreads)
+        suggested_lb = round(2.5 * hl) if hl != float('inf') else None
+
+        logger.info(
+            "Parameter optimisation: best lookback=%d, threshold=%.2f, "
+            "train_pnl=%.4f, test_pnl=%.4f, half_life=%s",
+            best_lb, best_thr, best_pnl, test_pnl,
+            f"{hl:.1f}" if hl != float('inf') else "inf",
+        )
+
+        return {
+            'best_lookback': best_lb,
+            'best_threshold': best_thr,
+            'train_pnl': round(best_pnl, 6),
+            'test_pnl': round(test_pnl, 6),
+            'half_life': round(hl, 1) if hl != float('inf') else None,
+            'suggested_lookback': suggested_lb,
+            'train_size': len(train),
+            'test_size': len(test),
+            'grid': grid,
+        }
+
     def reset(self) -> None:
         """Reset all state."""
         self.spread_history.clear()
@@ -520,6 +678,7 @@ class SignalGenerator:
         self.current_mean = 0.0
         self.current_std = 0.0
         self.current_hurst = 0.5
+        self.current_half_life = float('inf')
         self.last_sd_level = 0.0
         self.sd_touch_events.clear()
         self.current_position = "NONE"

@@ -360,6 +360,9 @@ class Signal:
     # Current position context
     current_position: str = "NONE"
 
+    # Half-life of mean reversion (periods); inf = not mean-reverting
+    half_life: float = float('inf')
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             'signal_type': self.signal_type,
@@ -373,6 +376,7 @@ class Signal:
             'regime': self.regime,
             'current_position': self.current_position,
             'timestamp': self.timestamp.isoformat() if self.timestamp else None,
+            'half_life': self.half_life if self.half_life != float('inf') else None,
         }
 
 

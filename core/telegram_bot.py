@@ -67,6 +67,8 @@ class TelegramNotifier:
         self.get_trades_cb: Optional[Callable[[], list]] = None
         self.get_balance_cb: Optional[Callable[[], Dict[str, Any]]] = None
         self.close_all_cb: Optional[Callable[[], Dict[str, Any]]] = None
+        # Returns result of SignalGenerator.optimize_parameters()
+        self.optimize_cb: Optional[Callable[[], Dict[str, Any]]] = None
 
         # Polling state
         self._poll_thread: Optional[threading.Thread] = None
@@ -150,6 +152,7 @@ class TelegramNotifier:
                 hurst = getattr(signal, 'hurst', None)
                 hurst_ok = getattr(signal, 'hurst_ok', None)
                 regime = getattr(signal, 'regime', None)
+                hl = getattr(signal, 'half_life', None)
                 if std is not None:
                     rows.append(R("Spread SD", f"{std:.6f}"))
                 if spread_mean is not None:
@@ -157,6 +160,8 @@ class TelegramNotifier:
                 if hurst is not None:
                     hurst_tag = "  [mean-rev]" if hurst_ok else "  [trending]" if hurst_ok is False else ""
                     rows.append(R("Hurst", f"{hurst:.4f}{hurst_tag}"))
+                if hl is not None and hl != float('inf'):
+                    rows.append(R("Half-Life", f"{hl:.1f} periods"))
                 if regime:
                     rows.append(R("Regime", regime))
             rows += [
@@ -280,6 +285,9 @@ class TelegramNotifier:
             if hurst is not None:
                 hurst_tag = "  [mean-rev]" if hurst_ok else "  [trending]" if hurst_ok is False else ""
                 rows.append(R("Hurst", f"{hurst:.4f}{hurst_tag}"))
+            hl = getattr(signal, 'half_life', None)
+            if hl is not None and hl != float('inf'):
+                rows.append(R("Half-Life", f"{hl:.1f} periods"))
             filters = []
             if hurst_ok is not None:
                 filters.append(f"hurst={'OK' if hurst_ok else 'FAIL'}")
@@ -410,6 +418,7 @@ class TelegramNotifier:
             "/pnl": self._cmd_pnl,
             "/eod": self._cmd_eod,
             "/closeall": self._cmd_closeall,
+            "/optimize": self._cmd_optimize,
         }
 
         handler = handlers.get(command)
@@ -422,7 +431,7 @@ class TelegramNotifier:
         elif text.startswith("/"):
             self._send(
                 "Unknown command. Available:\n"
-                "/status /positions /trades /balance /pnl /eod /closeall"
+                "/status /positions /trades /balance /pnl /eod /closeall /optimize"
             )
 
     # ------------------------------------------------------------------
@@ -439,6 +448,7 @@ class TelegramNotifier:
             f"{'/balance':<{C}}account balance",
             f"{'/pnl':<{C}}P&amp;L summary",
             f"{'/eod':<{C}}end-of-day report",
+            f"{'/optimize':<{C}}run parameter grid search",
             f"{'/closeall':<{C}}emergency: close all",
         ]
         self._send(
@@ -461,6 +471,8 @@ class TelegramNotifier:
         sig = status.get("signal") or {}
         zscore = sig.get("zscore", 0.0)
         regime = sig.get("regime", "N/A")
+        hl = sig.get("half_life")
+        suggested_lb = sig.get("suggested_lookback")
 
         R = self._R
         rows = [
@@ -472,6 +484,11 @@ class TelegramNotifier:
             R("Z-score", f"{zscore:+.4f}"),
             R("Regime", regime),
         ]
+        if hl is not None:
+            hl_str = f"{hl:.1f} periods"
+            if suggested_lb:
+                hl_str += f"  (suggest lookback {suggested_lb})"
+            rows.append(R("Half-Life", hl_str))
         if error:
             rows += ["", R("Error", error[:200])]
         self._send(
@@ -758,6 +775,43 @@ class TelegramNotifier:
                 f"<b>EMERGENCY CLOSE  ·  {ts}</b>\n"
                 f"<b>Error</b>  <code>{e}</code>"
             )
+
+    def _cmd_optimize(self) -> None:
+        """Run parameter optimisation and report the result."""
+        ts = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
+        if not self.optimize_cb:
+            self._send(f"<b>PARAMETER OPTIMISATION  ·  {ts}</b>\nNot configured.")
+            return
+        self._send(f"<b>PARAMETER OPTIMISATION  ·  {ts}</b>\nRunning grid search — please wait...")
+        try:
+            result = self.optimize_cb()
+        except Exception as e:
+            self._send(f"<b>PARAMETER OPTIMISATION  ·  {ts}</b>\n<b>Error</b>  <code>{e}</code>")
+            return
+
+        if "error" in result:
+            self._send(f"<b>PARAMETER OPTIMISATION  ·  {ts}</b>\n<b>Error</b>  <code>{result['error']}</code>")
+            return
+
+        R = self._R
+        hl = result.get("half_life")
+        suggested_lb = result.get("suggested_lookback")
+        test_pnl = result.get("test_pnl", 0)
+        validated = "Generalises" if test_pnl > 0 else "Does not generalise"
+        rows = [
+            R("Best Lookback", str(result.get("best_lookback", "N/A"))),
+            R("Best Threshold", f"{result.get('best_threshold', 0):.2f}"),
+            "",
+            R("Train PnL", f"{result.get('train_pnl', 0):+.4f}  ({result.get('train_size', 0)} pts)"),
+            R("Test PnL", f"{test_pnl:+.4f}  ({result.get('test_size', 0)} pts)"),
+            R("Out-of-sample", validated),
+            "",
+        ]
+        if hl is not None:
+            rows.append(R("Half-Life", f"{hl:.1f} periods"))
+        if suggested_lb is not None:
+            rows.append(R("HL Suggestion", f"lookback ≈ {suggested_lb}  (2.5x HL)"))
+        self._send(f"<b>PARAMETER OPTIMISATION  ·  {ts}</b>\n" + "\n".join(rows))
 
     # ------------------------------------------------------------------
     # Internal helpers
