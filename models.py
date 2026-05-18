@@ -77,6 +77,7 @@ class TradingConfig:
     # Position sizing
     position_size_usd: float = 1000.0
     max_position_size_usd: float = 10000.0
+    daily_max_loss_usd: float = 0.0
 
     # Leverage settings
     spot_leverage: int = 1      # 1 = no margin, 2-10 for spot margin trading
@@ -151,6 +152,7 @@ class TradingConfig:
             'min_std_multiple': self.min_std_multiple,
             'position_size_usd': self.position_size_usd,
             'max_position_size_usd': self.max_position_size_usd,
+            'daily_max_loss_usd': self.daily_max_loss_usd,
             'spot_leverage': self.spot_leverage,
             'futures_leverage': self.futures_leverage,
             'paper_trading': self.paper_trading,

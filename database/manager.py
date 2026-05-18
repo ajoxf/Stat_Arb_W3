@@ -69,6 +69,7 @@ class DatabaseManager:
                     min_std_multiple REAL DEFAULT 1.5,
                     position_size_usd REAL DEFAULT 1000.0,
                     max_position_size_usd REAL DEFAULT 10000.0,
+                    daily_max_loss_usd REAL DEFAULT 0.0,
                     spot_leverage INTEGER DEFAULT 1,
                     futures_leverage INTEGER DEFAULT 1,
                     paper_trading INTEGER DEFAULT 1,
@@ -311,6 +312,8 @@ class DatabaseManager:
                 cursor.execute("ALTER TABLE trading_config ADD COLUMN telegram_notify_signals INTEGER DEFAULT 0")
             if 'telegram_notify_errors' not in existing_columns:
                 cursor.execute("ALTER TABLE trading_config ADD COLUMN telegram_notify_errors INTEGER DEFAULT 1")
+            if 'daily_max_loss_usd' not in existing_columns:
+                cursor.execute("ALTER TABLE trading_config ADD COLUMN daily_max_loss_usd REAL DEFAULT 0.0")
 
             # Migrate learnings table to include richer analysis fields
             cursor.execute("PRAGMA table_info(learnings)")
@@ -358,6 +361,7 @@ class DatabaseManager:
                     min_std_multiple=row["min_std_multiple"],
                     position_size_usd=row["position_size_usd"],
                     max_position_size_usd=row["max_position_size_usd"],
+                    daily_max_loss_usd=row["daily_max_loss_usd"] if "daily_max_loss_usd" in row.keys() else 0.0,
                     spot_leverage=row["spot_leverage"] if "spot_leverage" in row.keys() else 1,
                     futures_leverage=row["futures_leverage"] if "futures_leverage" in row.keys() else 1,
                     paper_trading=bool(row["paper_trading"]),
@@ -409,6 +413,7 @@ class DatabaseManager:
                     min_std_multiple = ?,
                     position_size_usd = ?,
                     max_position_size_usd = ?,
+                    daily_max_loss_usd = ?,
                     spot_leverage = ?,
                     futures_leverage = ?,
                     paper_trading = ?,
@@ -452,6 +457,7 @@ class DatabaseManager:
                 config.min_std_multiple,
                 config.position_size_usd,
                 config.max_position_size_usd,
+                config.daily_max_loss_usd,
                 config.spot_leverage,
                 config.futures_leverage,
                 int(config.paper_trading),

@@ -377,6 +377,11 @@
                                 Higher = more time to fill at maker rates. Lower = faster resolution but may use market orders.
                             </small>
                         </div>
+                        <div class="col-md-6 mt-3">
+                            <label class="form-label">Daily Loss Limit (USD)</label>
+                            <input type="number" class="form-control" id="daily_max_loss_usd" name="daily_max_loss_usd" value="{{ config.daily_max_loss_usd }}" step="10" min="0">
+                            <small class="text-secondary">Auto-disable algo if total losses exceed this amount in a UTC day. Set to <strong>0</strong> to disable.</small>
+                        </div>
                     </div>
 
                     <div class="d-flex justify-content-end gap-2">
@@ -887,6 +892,7 @@
             entry_cooldown_seconds: parseInt(document.getElementById('entry_cooldown_seconds').value),
             verify_exchange_position: document.getElementById('verify_exchange_position').checked,
             orphan_recovery_timeout_sec: parseInt(document.getElementById('orphan_recovery_timeout_sec').value),
+            daily_max_loss_usd: parseFloat(document.getElementById('daily_max_loss_usd').value) || 0,
         };
 
         fetch('/api/config', {
@@ -1003,6 +1009,7 @@
                 document.getElementById('entry_cooldown_seconds').value = config.entry_cooldown_seconds || 60;
                 document.getElementById('verify_exchange_position').checked = config.verify_exchange_position !== false;
                 document.getElementById('orphan_recovery_timeout_sec').value = config.orphan_recovery_timeout_sec || 60;
+                document.getElementById('daily_max_loss_usd').value = config.daily_max_loss_usd || 0;
                 updateLimitSettingsVisibility();
                 updateFeeSummary();
             });

@@ -5,7 +5,7 @@ Manages the main trading loop, position management, and order execution.
 
 import asyncio
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from typing import Optional, Callable, Dict, Any, List
 from dataclasses import dataclass
 
@@ -88,6 +88,10 @@ class TradingEngine:
 
         # General entry cooldown: prevent rapid re-entry after any trade
         self._entry_cooldown_until: Optional[datetime] = None
+
+        # Daily loss tracking
+        self._daily_loss_usd: float = 0.0
+        self._daily_reset_date: Optional[date] = None
 
         # Execution lock to prevent new trades while one is being executed
         self._executing_trade = False
@@ -273,6 +277,17 @@ class TradingEngine:
         self.state.algo_enabled = enabled
         self.config.algo_enabled = enabled
         logger.info("Algo trading %s", "enabled" if enabled else "disabled")
+
+    def _check_daily_loss(self) -> bool:
+        """Reset daily counter at UTC midnight; return True if limit exceeded."""
+        today = datetime.utcnow().date()
+        if self._daily_reset_date != today:
+            self._daily_reset_date = today
+            self._daily_loss_usd = 0.0
+        limit = self.config.daily_max_loss_usd
+        if limit > 0 and self._daily_loss_usd <= -limit:
+            return True
+        return False
 
     async def start(self) -> None:
         """Start the trading engine."""
@@ -561,6 +576,23 @@ class TradingEngine:
             }
             return
 
+        # Check daily loss limit
+        if self._check_daily_loss():
+            self.state.algo_enabled = False
+            self.config.algo_enabled = False
+            msg = (f"Daily loss limit ${self.config.daily_max_loss_usd:.0f} reached "
+                   f"(lost ${abs(self._daily_loss_usd):.2f} today) — algo disabled")
+            logger.critical("🛑 %s", msg)
+            self.state.error = msg
+            get_notifier().notify_error(msg)
+            self.signal_generator.last_blocked_signal = {
+                'timestamp': datetime.utcnow().isoformat(),
+                'would_be_signal': signal.signal_type,
+                'zscore': round(signal.zscore, 4),
+                'reason': 'Daily loss limit reached — algo disabled',
+            }
+            return
+
         # SAFETY: Verify no existing position on exchange before entering
         if self.config.verify_exchange_position and not self.state.paper_trading:
             existing_position = await self._check_exchange_position()
@@ -709,6 +741,9 @@ class TradingEngine:
         trade.exit_reason = signal.signal_type
         trade.pnl_usd = pnl
         trade.pnl_percent = pnl_percent
+
+        # Accumulate daily loss (pnl is negative for losses)
+        self._daily_loss_usd += pnl
 
         # Execute orders BEFORE marking closed — if orders fail we leave the
         # position open so the engine retries on the next tick rather than
@@ -1146,6 +1181,16 @@ class TradingEngine:
             self.state.error = f"CRITICAL: Spot orders failing {spot_fail_rate*100:.0f}% of the time"
             get_notifier().notify_error(critical_msg)
 
+            # Auto-disable algo to prevent further leg imbalance
+            self.state.algo_enabled = False
+            self.config.algo_enabled = False
+            # Reset counters so manual re-enable gets a fresh start
+            self._spot_order_attempts = 0
+            self._spot_order_failures = 0
+            self._futures_order_attempts = 0
+            self._futures_order_failures = 0
+            logger.critical("Algo DISABLED — manual re-enable required after investigating spot failures")
+
             # Log to CSV for post-analysis
             csv_logger = get_trade_logger()
             csv_logger.log_spot_failure_pattern(
@@ -1291,6 +1336,8 @@ class TradingEngine:
             'position_mismatch': self._position_mismatch,
             'entry_execution_mode': getattr(self.config, 'entry_execution_mode', 'LIMIT'),
             'exit_execution_mode': getattr(self.config, 'exit_execution_mode', 'LIMIT'),
+            'daily_loss_usd': round(self._daily_loss_usd, 2),
+            'daily_loss_limit': self.config.daily_max_loss_usd,
         }
 
     def get_spread_history(self, n: int = 100) -> List[float]:

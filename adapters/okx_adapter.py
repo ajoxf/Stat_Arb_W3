@@ -422,10 +422,29 @@ class OKXAdapter(ExchangeAdapter):
                 # For MARKET orders, assume immediate fill
                 # For LIMIT/POST_ONLY orders, return 0 filled until confirmed via get_order_status
                 if order_type == "MARKET":
+                    # Poll for actual fill — MARKET orders on OKX typically settle within 200-500ms
+                    confirmed_fill = None
+                    for _attempt in range(3):
+                        await asyncio.sleep(0.3)
+                        status = await self.get_order_status(symbol, order_id)
+                        if status and status.get("state") == "filled":
+                            confirmed_fill = status
+                            break
+                    if confirmed_fill:
+                        return OrderResult(
+                            success=True,
+                            order_id=order_id,
+                            filled_qty=confirmed_fill["filled_qty"],
+                            filled_price=confirmed_fill["filled_price"],
+                        )
+                    logger.warning(
+                        "MARKET order %s fill not confirmed in polling window — using estimated qty/price",
+                        order_id,
+                    )
                     return OrderResult(
                         success=True,
                         order_id=order_id,
-                        filled_qty=quantity,  # Market orders fill immediately
+                        filled_qty=quantity,
                         filled_price=price or 0,
                     )
                 else:
