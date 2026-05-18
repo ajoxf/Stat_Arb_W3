@@ -248,6 +248,38 @@
             transform: scale(1.5);
         }
 
+        /* Mode pill in navbar */
+        .mode-pill {
+            font-size: 0.7rem;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+            padding: 0.25rem 0.6rem;
+            border-radius: 20px;
+            text-transform: uppercase;
+        }
+        .mode-pill-paper   { background: #ffc107; color: #000; }
+        .mode-pill-demo    { background: #0dcaf0; color: #000; }
+        .mode-pill-live    { background: #dc3545; color: #fff; animation: pulse-live 1.5s infinite; }
+
+        @keyframes pulse-live {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(220,53,69,0.5); }
+            50%       { box-shadow: 0 0 0 5px rgba(220,53,69,0); }
+        }
+
+        /* Red top stripe in live mode */
+        body.mode-live::before {
+            content: '';
+            display: block;
+            position: fixed;
+            top: 0; left: 0; right: 0;
+            height: 3px;
+            background: #dc3545;
+            z-index: 9999;
+        }
+        body.mode-live .navbar {
+            border-bottom: 2px solid #dc3545 !important;
+        }
+
         .flash {
             animation: flash 0.3s ease-in-out;
         }
@@ -306,7 +338,7 @@
 
     {% block head %}{% endblock %}
 </head>
-<body>
+<body{% if config is defined and not config.paper_trading and (is_demo is not defined or not is_demo) %} class="mode-live"{% endif %}>
     <nav class="navbar navbar-expand-lg navbar-light">
         <div class="container-fluid">
             <a class="navbar-brand d-flex align-items-center" href="/">
@@ -338,11 +370,21 @@
                         </a>
                     </li>
                 </ul>
-                <div class="d-flex align-items-center">
-                    <span class="me-3 text-secondary" id="connection-status">
+                <div class="d-flex align-items-center gap-3">
+                    {% if config is defined %}
+                    <span class="mode-pill
+                        {% if config.paper_trading %}mode-pill-paper
+                        {% elif is_demo is defined and is_demo %}mode-pill-demo
+                        {% else %}mode-pill-live{% endif %}">
+                        {% if config.paper_trading %}⬛ PAPER
+                        {% elif is_demo is defined and is_demo %}🔵 DEMO
+                        {% else %}🔴 LIVE{% endif %}
+                    </span>
+                    {% endif %}
+                    <span class="text-secondary" id="connection-status">
                         <i class="bi bi-circle-fill me-1 status-disconnected"></i>Connecting...
                     </span>
-                    <div class="form-check form-switch">
+                    <div class="form-check form-switch mb-0">
                         <input class="form-check-input algo-switch" type="checkbox" id="algoSwitch">
                         <label class="form-check-label text-secondary" for="algoSwitch">Algo</label>
                     </div>

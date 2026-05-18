@@ -380,7 +380,9 @@ def settings():
 def setup():
     """Exchange management page."""
     exchanges = db.get_exchanges()
-    return render_template('setup.html', exchanges=exchanges)
+    is_demo = os.getenv('OKX_DEMO_MODE', 'false').lower() == 'true'
+    config = db.get_config()
+    return render_template('setup.html', exchanges=exchanges, is_demo=is_demo, config=config)
 
 
 @app.route('/analysis')
@@ -389,8 +391,10 @@ def analysis():
     config = db.get_config()
     sd_touches = db.get_sd_touches(asset=config.asset, limit=500)
     stats = db.get_trade_statistics()
+    is_demo = os.getenv('OKX_DEMO_MODE', 'false').lower() == 'true'
     return render_template('analysis.html',
                            config=config,
+                           is_demo=is_demo,
                            sd_touches=[t.to_dict() for t in sd_touches],
                            stats=stats,
                            assets=CRYPTO_ASSETS)
