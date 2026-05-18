@@ -648,23 +648,51 @@ class OKXAdapter(ExchangeAdapter):
             return None
 
     async def close_position(self, symbol: str) -> OrderResult:
-        """Close an open position."""
+        """Close an open position.
+
+        For SWAP/FUTURES: uses OKX /trade/close-position endpoint.
+        For MARGIN (spot): places an explicit market order in the opposite direction
+        because the close-position endpoint returns success but doesn't reliably fill
+        in OKX demo mode for spot margin.
+        """
         try:
-            # Get current position
             positions = await self.get_positions(symbol)
             if not positions:
-                return OrderResult(success=True)  # No position to close
+                return OrderResult(success=True)  # Nothing to close
 
             pos = positions[0]
+            is_swap = any(x in symbol for x in ("-SWAP", "-FUTURES", "-PERP"))
 
+            if not is_swap:
+                # Spot margin: place explicit covering market order
+                # SHORT margin (borrowed BTC sold) → BUY to repay borrow
+                # LONG  margin (bought BTC on margin) → SELL to close
+                cover_side = "BUY" if pos.side == "SHORT" else "SELL"
+                qty = round(pos.quantity, 8)
+                if qty <= 0:
+                    return OrderResult(success=True)
+
+                logger.info(
+                    "Closing spot margin %s %s: placing %s MARKET qty=%.8f",
+                    pos.side, symbol, cover_side, qty,
+                )
+                result = await self.place_order(
+                    symbol=symbol,
+                    side=cover_side,
+                    order_type="MARKET",
+                    quantity=qty,
+                )
+                if result.success:
+                    logger.info("Spot margin position closed: %s %s", symbol, pos.side)
+                else:
+                    logger.error("Failed to close spot margin %s: %s", symbol, result.error)
+                return result
+
+            # SWAP / FUTURES: use OKX close-position endpoint
             close_data: Dict[str, Any] = {
                 "instId": symbol,
                 "mgnMode": "cross",
             }
-
-            # OKX requires 'ccy' for cross-margin SPOT (MARGIN instType).
-            # For SWAP/FUTURES it is not needed. Derive ccy from the instId:
-            # "BTC-USDT" → quote currency = "USDT"
             is_swap = any(x in symbol for x in ("-SWAP", "-FUTURES", "-PERP"))
             if not is_swap:
                 parts = symbol.split("-")

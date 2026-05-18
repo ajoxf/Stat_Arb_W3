@@ -612,9 +612,11 @@ def close_exchange_position():
     if not symbol:
         return jsonify({'success': False, 'error': 'Symbol is required'})
 
-    adapter = engine.futures_adapter
+    # Use the correct adapter: spot for MARGIN symbols, futures for SWAP/FUTURES
+    is_swap = any(x in symbol for x in ('-SWAP', '-FUTURES', '-PERP'))
+    adapter = engine.futures_adapter if is_swap else (engine.spot_adapter or engine.futures_adapter)
     if not adapter:
-        return jsonify({'success': False, 'error': 'No futures adapter available'})
+        return jsonify({'success': False, 'error': 'No adapter available'})
 
     async def close_position():
         return await adapter.close_position(symbol)

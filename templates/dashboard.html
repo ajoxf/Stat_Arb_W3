@@ -1770,6 +1770,9 @@ function updateFilterStatus(elementId, passed, value) {
                                 <button class="btn btn-danger btn-sm me-2" onclick="closeExchangePosition('${pos.symbol}')">
                                     <i class="bi bi-x-circle me-1"></i>Close Spot Margin
                                 </button>
+                                <button class="btn btn-warning btn-sm me-2" onclick="closeAllSpotOrphans('${pos.symbol}')">
+                                    <i class="bi bi-shield-x me-1"></i>Close All + Sell Orphan
+                                </button>
                                 <button class="btn btn-outline-secondary btn-sm" onclick="dismissExchangePositionWarning()">
                                     <i class="bi bi-x"></i>
                                 </button>
@@ -1837,6 +1840,51 @@ function updateFilterStatus(elementId, passed, value) {
             btn.disabled = false;
             btn.innerHTML = '<i class="bi bi-x-circle me-1"></i>Close on Exchange';
         });
+    }
+
+    // Close spot margin position AND sell any orphaned wallet balance in sequence.
+    // The short must be covered first (BUY to repay borrow) then the wallet BTC sold.
+    async function closeAllSpotOrphans(symbol) {
+        if (!confirm(`This will:\n1. Close the spot margin SHORT (buy to cover borrow)\n2. Sell any remaining BTC wallet balance\n\nContinue?`)) return;
+
+        const btn = event.target.closest('button');
+        btn.disabled = true;
+        btn.innerHTML = '<i class="bi bi-hourglass-split me-1"></i>Closing...';
+
+        try {
+            // Step 1: close the margin short
+            const r1 = await fetch('/api/close-exchange-position', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({symbol})
+            }).then(r => r.json());
+
+            if (!r1.success) {
+                alert('Step 1 (close margin) failed: ' + (r1.error || 'unknown'));
+                return;
+            }
+
+            // Step 2: sell orphan wallet balance (if any)
+            await new Promise(r => setTimeout(r, 1500)); // wait for fill
+            const asset = symbol.split('-')[0]; // 'BTC' from 'BTC-USDT'
+            const r2 = await fetch('/api/close-orphaned-spot', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({currency: asset})
+            }).then(r => r.json());
+
+            const step2msg = r2.success ? 'Wallet BTC sold (or was already empty).' : `Step 2 (sell wallet) note: ${r2.error}`;
+            alert(`Done.\nStep 1: Margin position closed.\n${step2msg}`);
+
+            document.getElementById('exchange-position-warning').classList.add('d-none');
+            document.getElementById('orphan-spot-warning')?.classList.add('d-none');
+            checkExchangePositions();
+        } catch(err) {
+            alert('Error: ' + err.message);
+        } finally {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="bi bi-shield-x me-1"></i>Close All + Sell Orphan';
+        }
     }
 
     function dismissExchangePositionWarning() {
