@@ -439,21 +439,22 @@ class OrderExecutor:
             target = spot_tick.bid * (1 + offset_bps)
             # Cap below ask to guarantee maker fill (prevents POST_ONLY rejection)
             max_price = spot_tick.ask * (1 - SAFETY_BUFFER_BPS)
-            spread_order.spot_leg.target_price = round(min(target, max_price), 2)
+            # 8dp keeps sub-cent ticks (DOGE/SHIB) intact; adapter does final tick rounding.
+            spread_order.spot_leg.target_price = round(min(target, max_price), 8)
         else:
             target = spot_tick.ask * (1 - offset_bps)
             # Cap above bid to guarantee maker fill (prevents POST_ONLY rejection)
             min_price = spot_tick.bid * (1 + SAFETY_BUFFER_BPS)
-            spread_order.spot_leg.target_price = round(max(target, min_price), 2)
+            spread_order.spot_leg.target_price = round(max(target, min_price), 8)
 
         if spread_order.futures_leg.side == "BUY":
             target = futures_tick.bid * (1 + offset_bps)
             max_price = futures_tick.ask * (1 - SAFETY_BUFFER_BPS)
-            spread_order.futures_leg.target_price = round(min(target, max_price), 2)
+            spread_order.futures_leg.target_price = round(min(target, max_price), 8)
         else:
             target = futures_tick.ask * (1 - offset_bps)
             min_price = futures_tick.bid * (1 + SAFETY_BUFFER_BPS)
-            spread_order.futures_leg.target_price = round(max(target, min_price), 2)
+            spread_order.futures_leg.target_price = round(max(target, min_price), 8)
 
     async def _place_market_order(
         self,
@@ -1002,10 +1003,11 @@ class OrderExecutor:
         offset = offset_bps / 10000
         if side == "BUY":
             # BUY: start at bid, nudge toward ask
-            return round(tick.bid * (1 + offset), 2)
+            # 8dp preserves sub-cent ticks; adapter applies symbol-specific rounding.
+            return round(tick.bid * (1 + offset), 8)
         else:
             # SELL: start at ask, nudge toward bid
-            return round(tick.ask * (1 - offset), 2)
+            return round(tick.ask * (1 - offset), 8)
 
     def _update_leg_from_result(self, leg: LegOrder, result: OrderResult) -> None:
         """Update leg status from order result."""

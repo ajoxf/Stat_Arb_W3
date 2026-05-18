@@ -272,9 +272,15 @@ class OKXAdapter(ExchangeAdapter):
             if inst_type == "SWAP":
                 # For SWAP: convert quantity to contracts
                 if symbol_info:
-                    ct_val = float(symbol_info.get("contract_val") or 0.01)
-                    if ct_val <= 0:
-                        return OrderResult(success=False, error=f"Invalid contract value {ct_val}")
+                    # ctVal differs per asset (BTC=0.01, ETH=0.1, SOL=1, DOGE=1000).
+                    # No safe default — silently using 0.01 would mis-size every non-BTC swap.
+                    ct_val_raw = symbol_info.get("contract_val")
+                    if ct_val_raw is None or float(ct_val_raw) <= 0:
+                        return OrderResult(
+                            success=False,
+                            error=f"Missing/invalid contract_val for {symbol}; refusing to place SWAP order",
+                        )
+                    ct_val = float(ct_val_raw)
                     # Convert BTC quantity to number of contracts
                     # Use floor (int) not round — rounding up would make futures
                     # larger than the spot leg, creating an unhedged short exposure.
@@ -352,7 +358,10 @@ class OKXAdapter(ExchangeAdapter):
                     rounded_price = round(price, price_decimals)
                     px_str = f"{rounded_price:.{price_decimals}f}"
                 else:
-                    px_str = str(round(price, 2))
+                    # No symbol_info — keep enough precision for sub-cent ticks (DOGE/SHIB).
+                    # OKX will reject if tick mis-aligned; better than silently truncating.
+                    logger.warning("No symbol_info for %s — using 8dp price; verify tick alignment", symbol)
+                    px_str = f"{round(price, 8):.8f}".rstrip("0").rstrip(".")
                 order_data["px"] = px_str
 
             if reduce_only and inst_type == "SWAP":
@@ -1078,7 +1087,16 @@ class OKXAdapter(ExchangeAdapter):
                             ct_val = ct_val_cache.get(inst_id)
                             if ct_val is None:
                                 info = await self.get_symbol_info(inst_id)
-                                ct_val = float(info.get("contract_val")) if info else 0.01
+                                raw = info.get("contract_val") if info else None
+                                if raw is None or float(raw) <= 0:
+                                    logger.warning(
+                                        "Order-history: contract_val missing for %s; "
+                                        "fill_qty_btc/notional_usdt will be 0 for this row",
+                                        inst_id,
+                                    )
+                                    ct_val = 0.0
+                                else:
+                                    ct_val = float(raw)
                                 ct_val_cache[inst_id] = ct_val
                             fill_qty_btc = fill_qty * ct_val
                         else:

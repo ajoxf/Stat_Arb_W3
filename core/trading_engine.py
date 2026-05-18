@@ -186,6 +186,46 @@ class TradingEngine:
         except Exception as e:
             logger.error("Error cleaning up orphan orders: %s", e)
 
+    async def _validate_symbol_specs(self) -> None:
+        """
+        Fetch and log symbol specs (ctVal, tick size, min size) at startup so the
+        user sees immediately whether the configured pair is recognised by the
+        exchange. Failing early beats discovering at first-order time that the
+        symbol is wrong or the ctVal fallback would have mis-sized the trade.
+        """
+        for label, symbol, adapter in (
+            ("SPOT", self.config.spot_symbol, self.spot_adapter),
+            ("FUTURES", self.config.futures_symbol, self.futures_adapter),
+        ):
+            if not adapter or not symbol:
+                continue
+            try:
+                info = await adapter.get_symbol_info(symbol)
+            except Exception as e:
+                logger.error("Symbol spec lookup failed for %s %s: %s", label, symbol, e)
+                continue
+            if not info:
+                logger.error(
+                    "%s symbol %s not recognised by exchange — orders will fail. "
+                    "Check the Settings page.", label, symbol,
+                )
+                continue
+            ct_val = info.get("contract_val")
+            tick = info.get("tick_sz")
+            min_qty = info.get("min_qty")
+            logger.info(
+                "%s spec [%s]: ctVal=%s, tick=%s, minQty=%s",
+                label, symbol, ct_val, tick, min_qty,
+            )
+            # Futures-specific: contract_val must be present and > 0, otherwise
+            # the executor will refuse to place orders.
+            if label == "FUTURES" and (not ct_val or float(ct_val) <= 0):
+                logger.error(
+                    "FUTURES %s has missing/invalid contract_val=%s — SWAP orders "
+                    "will be rejected by the adapter. Pick a different symbol.",
+                    symbol, ct_val,
+                )
+
     async def _apply_leverage_settings(self) -> None:
         """Apply leverage settings to exchange."""
         try:
@@ -326,6 +366,10 @@ class TradingEngine:
                 logger.info("Leverage settings applied")
             except Exception as e:
                 logger.error("Error applying leverage (continuing): %s", e)
+
+        # Validate symbol specs up-front so a misconfigured symbol fails loudly
+        # instead of silently mis-sizing orders later (e.g. ETH ctVal=0.1 vs BTC=0.01).
+        await self._validate_symbol_specs()
 
         # Start WebSocket if configured
         if self._use_websocket and self.ws_manager:

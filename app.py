@@ -1869,12 +1869,18 @@ def open_test_order():
     async def execute_order():
         results = []
 
-        # For futures legs, quantity must be at least 1 contract (ct_val BTC).
-        # Fetch the actual ct_val; fall back to 0.01 (standard BTC-USDT-SWAP).
-        futures_info = None
-        if engine.futures_adapter:
-            futures_info = await engine.futures_adapter.get_symbol_info(config.futures_symbol)
-        ct_val = float(futures_info.get('ct_val', 0.01)) if futures_info else 0.01
+        # For futures legs, quantity must be at least 1 contract (ct_val of base ccy).
+        # Fetch from exchange so this works for any asset (BTC=0.01, ETH=0.1, SOL=1, DOGE=1000).
+        if not engine.futures_adapter:
+            return jsonify({'status': 'error', 'message': 'Futures adapter unavailable'}), 500
+        futures_info = await engine.futures_adapter.get_symbol_info(config.futures_symbol)
+        ct_val = float(futures_info.get('contract_val')) if futures_info else 0
+        if not ct_val or ct_val <= 0:
+            return jsonify({
+                'status': 'error',
+                'message': f"Could not fetch contract size for {config.futures_symbol}. "
+                           f"Verify the symbol is valid on the exchange."
+            }), 400
         futures_qty = max(quantity, ct_val)
 
         if order_type == "BUY_SPOT":
@@ -2831,10 +2837,16 @@ async def run_test_suite():
 
     spot_price = engine.spot_tick.mid if engine.spot_tick else 65000.0
     # Ensure quantity is large enough for at least 1 futures contract.
-    # BTC-USDT-SWAP ctVal = 0.01 BTC → $100 notional at $98k is only 0.1 contracts (below min 1).
+    # ctVal differs per asset (BTC=0.01, ETH=0.1, SOL=1, DOGE=1000) — fetch from exchange.
     futures_info = await engine.futures_adapter.get_symbol_info(config.futures_symbol) if engine.futures_adapter else None
-    ct_val = futures_info.get("contract_val", 0.01) if futures_info else 0.01
-    quantity = max(100.0 / spot_price, ct_val)  # at least 1 contract worth of BTC
+    ct_val = float(futures_info.get("contract_val")) if futures_info else 0
+    if not ct_val or ct_val <= 0:
+        return jsonify({
+            'status': 'error',
+            'message': f"Could not fetch contract size for {config.futures_symbol}. "
+                       f"Verify the symbol is valid on the exchange."
+        }), 400
+    quantity = max(100.0 / spot_price, ct_val)  # at least 1 contract worth of base ccy
 
     for idx, scenario in enumerate(scenarios):
         if _test_suite_cancel:
