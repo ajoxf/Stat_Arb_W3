@@ -708,7 +708,9 @@
                                 <th>Order Type</th>
                                 <th>Qty</th>
                                 <th>Fill Qty</th>
+                                <th title="Fill quantity normalised to BTC (contracts × ctVal for SWAP)">Fill BTC</th>
                                 <th>Fill Price</th>
+                                <th title="Filled notional in USDT">Notional</th>
                                 <th>Leverage</th>
                                 <th>Fee</th>
                                 <th>P&L</th>
@@ -718,7 +720,7 @@
                         </thead>
                         <tbody id="exchange-orders-table">
                             <tr>
-                                <td colspan="14" class="text-center text-secondary py-3">Click Refresh to load exchange orders</td>
+                                <td colspan="16" class="text-center text-secondary py-3">Click Refresh to load exchange orders</td>
                             </tr>
                         </tbody>
                     </table>
@@ -2338,14 +2340,14 @@ function updateFilterStatus(elementId, passed, value) {
     // ========== Exchange Order Log ==========
     function refreshExchangeOrders() {
         const tbody = document.getElementById('exchange-orders-table');
-        tbody.innerHTML = '<tr><td colspan="14" class="text-center text-secondary py-2"><i class="bi bi-hourglass-split me-1"></i>Loading...</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="16" class="text-center text-secondary py-2"><i class="bi bi-hourglass-split me-1"></i>Loading...</td></tr>';
 
         fetch('/api/exchange-orders?limit=100')
             .then(r => r.json())
             .then(data => {
                 const orders = data.orders || [];
                 if (orders.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="14" class="text-center text-secondary py-3">No orders found</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="16" class="text-center text-secondary py-3">No orders found</td></tr>';
                     return;
                 }
 
@@ -2368,7 +2370,9 @@ function updateFilterStatus(elementId, passed, value) {
                         <td>${o.order_type}</td>
                         <td>${o.quantity}</td>
                         <td>${o.fill_qty || '-'}</td>
+                        <td>${o.fill_qty_btc > 0 ? o.fill_qty_btc.toFixed(6) : '-'}</td>
                         <td>${o.fill_price > 0 ? '$' + o.fill_price.toLocaleString() : '-'}</td>
+                        <td>${o.notional_usdt > 0 ? '$' + o.notional_usdt.toLocaleString(undefined, {maximumFractionDigits: 2}) : '-'}</td>
                         <td>${o.leverage ? o.leverage + 'x' : '-'}</td>
                         <td class="${feeClass}">${o.fee !== 0 ? o.fee.toFixed(4) + ' ' + o.fee_ccy : '-'}</td>
                         <td class="${pnlClass}">${o.pnl !== 0 ? '$' + o.pnl.toFixed(4) : '-'}</td>
@@ -2379,7 +2383,7 @@ function updateFilterStatus(elementId, passed, value) {
                 });
             })
             .catch(err => {
-                tbody.innerHTML = `<tr><td colspan="14" class="text-center text-danger py-3">Error: ${err}</td></tr>`;
+                tbody.innerHTML = `<tr><td colspan="16" class="text-center text-danger py-3">Error: ${err}</td></tr>`;
             });
     }
 </script>

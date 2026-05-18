@@ -1416,7 +1416,8 @@ def download_exchange_orders_csv():
             output = io.StringIO()
             if orders:
                 fieldnames = ['created_at', 'symbol', 'inst_type', 'side', 'pos_side',
-                              'order_type', 'quantity', 'fill_qty', 'fill_price',
+                              'order_type', 'quantity', 'fill_qty', 'fill_qty_btc',
+                              'fill_price', 'notional_usdt',
                               'leverage', 'fee', 'fee_ccy', 'pnl', 'state', 'order_id']
                 writer = csv.DictWriter(output, fieldnames=fieldnames, extrasaction='ignore')
                 writer.writeheader()

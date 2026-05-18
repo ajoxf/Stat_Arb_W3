@@ -1047,8 +1047,14 @@ class OKXAdapter(ExchangeAdapter):
         Fetch recent order history from OKX.
 
         Returns filled and cancelled orders for both SPOT and SWAP.
+
+        Each row includes derived `fill_qty_btc` (base-currency size,
+        normalised across SPOT and SWAP) and `notional_usdt` so the log
+        can be audited without remembering OKX's per-instrument unit
+        conventions (SWAP `sz` = contracts; SPOT market-buy `sz` = quote ccy).
         """
         orders = []
+        ct_val_cache: Dict[str, float] = {}
 
         inst_types = ["SPOT", "SWAP"]
         for inst_type in inst_types:
@@ -1064,24 +1070,45 @@ class OKXAdapter(ExchangeAdapter):
                         fee = o.get("fee", "0") or "0"
                         fill_px = o.get("fillPx", "") or o.get("avgPx", "") or "0"
                         fill_sz = o.get("fillSz", "") or o.get("accFillSz", "") or "0"
+                        inst_id = o.get("instId", "")
+                        fill_qty = float(fill_sz)
+                        fill_price = float(fill_px)
+
+                        if inst_type == "SWAP":
+                            ct_val = ct_val_cache.get(inst_id)
+                            if ct_val is None:
+                                info = await self.get_symbol_info(inst_id)
+                                ct_val = float(info.get("contract_val")) if info else 0.01
+                                ct_val_cache[inst_id] = ct_val
+                            fill_qty_btc = fill_qty * ct_val
+                        else:
+                            # OKX returns SPOT fillSz in base currency (BTC) even
+                            # when sz was specified in quote ccy (tgtCcy=quote_ccy).
+                            fill_qty_btc = fill_qty
+
+                        notional_usdt = fill_qty_btc * fill_price
+
                         orders.append({
-                            "order_id":    o.get("ordId", ""),
-                            "symbol":      o.get("instId", ""),
-                            "inst_type":   inst_type,
-                            "side":        o.get("side", ""),       # buy / sell
-                            "pos_side":    o.get("posSide", ""),    # long / short / net
-                            "order_type":  o.get("ordType", ""),    # market / limit
-                            "state":       o.get("state", ""),      # filled / cancelled / live
-                            "quantity":    float(o.get("sz", 0) or 0),
-                            "fill_qty":    float(fill_sz),
-                            "fill_price":  float(fill_px),
-                            "fee":         float(fee),
-                            "fee_ccy":     o.get("feeCcy", ""),
-                            "leverage":    o.get("lever", ""),
-                            "pnl":         float(o.get("pnl", 0) or 0),
-                            "created_at":  o.get("cTime", ""),
-                            "filled_at":   o.get("uTime", ""),
-                            "td_mode":     o.get("tdMode", ""),     # cash / cross / isolated
+                            "order_id":      o.get("ordId", ""),
+                            "symbol":        inst_id,
+                            "inst_type":     inst_type,
+                            "side":          o.get("side", ""),       # buy / sell
+                            "pos_side":      o.get("posSide", ""),    # long / short / net
+                            "order_type":    o.get("ordType", ""),    # market / limit
+                            "state":         o.get("state", ""),      # filled / cancelled / live
+                            "quantity":      float(o.get("sz", 0) or 0),
+                            "fill_qty":      fill_qty,
+                            "fill_qty_btc":  fill_qty_btc,
+                            "fill_price":    fill_price,
+                            "notional_usdt": notional_usdt,
+                            "fee":           float(fee),
+                            "fee_ccy":       o.get("feeCcy", ""),
+                            "leverage":      o.get("lever", ""),
+                            "pnl":           float(o.get("pnl", 0) or 0),
+                            "created_at":    o.get("cTime", ""),
+                            "filled_at":     o.get("uTime", ""),
+                            "td_mode":       o.get("tdMode", ""),     # cash / cross / isolated
+                            "tgt_ccy":       o.get("tgtCcy", ""),     # base_ccy / quote_ccy (SPOT)
                         })
                     except (ValueError, TypeError) as e:
                         logger.debug("Skipping order record due to parse error: %s", e)
