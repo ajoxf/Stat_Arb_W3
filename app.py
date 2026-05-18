@@ -185,7 +185,7 @@ def start_engine_loop():
     # Set up WebSocket streaming if enabled
     use_websocket = os.getenv('USE_WEBSOCKET', 'true').lower() == 'true'
     if use_websocket:
-        is_demo = os.getenv('OKX_DEMO_MODE', 'true').lower() == 'true'
+        is_demo = os.getenv('OKX_DEMO_MODE', 'false').lower() == 'true'
         ws_manager = OKXWebSocketManager(is_demo=is_demo)
         engine.set_websocket_manager(ws_manager)
         logger.debug("WebSocket streaming enabled (demo=%s)", is_demo)
@@ -195,7 +195,7 @@ def start_engine_loop():
     api_key = os.getenv('OKX_API_KEY', '')
     secret_key = os.getenv('OKX_SECRET_KEY', '')
     passphrase = os.getenv('OKX_PASSPHRASE', '')
-    is_demo = os.getenv('OKX_DEMO_MODE', 'true').lower() == 'true'
+    is_demo = os.getenv('OKX_DEMO_MODE', 'false').lower() == 'true'
 
     if api_key and secret_key and passphrase:
         # Create adapter instances - used for account info always, order execution only if not paper trading
@@ -357,7 +357,7 @@ def dashboard():
     """Main trading dashboard."""
     config = db.get_config()
     exchanges = db.get_exchanges()
-    is_demo = os.getenv('OKX_DEMO_MODE', 'true').lower() == 'true'
+    is_demo = os.getenv('OKX_DEMO_MODE', 'false').lower() == 'true'
     return render_template('dashboard.html',
                            config=config,
                            exchanges=exchanges,
@@ -369,7 +369,7 @@ def dashboard():
 def settings():
     """Configuration page."""
     config = db.get_config()
-    is_demo = os.getenv('OKX_DEMO_MODE', 'true').lower() == 'true'
+    is_demo = os.getenv('OKX_DEMO_MODE', 'false').lower() == 'true'
     return render_template('settings.html',
                            config=config,
                            assets=CRYPTO_ASSETS,
@@ -897,7 +897,7 @@ _ACCOUNT_CONFIG_TTL = 60.0  # seconds
 def get_account_info():
     """Get detailed account information including margin requirements."""
     # Determine exchange type and demo mode from environment or adapter
-    is_demo = os.getenv('OKX_DEMO_MODE', 'true').lower() == 'true'
+    is_demo = os.getenv('OKX_DEMO_MODE', 'false').lower() == 'true'
     exchange_type = os.getenv('EXCHANGE_TYPE', 'OKX').upper()
 
     # Check if API keys are configured

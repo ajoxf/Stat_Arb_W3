@@ -20,7 +20,7 @@ class ExchangeAdapter(ABC):
         api_key: str,
         secret_key: str,
         passphrase: str = "",
-        is_testnet: bool = True,
+        is_testnet: bool = False,
     ):
         self.api_key = api_key
         self.secret_key = secret_key

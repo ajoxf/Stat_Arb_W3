@@ -35,12 +35,12 @@ class OKXWebSocket:
     # Heartbeat interval (seconds) - must be < 30s
     HEARTBEAT_INTERVAL = 25
 
-    def __init__(self, is_demo: bool = True):
+    def __init__(self, is_demo: bool = False):
         """
         Initialize OKX WebSocket client.
 
         Args:
-            is_demo: If True, connect to demo/testnet endpoint.
+            is_demo: If True, connect to OKX demo server endpoint.
         """
         self.is_demo = is_demo
         self.ws_url = self.DEMO_WS_URL if is_demo else self.PUBLIC_WS_URL
@@ -357,7 +357,7 @@ class OKXWebSocketManager:
     real-time ticks without managing WebSocket complexity.
     """
 
-    def __init__(self, is_demo: bool = True):
+    def __init__(self, is_demo: bool = False):
         self.ws = OKXWebSocket(is_demo=is_demo)
         self._tick_callbacks: List[Callable[[str, MarketTick], None]] = []
 

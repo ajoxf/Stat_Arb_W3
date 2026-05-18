@@ -12,7 +12,7 @@
                     <i class="bi bi-bank me-2 text-primary"></i>
                     <div>
                         <small class="text-secondary">Exchange</small>
-                        <div class="fw-bold" id="exchange-name">OKX Demo</div>
+                        <div class="fw-bold" id="exchange-name">OKX</div>
                     </div>
                 </div>
             </div>
@@ -2010,10 +2010,17 @@ function updateFilterStatus(elementId, passed, value) {
 
                 const exchangeEl = document.getElementById('exchange-name');
                 if (exchangeEl) {
-                    let status = data.exchange + (data.is_demo ? ' Demo' : '');
-                    if (!data.has_api_keys) status += ' (No API Keys)';
-                    else if (!data.has_adapters) status += ' (Restart Required)';
-                    else if (!data.connected) status += ' (Not Connected)';
+                    let status = data.exchange;
+                    if (data.is_demo) {
+                        status += ' Demo';
+                        exchangeEl.style.color = 'var(--accent-blue)';
+                    } else {
+                        status += ' Live';
+                        exchangeEl.style.color = 'var(--accent-green)';
+                    }
+                    if (!data.has_api_keys) status += ' — No API Keys';
+                    else if (!data.has_adapters) status += ' — Restart Required';
+                    else if (!data.connected) status += ' — Not Connected';
                     exchangeEl.textContent = status;
                 }
 

@@ -36,7 +36,7 @@ class OKXAdapter(ExchangeAdapter):
         api_key: str,
         secret_key: str,
         passphrase: str = "",
-        is_testnet: bool = True,
+        is_testnet: bool = False,
         spot_leverage: int = 1,
     ):
         super().__init__(api_key, secret_key, passphrase, is_testnet)
