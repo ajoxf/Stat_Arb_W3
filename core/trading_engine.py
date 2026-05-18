@@ -87,6 +87,10 @@ class TradingEngine:
         # Execution lock to prevent new trades while one is being executed
         self._executing_trade = False
 
+        # Optional callback invoked when the engine self-corrects config values
+        # (e.g. leverage capped by exchange). Register in app.py to persist to DB.
+        self.on_config_corrected = None
+
         # Tick processing lock: prevents concurrent _process_tick_pair tasks
         # Critical for WebSocket mode where ticks arrive faster than processing
         self._processing_tick = False
@@ -190,6 +194,8 @@ class TradingEngine:
                             logger.warning("Exchange caps leverage at %dx (config=%dx) - adjusting config",
                                           actual, self.config.futures_leverage)
                             self.config.futures_leverage = actual
+                            if self.on_config_corrected:
+                                self.on_config_corrected(self.config)
 
             # Note: Spot margin leverage may require different API calls
             # depending on exchange implementation
@@ -961,6 +967,8 @@ class TradingEngine:
                         logger.warning("Exchange rejected %dx leverage - adjusting config to actual %dx",
                                       self.config.futures_leverage, current_leverage)
                         self.config.futures_leverage = current_leverage
+                        if self.on_config_corrected:
+                            self.on_config_corrected(self.config)
                 else:
                     logger.info("✅ Leverage verified on exchange: %dx matches config", self.config.futures_leverage)
             return True

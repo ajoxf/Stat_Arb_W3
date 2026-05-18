@@ -63,6 +63,9 @@ post_trade_analyzer = PostTradeAnalyzer(db, socketio, auto_tuner=auto_tuner)
 config = db.get_config()
 engine = TradingEngine(config)
 
+# Persist any self-corrected config values (e.g. leverage capped by exchange)
+engine.on_config_corrected = lambda cfg: db.save_config(cfg)
+
 # Async event loop for trading engine
 loop: Optional[asyncio.AbstractEventLoop] = None
 engine_thread: Optional[Thread] = None
@@ -559,16 +562,20 @@ def get_exchange_positions():
                     'is_swap': is_swap,  # hint for UI: SWAP = bot-managed
                 })
 
-            # Compare with engine state
+            # Compare with engine state.
+            # Guard: during entry execution the engine position is still NONE
+            # while the faster futures leg may already be filled on the exchange.
+            # Treat entry-in-progress as "has position" to suppress false alerts.
+            entry_in_progress = getattr(engine, '_executing_trade', False)
             engine_position = engine.state.current_position if engine.state else "NONE"
-            engine_has_position = engine_position != "NONE"
+            engine_has_position = engine_position != "NONE" or entry_in_progress
             exchange_has_position = len(position_list) > 0
 
             # Detect mismatch
             mismatch = False
             mismatch_reason = None
 
-            if engine_has_position and not exchange_has_position:
+            if engine_position != "NONE" and not exchange_has_position:
                 mismatch = True
                 mismatch_reason = "Engine thinks position is open but exchange has no position"
             elif not engine_has_position and exchange_has_position:
@@ -684,10 +691,13 @@ def get_spot_holdings():
                                 'can_sell': available > 0.00000001,
                             })
 
-            # Check if there's an orphan (holding without active position)
+            # Check if there's an orphan (holding without active position).
+            # Guard: during entry execution the position is still NONE but BTC
+            # is legitimately being bought — never flag as orphan mid-execution.
             has_orphan = False
+            entry_in_progress = getattr(engine, '_executing_trade', False)
             for h in holdings:
-                if h['is_trading_asset'] and engine.state.current_position == "NONE":
+                if h['is_trading_asset'] and engine.state.current_position == "NONE" and not entry_in_progress:
                     has_orphan = True
                     h['is_orphan'] = True
 
