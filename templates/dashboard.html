@@ -65,6 +65,28 @@
     </div>
 </div>
 
+<!-- Live Trading Warning Banner -->
+{% if not config.paper_trading and not is_demo %}
+<div class="alert mb-3" id="live-trading-banner" style="background:#1a0000;border:2px solid #dc3545;color:#fff;">
+    <div class="d-flex align-items-center">
+        <i class="bi bi-exclamation-octagon-fill me-2 text-danger" style="font-size:1.4rem;"></i>
+        <div>
+            <strong class="text-danger">LIVE TRADING — REAL FUNDS AT RISK</strong>
+            <div style="font-size:0.82rem;color:#ccc;">
+                Paper Trading is <strong>OFF</strong> and OKX Demo Mode is <strong>OFF</strong>.
+                Orders will execute against real markets. Double-check position size, leverage, and stop-loss before enabling the algo.
+            </div>
+        </div>
+    </div>
+</div>
+{% elif not config.paper_trading and is_demo %}
+<div class="alert alert-warning mb-3" id="live-trading-banner">
+    <i class="bi bi-exclamation-triangle-fill me-2"></i>
+    <strong>Paper Trading OFF</strong> — but OKX Demo Mode is still active (simulated fills, no real funds).
+    Set <code>OKX_DEMO_MODE=false</code> in <code>.env</code> to enable real order execution.
+</div>
+{% endif %}
+
 <!-- Orphaned Spot Warning Banner -->
 <div class="alert alert-warning mb-3 d-none" id="orphan-warning">
     <div class="d-flex align-items-center justify-content-between">

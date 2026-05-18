@@ -357,19 +357,23 @@ def dashboard():
     """Main trading dashboard."""
     config = db.get_config()
     exchanges = db.get_exchanges()
+    is_demo = os.getenv('OKX_DEMO_MODE', 'true').lower() == 'true'
     return render_template('dashboard.html',
                            config=config,
                            exchanges=exchanges,
-                           assets=CRYPTO_ASSETS)
+                           assets=CRYPTO_ASSETS,
+                           is_demo=is_demo)
 
 
 @app.route('/settings')
 def settings():
     """Configuration page."""
     config = db.get_config()
+    is_demo = os.getenv('OKX_DEMO_MODE', 'true').lower() == 'true'
     return render_template('settings.html',
                            config=config,
-                           assets=CRYPTO_ASSETS)
+                           assets=CRYPTO_ASSETS,
+                           is_demo=is_demo)
 
 
 @app.route('/setup')

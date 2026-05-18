@@ -22,6 +22,11 @@ from adapters.okx_websocket import OKXWebSocketManager
 
 logger = logging.getLogger(__name__)
 
+# Hard safety cap on futures leverage to prevent accidental over-leveraging.
+# OKX technically allows up to 125x on BTC, but statistical arbitrage has
+# correlated legs that reduce net risk — 25x on the futures leg is already generous.
+MAX_SAFE_FUTURES_LEVERAGE = 25
+
 
 @dataclass
 class EngineState:
@@ -176,6 +181,14 @@ class TradingEngine:
     async def _apply_leverage_settings(self) -> None:
         """Apply leverage settings to exchange."""
         try:
+            # Enforce safety cap before touching the exchange
+            if self.config.futures_leverage > MAX_SAFE_FUTURES_LEVERAGE:
+                logger.warning("Futures leverage %dx exceeds safety cap of %dx — capping",
+                               self.config.futures_leverage, MAX_SAFE_FUTURES_LEVERAGE)
+                self.config.futures_leverage = MAX_SAFE_FUTURES_LEVERAGE
+                if self.on_config_corrected:
+                    self.on_config_corrected(self.config)
+
             # Set futures leverage
             if self.futures_adapter and hasattr(self.futures_adapter, 'set_leverage'):
                 success = await self.futures_adapter.set_leverage(
@@ -592,6 +605,19 @@ class TradingEngine:
         spot_price = self.spot_tick.mid
         futures_price = self.futures_tick.mid
 
+        # Guard: position size must not exceed configured max
+        max_size = getattr(self.config, 'max_position_size_usd', float('inf'))
+        if self.config.position_size_usd > max_size:
+            logger.error("Position size $%.0f exceeds max $%.0f — blocking entry",
+                         self.config.position_size_usd, max_size)
+            self.signal_generator.last_blocked_signal = {
+                'timestamp': datetime.utcnow().isoformat(),
+                'would_be_signal': signal.signal_type,
+                'zscore': round(signal.zscore, 4),
+                'reason': f"position_size_usd (${self.config.position_size_usd:.0f}) > max (${max_size:.0f})",
+            }
+            return
+
         # Calculate quantity
         quantity = self.config.position_size_usd / spot_price
 
@@ -947,6 +973,14 @@ class TradingEngine:
         """
         if not self.futures_adapter:
             return True
+
+        # Enforce safety cap before any exchange interaction
+        if self.config.futures_leverage > MAX_SAFE_FUTURES_LEVERAGE:
+            logger.warning("Leverage %dx exceeds safety cap %dx — capping before verify",
+                           self.config.futures_leverage, MAX_SAFE_FUTURES_LEVERAGE)
+            self.config.futures_leverage = MAX_SAFE_FUTURES_LEVERAGE
+            if self.on_config_corrected:
+                self.on_config_corrected(self.config)
 
         try:
             # Check current leverage on futures

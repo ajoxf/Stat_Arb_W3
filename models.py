@@ -72,7 +72,7 @@ class TradingConfig:
     hurst_enabled: bool = True
     hurst_threshold: float = 0.5  # H < 0.5 = mean reverting
     std_filter_enabled: bool = True
-    min_std_multiple: float = 1.2  # STD must be > costs * multiple
+    min_std_multiple: float = 0.9  # STD must be > costs * multiple (0.9 = just above break-even)
 
     # Position sizing
     position_size_usd: float = 1000.0
@@ -116,9 +116,9 @@ class TradingConfig:
     orphan_recovery_timeout_sec: int = 60  # Seconds to try filling orphan leg as maker
 
     # Slippage estimate per leg (applied to all 4 legs: spot+futures × entry+exit)
-    # LIMIT orders: ~2-3 bps queue/amendment slippage
+    # LIMIT orders: ~1-2 bps queue/amendment slippage on liquid markets (BTC/ETH)
     # MARKET orders: ~5-10 bps market impact, more in high-vol conditions
-    slippage_bps: float = 3.0
+    slippage_bps: float = 1.5
 
     # Self-learning: automatically apply Claude's parameter recommendations
     auto_tune_enabled: bool = False

@@ -208,14 +208,14 @@
                             <select class="form-select" id="futures_leverage" name="futures_leverage">
                                 <option value="1" {% if config.futures_leverage == 1 %}selected{% endif %}>1x</option>
                                 <option value="2" {% if config.futures_leverage == 2 %}selected{% endif %}>2x</option>
-                                <option value="3" {% if config.futures_leverage == 3 %}selected{% endif %}>3x</option>
+                                <option value="3" {% if config.futures_leverage == 3 %}selected{% endif %}>3x (recommended)</option>
                                 <option value="5" {% if config.futures_leverage == 5 %}selected{% endif %}>5x</option>
                                 <option value="10" {% if config.futures_leverage == 10 %}selected{% endif %}>10x</option>
+                                <option value="15" {% if config.futures_leverage == 15 %}selected{% endif %}>15x</option>
                                 <option value="20" {% if config.futures_leverage == 20 %}selected{% endif %}>20x</option>
-                                <option value="50" {% if config.futures_leverage == 50 %}selected{% endif %}>50x</option>
-                                <option value="100" {% if config.futures_leverage == 100 %}selected{% endif %}>100x</option>
+                                <option value="25" {% if config.futures_leverage == 25 %}selected{% endif %}>25x (max allowed)</option>
                             </select>
-                            <small class="text-secondary">Leverage for perpetual futures</small>
+                            <small class="text-secondary">Futures leverage — engine hard-caps at 25x for safety</small>
                         </div>
                     </div>
 
@@ -280,17 +280,32 @@
                     <hr class="my-4" style="border-color: var(--border-color);">
 
                     <!-- Trading Mode -->
-                    <div class="row mb-4">
+                    <div class="row mb-3">
                         <div class="col-12">
                             <h6 class="text-secondary mb-3">Trading Mode</h6>
                         </div>
                         <div class="col-md-6">
                             <div class="form-check form-switch">
-                                <input class="form-check-input" type="checkbox" id="paper_trading" name="paper_trading" {% if config.paper_trading %}checked{% endif %}>
+                                <input class="form-check-input" type="checkbox" id="paper_trading" name="paper_trading" {% if config.paper_trading %}checked{% endif %} onchange="toggleLiveChecklist(this)">
                                 <label class="form-check-label" for="paper_trading">Paper Trading Mode</label>
                             </div>
                             <small class="text-secondary">Simulate trades without real orders</small>
                         </div>
+                    </div>
+
+                    <!-- Live Trading Checklist (shown when Paper Trading is turned OFF) -->
+                    <div id="live-trading-checklist" class="alert alert-danger mb-3" style="display:{% if not config.paper_trading %}block{% else %}none{% endif %};">
+                        <h6 class="mb-2"><i class="bi bi-exclamation-octagon-fill me-2"></i>Live Trading Pre-Flight Checklist</h6>
+                        <ul class="mb-2" style="font-size:0.85rem;">
+                            <li>Set <code>OKX_DEMO_MODE=false</code> in your <code>.env</code> file and restart the server</li>
+                            <li>Verify your OKX API key has <strong>Trade</strong> permissions (not read-only)</li>
+                            <li>Confirm <strong>position size</strong> and <strong>max position size</strong> below match your risk budget</li>
+                            <li>Confirm <strong>futures leverage</strong> is ≤ 5x for a new live account</li>
+                            <li>Set a <strong>stop-loss threshold</strong> (e.g. 3.5–4.0σ) — never disable it in live mode</li>
+                            <li>Hurst filter should remain <strong>enabled</strong> to avoid trending markets</li>
+                            <li>Monitor closely for the first 24 hours after going live</li>
+                        </ul>
+                        <small class="text-danger"><strong>Warning:</strong> Disabling Paper Trading sends real orders to the exchange. Confirm OKX_DEMO_MODE in your <code>.env</code> matches your intent.</small>
                     </div>
 
                     <hr class="my-4" style="border-color: var(--border-color);">
@@ -633,18 +648,25 @@
                     </small>
                 </div>
 
-                <!-- Demo/Live Toggle -->
+                <!-- OKX Demo Mode Status (read-only — controlled by .env) -->
                 <div class="mb-4">
-                    <div class="form-check form-switch">
-                        <input class="form-check-input" type="checkbox" id="api_demo_mode" checked>
-                        <label class="form-check-label" for="api_demo_mode">
-                            <strong>Demo Trading Mode</strong>
-                            <span class="text-muted">(Use OKX Demo account for testing)</span>
-                        </label>
+                    <div class="d-flex align-items-center gap-2 mb-1">
+                        <strong>OKX Server Mode:</strong>
+                        {% if is_demo %}
+                        <span class="badge bg-warning text-dark"><i class="bi bi-cloud-slash me-1"></i>DEMO SERVER</span>
+                        {% else %}
+                        <span class="badge bg-danger"><i class="bi bi-cloud-fill me-1"></i>LIVE SERVER</span>
+                        {% endif %}
                     </div>
-                    <small class="text-secondary d-block mt-1">
-                        <i class="bi bi-info-circle me-1"></i>
-                        Enable this to use OKX Demo trading. Disable for live trading with real funds.
+                    <small class="text-secondary d-block">
+                        Controlled by <code>OKX_DEMO_MODE</code> in your <code>.env</code> file (requires server restart).
+                        {% if is_demo %}
+                        Currently <strong>demo</strong> — orders go to OKX demo exchange (simulated fills, no real money).
+                        Set <code>OKX_DEMO_MODE=false</code> to connect to the live exchange.
+                        {% else %}
+                        Currently <strong>live</strong> — orders execute against the real OKX exchange.
+                        Set <code>OKX_DEMO_MODE=true</code> to switch back to demo mode.
+                        {% endif %}
                     </small>
                 </div>
 
@@ -769,6 +791,14 @@
             document.getElementById('futures_symbol').value = assetSymbols[asset].futures;
         }
     });
+
+    // Show/hide live trading checklist when paper trading toggle changes
+    function toggleLiveChecklist(checkbox) {
+        const checklist = document.getElementById('live-trading-checklist');
+        if (checklist) {
+            checklist.style.display = checkbox.checked ? 'none' : 'block';
+        }
+    }
 
     // Toggle limit order settings visibility based on entry/exit modes
     function updateLimitSettingsVisibility() {
