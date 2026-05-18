@@ -226,6 +226,7 @@ class OKXAdapter(ExchangeAdapter):
         reduce_only: bool = False,
         pos_side: Optional[str] = None,
         notional_usdt: Optional[float] = None,
+        force_td_mode: Optional[str] = None,
     ) -> OrderResult:
         """
         Place an order.
@@ -241,6 +242,8 @@ class OKXAdapter(ExchangeAdapter):
             # Determine instrument type and trade mode
             inst_type = "SWAP" if "-SWAP" in symbol else "SPOT"
             td_mode = "cross" if inst_type == "SWAP" else self._spot_td_mode
+            if force_td_mode:
+                td_mode = force_td_mode
 
             # Get symbol info for size validation and formatting
             symbol_info = await self.get_symbol_info(symbol)
@@ -1144,12 +1147,15 @@ class OKXAdapter(ExchangeAdapter):
             if quantity < min_qty:
                 return OrderResult(success=False, error=f"Quantity {quantity} below minimum {min_qty}")
 
-            # Place market sell order
+            # Always use tdMode=cash here — we're selling actual holdings, not margin trading.
+            # Using tdMode=cross when wallet BTC is empty would open a new SHORT (OKX borrows
+            # BTC to fill the sell), creating an infinite close→SHORT→close cycle.
             result = await self.place_order(
                 symbol=symbol,
                 side="SELL",
                 order_type="MARKET",
                 quantity=quantity,
+                force_td_mode="cash",
             )
 
             if result.success:
