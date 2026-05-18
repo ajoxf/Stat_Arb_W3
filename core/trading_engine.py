@@ -1252,12 +1252,11 @@ class TradingEngine:
                 logger.info("Exit orders executed: mode=%s", self.config.order_execution_mode)
                 return True
             else:
-                error = "Exit spread order failed or incomplete"
                 if spread_order and spread_order.has_partial_fill:
-                    error = "Exit order had partial fill - leg risk handled"
-                logger.error(error)
-                # Still return True since leg risk is handled
-                return True
+                    logger.warning("Exit order had partial fill - leg risk handled, treating as closed")
+                    return True
+                logger.error("Exit spread order failed or incomplete — leaving position open for retry")
+                return False
 
         except Exception as e:
             logger.exception("Error executing exit orders: %s", e)
