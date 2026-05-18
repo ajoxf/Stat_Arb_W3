@@ -233,8 +233,8 @@
                         <div class="metric-label mt-1">Position</div>
                     </div>
                 </div>
-                <div id="position-details" class="mt-2 pt-2" style="display: none; border-top: 1px solid var(--border-color); font-size: 0.8rem;">
-                    <div class="row">
+                <div id="position-details" class="mt-2 pt-2" style="display: none; border-top: 1px solid var(--border-color); font-size: 0.78rem;">
+                    <div class="row mb-1">
                         <div class="col-6">
                             <span class="text-secondary">Entry Z:</span>
                             <span id="position-entry-z">-</span>
@@ -242,6 +242,26 @@
                         <div class="col-6">
                             <span class="text-secondary">P&L:</span>
                             <span id="position-pnl">-</span>
+                        </div>
+                    </div>
+                    <div class="row mb-1">
+                        <div class="col-6">
+                            <span class="text-secondary">Spot Entry:</span>
+                            <span id="position-entry-spot">-</span>
+                        </div>
+                        <div class="col-6">
+                            <span class="text-secondary">Fut Entry:</span>
+                            <span id="position-entry-futures">-</span>
+                        </div>
+                    </div>
+                    <div class="row">
+                        <div class="col-6">
+                            <span class="text-secondary">Age:</span>
+                            <span id="position-age" class="font-monospace">-</span>
+                        </div>
+                        <div class="col-6">
+                            <span class="text-secondary">Size:</span>
+                            <span id="position-notional">-</span>
                         </div>
                     </div>
                 </div>
@@ -838,6 +858,8 @@
         entryFuturesPrice: 0,
         notionalUsd: 0
     };
+    // Open trade detail (from API status or trade socket event)
+    let currentOpenTrade = null;
     // Configured leverage (from settings)
     const configuredSpotLeverage = {{ config.spot_leverage }};
     const configuredFuturesLeverage = {{ config.futures_leverage }};
@@ -870,12 +892,15 @@
                 entryFuturesPrice: data.entry_futures_price || 0,
                 notionalUsd: data.notional_usd || 0
             };
+            currentOpenTrade = data;
             updateMarginDisplay(currentPosition.entrySpotPrice, currentPosition.entryFuturesPrice);
         } else {
             // Position closed
             currentPosition = { type: 'NONE', quantity: 0, entrySpotPrice: 0, entryFuturesPrice: 0, notionalUsd: 0 };
+            currentOpenTrade = null;
             updateMarginDisplay(0, 0);
         }
+        updatePosition(data.is_open ? data.position_type : 'NONE');
     });
 
     // ══════════════════════════════════════════════════════════════════
@@ -1120,6 +1145,9 @@
                         updateSignal(data.signal);
                         updateCharts(data.signal);
                     }
+                    // Sync open trade details for position detail panel
+                    currentOpenTrade = data.open_trade || null;
+                    updatePosition(data.position || 'NONE');
                     // Update stop-loss cooldown indicator
                     const cooldownIndicator = document.getElementById('sl-cooldown-indicator');
                     const cooldownSecs = document.getElementById('sl-cooldown-secs');
@@ -1494,6 +1522,7 @@ function updateFilterStatus(elementId, passed, value) {
             badge.style.padding = '0.4rem 0.8rem';
             details.style.display = 'none';
             if (closeBtn) closeBtn.style.display = 'none';
+            _positionEntryTime = null;
         } else {
             badge.textContent = position;
             badge.className = 'badge ' + (position === 'LONG' ? 'badge-long' : 'badge-short');
@@ -1501,8 +1530,56 @@ function updateFilterStatus(elementId, passed, value) {
             badge.style.padding = '0.4rem 0.8rem';
             details.style.display = 'block';
             if (closeBtn) closeBtn.style.display = 'inline-block';
+
+            // Populate detail fields from currentOpenTrade
+            const t = currentOpenTrade;
+            if (t) {
+                const entryZEl = document.getElementById('position-entry-z');
+                if (entryZEl) entryZEl.textContent = t.entry_zscore != null ? parseFloat(t.entry_zscore).toFixed(3) : '-';
+
+                const pnlEl = document.getElementById('position-pnl');
+                if (pnlEl) {
+                    const pnl = t.unrealized_pnl != null ? parseFloat(t.unrealized_pnl) : null;
+                    if (pnl != null) {
+                        pnlEl.textContent = (pnl >= 0 ? '+$' : '-$') + Math.abs(pnl).toFixed(2);
+                        pnlEl.className = pnl >= 0 ? 'price-up' : 'price-down';
+                    } else {
+                        pnlEl.textContent = '-';
+                        pnlEl.className = '';
+                    }
+                }
+
+                const spotEntryEl = document.getElementById('position-entry-spot');
+                if (spotEntryEl) spotEntryEl.textContent = t.entry_spot_price ? '$' + parseFloat(t.entry_spot_price).toFixed(2) : '-';
+
+                const futEntryEl = document.getElementById('position-entry-futures');
+                if (futEntryEl) futEntryEl.textContent = t.entry_futures_price ? '$' + parseFloat(t.entry_futures_price).toFixed(2) : '-';
+
+                const notionalEl = document.getElementById('position-notional');
+                if (notionalEl) notionalEl.textContent = t.notional_usd ? '$' + parseFloat(t.notional_usd).toFixed(0) : '-';
+
+                // Store entry time for age ticker
+                _positionEntryTime = t.entry_time ? new Date(t.entry_time + 'Z') : null;
+            }
         }
     }
+
+    // Position age ticker state
+    let _positionEntryTime = null;
+    function _formatAge(ms) {
+        const s = Math.floor(ms / 1000);
+        if (s < 60) return s + 's';
+        const m = Math.floor(s / 60);
+        if (m < 60) return m + 'm ' + (s % 60) + 's';
+        const h = Math.floor(m / 60);
+        return h + 'h ' + (m % 60) + 'm';
+    }
+    setInterval(function() {
+        const ageEl = document.getElementById('position-age');
+        if (ageEl && _positionEntryTime) {
+            ageEl.textContent = _formatAge(Date.now() - _positionEntryTime.getTime());
+        }
+    }, 1000);
 
     function updateTradingStatus(dataPoints, lookback, dataReady, hurstOk, stdOk) {
         const statusCard = document.getElementById('trading-status-card');
@@ -1618,7 +1695,7 @@ function updateFilterStatus(elementId, passed, value) {
         .then(trades => {
             trades.reverse().forEach(trade => addTradeToTable(trade));
 
-            // Check for open position to initialize margin display
+            // Check for open position to initialize margin display and detail panel
             const openTrade = trades.find(t => t.is_open);
             if (openTrade) {
                 currentPosition = {
@@ -1628,6 +1705,8 @@ function updateFilterStatus(elementId, passed, value) {
                     entryFuturesPrice: openTrade.entry_futures_price || 0,
                     notionalUsd: openTrade.notional_usd || 0
                 };
+                currentOpenTrade = openTrade;
+                updatePosition(openTrade.position_type);
                 updateMarginDisplay(currentPosition.entrySpotPrice, currentPosition.entryFuturesPrice);
             }
         });
@@ -2037,11 +2116,11 @@ function updateFilterStatus(elementId, passed, value) {
     updateAccountInfo();
     setInterval(updateAccountInfo, 5000);
 
-    // Check for orphaned spots every 30 seconds
+    // Check for orphaned spots every 5 seconds (live trading needs rapid detection)
     checkOrphanedSpots();
-    setInterval(checkOrphanedSpots, 30000);
+    setInterval(checkOrphanedSpots, 5000);
 
-    // Check for exchange position mismatches every 30 seconds
+    // Check for exchange position mismatches every 5 seconds
     checkExchangePositions();
     setInterval(checkExchangePositions, 30000);
 

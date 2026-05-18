@@ -121,7 +121,7 @@ class OKXAdapter(ExchangeAdapter):
         params: Optional[Dict] = None,
         data: Optional[Dict] = None,
     ) -> Optional[Dict]:
-        """Make API request."""
+        """Make API request with automatic 429 retry (up to 3 attempts)."""
         if not self._session:
             self._session = aiohttp.ClientSession()
 
@@ -134,31 +134,49 @@ class OKXAdapter(ExchangeAdapter):
 
         headers = self._get_headers(method, path, body)
 
-        try:
-            async with self._session.request(
-                method, url, headers=headers, data=body if data else None
-            ) as response:
-                result = await response.json()
+        for attempt in range(3):
+            try:
+                async with self._session.request(
+                    method, url, headers=headers, data=body if data else None
+                ) as response:
+                    # Retry on HTTP 429 (rate limit)
+                    if response.status == 429:
+                        retry_after = float(response.headers.get("Retry-After", 1))
+                        wait = max(retry_after, 2 ** attempt)
+                        logger.warning("OKX rate limit (429) on %s %s — retrying in %.1fs", method, path, wait)
+                        await asyncio.sleep(wait)
+                        continue
 
-                if result.get("code") != "0":
-                    error = result.get("msg", "Unknown error")
-                    # Get detailed error from data array
-                    data_arr = result.get("data", [])
-                    if data_arr and isinstance(data_arr, list) and len(data_arr) > 0:
-                        sub_code = data_arr[0].get("sCode", "")
-                        sub_msg = data_arr[0].get("sMsg", "")
-                        if sub_code or sub_msg:
-                            error = f"{error} (sCode={sub_code}: {sub_msg})"
-                    logger.warning("OKX API error [%s %s]: %s | Full response: %s",
-                                   method, path, error, result)
-                    self._set_error(error)
+                    result = await response.json()
 
-                return result
+                    # OKX also returns rate-limit errors inside JSON (code=50011 / 50013)
+                    if result.get("code") in ("50011", "50013") and attempt < 2:
+                        wait = 2 ** (attempt + 1)
+                        logger.warning("OKX JSON rate limit code=%s — retrying in %.1fs", result.get("code"), wait)
+                        await asyncio.sleep(wait)
+                        continue
 
-        except Exception as e:
-            logger.exception("OKX request error: %s %s", method, path)
-            self._set_error(str(e))
-            return None
+                    if result.get("code") != "0":
+                        error = result.get("msg", "Unknown error")
+                        data_arr = result.get("data", [])
+                        if data_arr and isinstance(data_arr, list) and len(data_arr) > 0:
+                            sub_code = data_arr[0].get("sCode", "")
+                            sub_msg = data_arr[0].get("sMsg", "")
+                            if sub_code or sub_msg:
+                                error = f"{error} (sCode={sub_code}: {sub_msg})"
+                        logger.warning("OKX API error [%s %s]: %s | Full response: %s",
+                                       method, path, error, result)
+                        self._set_error(error)
+
+                    return result
+
+            except Exception as e:
+                logger.exception("OKX request error: %s %s", method, path)
+                self._set_error(str(e))
+                return None
+
+        logger.error("OKX request %s %s exhausted retries", method, path)
+        return None
 
     async def get_tick(self, symbol: str) -> Optional[MarketTick]:
         """Get current market tick."""
@@ -253,7 +271,7 @@ class OKXAdapter(ExchangeAdapter):
             if inst_type == "SWAP":
                 # For SWAP: convert quantity to contracts
                 if symbol_info:
-                    ct_val = symbol_info.get("contract_val", 0.01)
+                    ct_val = float(symbol_info.get("contract_val") or 0.01)
                     if ct_val <= 0:
                         return OrderResult(success=False, error=f"Invalid contract value {ct_val}")
                     # Convert BTC quantity to number of contracts
@@ -584,12 +602,17 @@ class OKXAdapter(ExchangeAdapter):
                         # OKX returns 'pos' in *posCcy* units for MARGIN positions:
                         #   LONG  (bought base): posCcy = base (BTC), pos = +BTC qty
                         #   SHORT (sold base):   posCcy = quote (USDT), pos = +USDT received
-                        # Normalise to base-currency quantity with explicit side.
+                        # Some OKX responses omit posCcy; fall back to posSide field.
                         base_ccy = inst_id.split("-")[0]  # "BTC" from "BTC-USDT"
+                        pos_side_field = p.get("posSide", "")  # "long", "short", or ""
                         if pos_ccy and pos_ccy != base_ccy:
-                            # SHORT: pos is USDT-denominated → convert to base
+                            # posCcy is quote currency → SHORT
                             side = "SHORT"
                             qty  = (pos_raw / avg_px) if avg_px > 0 else 0.0
+                        elif pos_side_field.lower() == "short":
+                            # posCcy absent or ambiguous but posSide says short
+                            side = "SHORT"
+                            qty  = (pos_raw / avg_px) if avg_px > 0 else abs(pos_raw)
                         else:
                             # LONG: pos is already in base currency
                             side = "LONG"
@@ -712,11 +735,20 @@ class OKXAdapter(ExchangeAdapter):
                 "instId": symbol,
                 "mgnMode": "cross",
             }
-            is_swap = any(x in symbol for x in ("-SWAP", "-FUTURES", "-PERP"))
-            if not is_swap:
+            is_perp = any(x in symbol for x in ("-SWAP", "-FUTURES", "-PERP"))
+            if not is_perp:
                 parts = symbol.split("-")
                 if len(parts) >= 2:
                     close_data["ccy"] = parts[-1]  # e.g. "USDT"
+
+            # In long/short mode OKX accounts posSide is required for close-position.
+            # Detect account mode and supply it so the close doesn't fail with
+            # "posSide cannot be empty".
+            account_config = await self.get_account_config()
+            if account_config and account_config.get("position_mode") == "long_short_mode":
+                # Map position side to OKX posSide value
+                close_data["posSide"] = "long" if pos.side == "LONG" else "short"
+                logger.info("long_short_mode: adding posSide=%s to close-position", close_data["posSide"])
 
             result = await self._request(
                 "POST",

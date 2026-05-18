@@ -389,6 +389,29 @@
         // Algo toggle
         document.getElementById('algoSwitch').addEventListener('change', function() {
             const enabled = this.checked;
+
+            if (enabled) {
+                // Determine trading mode from the mode badge
+                const modeBadge = document.getElementById('paper-mode');
+                const modeText = modeBadge ? modeBadge.textContent.trim() : 'PAPER';
+                const isLive = modeText === 'LIVE';
+                const isDemo = modeText === 'DEMO SERVER';
+
+                let confirmMsg;
+                if (isLive) {
+                    confirmMsg = '⚠️ LIVE TRADING\n\nThis will send REAL orders to the OKX exchange with real funds.\n\nVerify:\n• Position size and leverage are correct\n• Stop-loss threshold is set\n• API key has Trade permission\n\nEnable algo?';
+                } else if (isDemo) {
+                    confirmMsg = 'Enable algo trading?\n\nOrders will go to the OKX Demo exchange (simulated fills, no real funds).';
+                } else {
+                    confirmMsg = 'Enable algo trading?\n\nRunning in Paper Trading mode — no real orders will be placed.';
+                }
+
+                if (!confirm(confirmMsg)) {
+                    this.checked = false;
+                    return;
+                }
+            }
+
             fetch('/api/engine/toggle-algo', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},

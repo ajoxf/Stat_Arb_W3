@@ -102,10 +102,10 @@ class TradingEngine:
 
         # Position reconciliation tracking
         self._last_position_verify: Optional[datetime] = None
-        self._position_verify_interval = 60  # seconds between checks
+        self._position_verify_interval = 20  # seconds between checks (was 60 — live needs faster)
         self._position_mismatch: Optional[Dict[str, Any]] = None
         self._orphan_mismatch_count: int = 0  # consecutive detections of orphan futures
-        self._orphan_auto_close_threshold: int = 3  # close after 3 min of detected orphan
+        self._orphan_auto_close_threshold: int = 3  # close after ~60s (3 × 20s intervals)
 
         # Order execution tracking for pattern detection
         self._spot_order_attempts = 0

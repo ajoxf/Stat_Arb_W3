@@ -337,6 +337,9 @@ class OKXWebSocket:
             await asyncio.sleep(retry_delay)
 
             if await self.connect():
+                # Discard stale cached ticks from before the disconnect so the
+                # engine never acts on prices that could be seconds/minutes old.
+                self._ticks.clear()
                 # Resubscribe to previously subscribed instruments
                 if self._subscribed:
                     await self.subscribe(list(self._subscribed))
