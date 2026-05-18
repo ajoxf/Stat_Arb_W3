@@ -96,6 +96,10 @@ class TradingEngine:
         # Execution lock to prevent new trades while one is being executed
         self._executing_trade = False
 
+        # Exit retry throttle — don't hammer the exchange on consecutive failures
+        self._last_exit_attempt: Optional[datetime] = None
+        self._exit_retry_interval_sec = 10
+
         # Optional callback invoked when the engine self-corrects config values
         # (e.g. leverage capped by exchange). Register in app.py to persist to DB.
         self.on_config_corrected = None
@@ -724,6 +728,12 @@ class TradingEngine:
             logger.warning("No tick data available")
             return
 
+        # Throttle exit retries — after a failure don't hammer exchange every tick
+        if not self.state.paper_trading and self._last_exit_attempt:
+            elapsed = (datetime.utcnow() - self._last_exit_attempt).total_seconds()
+            if elapsed < self._exit_retry_interval_sec:
+                return
+
         trade = self.open_trade
         spot_price = self.spot_tick.mid
         futures_price = self.futures_tick.mid
@@ -760,6 +770,7 @@ class TradingEngine:
         # silently leaving an unclosed position on the exchange.
         if not self.state.paper_trading:
             self._executing_trade = True
+            self._last_exit_attempt = datetime.utcnow()
             try:
                 exit_ok = await self._execute_exit_orders(trade, signal)
             except Exception as exc:
@@ -773,8 +784,9 @@ class TradingEngine:
                     "Exit orders FAILED for %s position — leaving position open for retry",
                     trade.position_type,
                 )
-                return  # Do NOT reset state; engine retries on next signal
+                return  # Do NOT reset state; engine retries after _exit_retry_interval_sec
 
+        self._last_exit_attempt = None  # Clear throttle on success
         trade.is_open = False
 
         logger.info("Closed %s position: pnl=$%.2f (%.2f%%), reason=%s, zscore=%.4f",
@@ -913,9 +925,28 @@ class TradingEngine:
             if engine_has_position and not exchange_has_position:
                 result['mismatch'] = True
                 result['mismatch_reason'] = "Engine shows position but exchange has none (manually closed?)"
-                logger.warning("Position mismatch: Engine=%s but exchange has no positions",
-                             self.state.current_position)
-                self._orphan_mismatch_count = 0  # not an orphan scenario
+                self._orphan_mismatch_count += 1
+                logger.warning(
+                    "Position mismatch: Engine=%s but exchange has no positions [count=%d/%d]",
+                    self.state.current_position,
+                    self._orphan_mismatch_count, self._orphan_auto_close_threshold,
+                )
+                if self._orphan_mismatch_count >= self._orphan_auto_close_threshold:
+                    logger.critical(
+                        "Exchange flat for %d consecutive checks — force-clearing engine %s state",
+                        self._orphan_mismatch_count, self.state.current_position,
+                    )
+                    if self.open_trade:
+                        self.open_trade.is_open = False
+                        self.open_trade.exit_reason = "MISMATCH_AUTO_CLEAR"
+                    self.state.current_position = "NONE"
+                    self.open_trade = None
+                    self._last_exit_attempt = None
+                    self._orphan_mismatch_count = 0
+                    get_notifier().notify_error(
+                        "Engine position force-cleared: exchange showed flat for "
+                        f"{self._orphan_auto_close_threshold} consecutive checks"
+                    )
 
             elif not engine_has_position and exchange_has_position:
                 result['mismatch'] = True

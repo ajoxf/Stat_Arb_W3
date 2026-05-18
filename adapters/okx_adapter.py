@@ -459,13 +459,19 @@ class OKXAdapter(ExchangeAdapter):
                 # Log full error details
                 error = result.get("msg", "Unknown error") if result else "No response"
                 data_errors = result.get("data", []) if result else []
+                already_flat = False
                 if data_errors and isinstance(data_errors, list) and len(data_errors) > 0:
                     sub_error = data_errors[0].get("sMsg", "") or data_errors[0].get("sCode", "")
                     if sub_error:
                         error = f"{error}: {sub_error}"
+                    # sCode 51169: no position in this direction — futures already closed
+                    already_flat = any(
+                        str(d.get("sCode", "")) == "51169"
+                        for d in data_errors if isinstance(d, dict)
+                    )
                 logger.error("Order failed: %s | Request: %s | Response: %s",
                             error, order_data, result)
-                return OrderResult(success=False, error=error)
+                return OrderResult(success=False, error=error, already_flat=already_flat)
 
         except Exception as e:
             logger.exception("Error placing OKX order")
