@@ -305,6 +305,7 @@ def on_signal_callback(signal: Signal):
         signal_data['data_ready'] = sg_state.get('data_ready', False)
         signal_data['std_ratio'] = sg_state.get('std_ratio')
         signal_data['std_ratio_required'] = sg_state.get('std_ratio_required')
+        signal_data['last_blocked_signal'] = sg_state.get('last_blocked_signal')
         socketio.emit('signal', signal_data, namespace='/')
     except Exception as e:
         logger.error("Error emitting signal: %s", e)
