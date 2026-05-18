@@ -709,15 +709,28 @@ class TradingEngine:
         trade.exit_reason = signal.signal_type
         trade.pnl_usd = pnl
         trade.pnl_percent = pnl_percent
-        trade.is_open = False
 
-        # Execute orders if not paper trading
+        # Execute orders BEFORE marking closed — if orders fail we leave the
+        # position open so the engine retries on the next tick rather than
+        # silently leaving an unclosed position on the exchange.
         if not self.state.paper_trading:
             self._executing_trade = True
             try:
-                await self._execute_exit_orders(trade, signal)
+                exit_ok = await self._execute_exit_orders(trade, signal)
+            except Exception as exc:
+                logger.exception("Exit orders raised an exception: %s", exc)
+                exit_ok = False
             finally:
                 self._executing_trade = False
+
+            if not exit_ok:
+                logger.error(
+                    "Exit orders FAILED for %s position — leaving position open for retry",
+                    trade.position_type,
+                )
+                return  # Do NOT reset state; engine retries on next signal
+
+        trade.is_open = False
 
         logger.info("Closed %s position: pnl=$%.2f (%.2f%%), reason=%s, zscore=%.4f",
                     trade.position_type, pnl, pnl_percent, signal.signal_type, signal.zscore)

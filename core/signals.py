@@ -110,7 +110,11 @@ class SignalGenerator:
         futures_price = futures_tick.mid
 
         if spot_price <= 0 or futures_price <= 0:
-            logger.warning("Invalid tick prices: spot=%s, futures=%s", spot_price, futures_price)
+            logger.warning(
+                "Skipping tick — invalid prices (spot=%.4f, futures=%.4f). "
+                "Check WebSocket feed or REST fallback.",
+                spot_price, futures_price,
+            )
             return
 
         spread = futures_price - spot_price

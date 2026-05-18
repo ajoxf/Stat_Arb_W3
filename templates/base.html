@@ -424,6 +424,7 @@
             .catch(error => {
                 console.error('Error:', error);
                 this.checked = !enabled;
+                showToast('Failed to toggle algo: ' + error.message, 'danger');
             });
         });
 

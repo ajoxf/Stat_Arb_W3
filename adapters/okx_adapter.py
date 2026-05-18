@@ -2,6 +2,7 @@
 OKX Exchange adapter implementation.
 """
 
+import asyncio
 import hmac
 import hashlib
 import base64
@@ -375,15 +376,20 @@ class OKXAdapter(ExchangeAdapter):
                     order_data["ccy"] = symbol_parts[1]
                     # Market BUY: sz must be in USDT (quote currency) because ccy=USDT
                     if okx_ord_type == "market" and side.upper() == "BUY":
-                        if notional_usdt:
+                        if notional_usdt and notional_usdt > 0:
                             sz_str = f"{round(notional_usdt, 2):.2f}"
                             order_data["sz"] = sz_str
                             logger.info("Cross-margin SPOT MARKET BUY: overriding sz to notional_usdt=%.2f USDT", notional_usdt)
                         else:
-                            logger.warning(
-                                "Cross-margin SPOT MARKET BUY without notional_usdt: "
-                                "sz=%.8f will be read as USDT by OKX (likely too small). "
-                                "Pass notional_usdt at the call site.", quantity
+                            # Without notional_usdt, OKX interprets sz as USDT, making
+                            # a $5000 BTC order look like a $0.05 order. Refuse to proceed.
+                            logger.error(
+                                "Cross-margin SPOT MARKET BUY requires notional_usdt "
+                                "(qty=%.8f BTC would be read as USDT by OKX). Blocking order.", quantity
+                            )
+                            return OrderResult(
+                                success=False,
+                                error="Cross-margin SPOT MARKET BUY missing notional_usdt — order blocked to prevent wrong-size placement",
                             )
 
             # Handle position side for long/short mode accounts (required for SWAP)
@@ -408,6 +414,10 @@ class OKXAdapter(ExchangeAdapter):
                 order_id = order_info.get("ordId", "")
                 logger.info("Order placed successfully: %s %s %s qty=%s, order_id=%s",
                            side, order_type, symbol, sz, order_id)
+
+                # Invalidate position cache so the next get_positions() call sees
+                # the new position instead of the pre-order stale snapshot.
+                self._positions_cache = None
 
                 # For MARKET orders, assume immediate fill
                 # For LIMIT/POST_ONLY orders, return 0 filled until confirmed via get_order_status

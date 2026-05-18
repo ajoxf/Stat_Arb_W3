@@ -414,6 +414,20 @@ def save_config():
         if not data:
             return jsonify({'success': False, 'error': 'No data received'}), 400
 
+        # Preserve the real telegram token if the form sent back the masked '***' placeholder
+        if data.get('telegram_bot_token') == '***':
+            existing = db.get_config()
+            data['telegram_bot_token'] = existing.telegram_bot_token
+
+        # Validate leverage bounds before saving
+        for lev_key in ('spot_leverage', 'futures_leverage'):
+            if lev_key in data:
+                try:
+                    v = int(float(data[lev_key]))
+                    data[lev_key] = max(1, min(v, 25))
+                except (TypeError, ValueError):
+                    data[lev_key] = 1
+
         config = TradingConfig.from_dict(data)
         db.save_config(config)
 
@@ -433,8 +447,12 @@ def toggle_algo():
     enabled = data.get('enabled', False)
 
     engine.toggle_algo(enabled)
-    config.algo_enabled = enabled
-    db.save_config(config)
+    # Re-read config from DB to avoid stale in-memory state, then update
+    current_config = db.get_config()
+    current_config.algo_enabled = enabled
+    db.save_config(current_config)
+    global config
+    config = current_config
 
     socketio.emit('status', engine.get_status())
 
@@ -882,7 +900,7 @@ def set_active_exchanges():
 @app.route('/api/trades', methods=['GET'])
 def get_trades():
     """Get recent trades."""
-    limit = request.args.get('limit', 100, type=int)
+    limit = min(request.args.get('limit', 100, type=int), 1000)
     trades = db.get_trades(limit=limit)
     return jsonify([t.to_dict() for t in trades])
 
@@ -1132,7 +1150,7 @@ def get_spread_history():
 def get_sd_touches():
     """Get SD touch events."""
     asset = request.args.get('asset')
-    limit = request.args.get('limit', 500, type=int)
+    limit = min(request.args.get('limit', 500, type=int), 5000)
 
     touches = db.get_sd_touches(asset=asset, limit=limit)
     return jsonify([t.to_dict() for t in touches])
@@ -1311,7 +1329,7 @@ def close_current_position():
 @app.route('/api/exchange-orders', methods=['GET'])
 def get_exchange_orders():
     """Fetch real order history from the exchange (OKX)."""
-    limit = request.args.get('limit', 50, type=int)
+    limit = min(request.args.get('limit', 50, type=int), 500)
 
     adapter = engine.futures_adapter or engine.spot_adapter
     if not adapter or not hasattr(adapter, 'get_order_history'):
@@ -1339,7 +1357,7 @@ def download_exchange_orders_csv():
     import io
     from flask import Response
 
-    limit = request.args.get('limit', 100, type=int)
+    limit = min(request.args.get('limit', 100, type=int), 1000)
 
     adapter = engine.futures_adapter or engine.spot_adapter
     if not adapter or not hasattr(adapter, 'get_order_history'):
@@ -1435,6 +1453,12 @@ def test_anthropic_key():
 
 def _upsert_env_var(env_path: str, var_name: str, value: str) -> None:
     """Write or update a single variable in a .env file."""
+    # Strip newlines/carriage-returns to prevent variable injection into .env
+    safe_value = value.replace('\r', '').replace('\n', '')
+    # Quote the value if it contains spaces or special shell characters
+    if any(c in safe_value for c in (' ', '#', '$', '`', '"', "'")):
+        safe_value = f'"{safe_value}"'
+
     lines: list = []
     if os.path.exists(env_path):
         with open(env_path, 'r') as f:
@@ -1444,13 +1468,13 @@ def _upsert_env_var(env_path: str, var_name: str, value: str) -> None:
     found = False
     for i, line in enumerate(lines):
         if line.startswith(key_prefix):
-            lines[i] = f'{key_prefix}{value}\n'
+            lines[i] = f'{key_prefix}{safe_value}\n'
             found = True
             break
     if not found:
         if lines and not lines[-1].endswith('\n'):
             lines.append('\n')
-        lines.append(f'{key_prefix}{value}\n')
+        lines.append(f'{key_prefix}{safe_value}\n')
 
     with open(env_path, 'w') as f:
         f.writelines(lines)
@@ -1459,7 +1483,7 @@ def _upsert_env_var(env_path: str, var_name: str, value: str) -> None:
 @app.route('/api/learnings', methods=['GET'])
 def get_learnings():
     """Return recent structured learnings from post-trade AI analysis."""
-    limit = request.args.get('limit', 20, type=int)
+    limit = min(request.args.get('limit', 20, type=int), 500)
     learnings = db.get_recent_learnings(limit=limit)
     import json as _json
     for lrn in learnings:
@@ -1473,7 +1497,7 @@ def get_learnings():
 @app.route('/api/learning-log', methods=['GET'])
 def get_learning_log():
     """Return the auto-tune parameter change history."""
-    limit = request.args.get('limit', 50, type=int)
+    limit = min(request.args.get('limit', 50, type=int), 500)
     log = db.get_learning_log(limit=limit)
     import json as _json
     for entry in log:
@@ -1488,7 +1512,7 @@ def get_learning_log():
 def get_ai_insights():
     """Return pending AI insights (observations + high-evidence filter/position suggestions)."""
     status = request.args.get('status', 'pending')
-    limit  = request.args.get('limit', 30, type=int)
+    limit = min(request.args.get('limit', 30, type=int), 500)
     if status == 'pending':
         return jsonify(db.get_pending_insights(limit=limit))
     # All statuses
@@ -1533,6 +1557,23 @@ def apply_ai_insight(insight_id: int):
         else:
             new_val = float(suggested_value)
 
+        # Hard bounds for safety-critical parameters
+        PARAM_BOUNDS = {
+            'spot_leverage':     (1, 10),
+            'futures_leverage':  (1, 25),
+            'position_size_usd': (10, 1_000_000),
+            'entry_threshold':   (0.1, 10.0),
+            'exit_threshold':    (0.0, 10.0),
+            'stop_loss_threshold': (0.1, 20.0),
+            'min_std_multiple':  (0.1, 10.0),
+        }
+        if param in PARAM_BOUNDS:
+            lo, hi = PARAM_BOUNDS[param]
+            clamped = max(lo, min(new_val, hi))
+            if clamped != new_val:
+                logger.warning("AI insight clipped %s from %s to %s (bounds %s–%s)", param, new_val, clamped, lo, hi)
+                new_val = clamped
+
         setattr(current_config, param, new_val)
         db.save_config(current_config)
         if engine:
@@ -1561,7 +1602,7 @@ def download_trades_csv():
     import io
     from flask import Response
 
-    limit = request.args.get('limit', 500, type=int)
+    limit = min(request.args.get('limit', 500, type=int), 5000)
     trades = db.get_trades(limit=limit)
 
     output = io.StringIO()

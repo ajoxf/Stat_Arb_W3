@@ -328,12 +328,15 @@ class OKXWebSocket:
                 logger.warning("Heartbeat error: %s", e)
 
     async def _reconnect(self) -> None:
-        """Attempt to reconnect after disconnection."""
+        """Attempt to reconnect after disconnection (max 15 attempts)."""
         retry_delay = 1
         max_delay = 30
+        max_attempts = 15
+        attempt = 0
 
-        while self._running and not self._connected:
-            logger.debug("Attempting to reconnect in %d seconds...", retry_delay)
+        while self._running and not self._connected and attempt < max_attempts:
+            attempt += 1
+            logger.info("WebSocket reconnect attempt %d/%d in %ds...", attempt, max_attempts, retry_delay)
             await asyncio.sleep(retry_delay)
 
             if await self.connect():
@@ -347,6 +350,15 @@ class OKXWebSocket:
 
             # Exponential backoff
             retry_delay = min(retry_delay * 2, max_delay)
+
+        if attempt >= max_attempts:
+            logger.error(
+                "WebSocket failed to reconnect after %d attempts — giving up. "
+                "Engine will use REST polling or stale prices until restart.",
+                max_attempts,
+            )
+            if self.on_error:
+                self.on_error(f"WebSocket permanently disconnected after {max_attempts} reconnect attempts")
 
 
 class OKXWebSocketManager:

@@ -657,6 +657,20 @@ class DatabaseManager:
                 ))
                 return trade.id
             else:
+                # Guard against duplicate inserts (e.g., crash-and-restart with same order IDs)
+                if trade.spot_order_id or trade.futures_order_id:
+                    cursor.execute(
+                        "SELECT id FROM trades WHERE spot_order_id = ? AND futures_order_id = ?",
+                        (trade.spot_order_id, trade.futures_order_id),
+                    )
+                    existing = cursor.fetchone()
+                    if existing:
+                        logger.warning(
+                            "Duplicate trade insert blocked: spot_order_id=%s futures_order_id=%s already exists as id=%d",
+                            trade.spot_order_id, trade.futures_order_id, existing[0],
+                        )
+                        return existing[0]
+
                 cursor.execute("""
                     INSERT INTO trades (
                         asset, position_type, entry_time, entry_spot_price,
@@ -858,13 +872,17 @@ class DatabaseManager:
 
     def update_insight_status(self, insight_id: int, status: str) -> bool:
         """Mark an insight as 'applied' or 'dismissed'. Returns True if found."""
-        ts_col = "applied_at" if status == "applied" else "dismissed_at"
+        # Use a whitelist map to avoid any f-string in SQL (injection-safe pattern)
+        _col_map = {"applied": "applied_at", "dismissed": "dismissed_at"}
+        ts_col = _col_map.get(status, "dismissed_at")
+        sql = (
+            "UPDATE ai_insights SET status = ?, applied_at = ? WHERE id = ?"
+            if ts_col == "applied_at" else
+            "UPDATE ai_insights SET status = ?, dismissed_at = ? WHERE id = ?"
+        )
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(
-                f"UPDATE ai_insights SET status = ?, {ts_col} = ? WHERE id = ?",
-                (status, datetime.utcnow().isoformat(), insight_id),
-            )
+            cursor.execute(sql, (status, datetime.utcnow().isoformat(), insight_id))
             return cursor.rowcount > 0
 
     def get_recent_learnings(self, limit: int = 10) -> List[Dict[str, Any]]:

@@ -91,7 +91,7 @@
             <small class="text-muted ms-2" id="orphan-detected-at" style="font-size:0.75rem;"></small>
         </div>
         <div>
-            <button class="btn btn-warning btn-sm me-2" onclick="closeOrphanedSpot()">
+            <button class="btn btn-warning btn-sm me-2" onclick="closeOrphanedSpot(event)">
                 <i class="bi bi-cash-coin me-1"></i>Sell to USDT
             </button>
             <button class="btn btn-outline-secondary btn-sm" onclick="dismissOrphanWarning()">
@@ -1166,19 +1166,19 @@
         }
     }, UPDATE_INTERVAL);
 
-    let prevSpotPrice = 0;
-    let prevFuturesPrice = 0;
+    let prevSpotPrice = null;
+    let prevFuturesPrice = null;
 
     function updatePrices(spot, futures) {
         if (spot) {
             updatePriceWithColor('spot-bid', spot.bid, 'neutral');
-            updatePriceWithColor('spot-last', spot.last, spot.last > prevSpotPrice ? 'up' : spot.last < prevSpotPrice ? 'down' : 'neutral');
+            updatePriceWithColor('spot-last', spot.last, prevSpotPrice === null ? 'neutral' : spot.last > prevSpotPrice ? 'up' : spot.last < prevSpotPrice ? 'down' : 'neutral');
             updatePriceWithColor('spot-ask', spot.ask, 'neutral');
             prevSpotPrice = spot.last;
         }
         if (futures) {
             updatePriceWithColor('futures-bid', futures.bid, 'neutral');
-            updatePriceWithColor('futures-last', futures.last, futures.last > prevFuturesPrice ? 'up' : futures.last < prevFuturesPrice ? 'down' : 'neutral');
+            updatePriceWithColor('futures-last', futures.last, prevFuturesPrice === null ? 'neutral' : futures.last > prevFuturesPrice ? 'up' : futures.last < prevFuturesPrice ? 'down' : 'neutral');
             updatePriceWithColor('futures-ask', futures.ask, 'neutral');
             prevFuturesPrice = futures.last;
         }
@@ -1472,7 +1472,7 @@
     function updateBlockedSignal(blockedSignal) {
         const card = document.getElementById('blocked-signal-card');
         if (!blockedSignal) {
-            // No blocked signal or it was cleared
+            if (card) card.style.display = 'none';
             return;
         }
 
@@ -1729,20 +1729,25 @@ function updateFilterStatus(elementId, passed, value) {
             if (data.success) {
                 if (action === 'recover') {
                     if (data.recovered_position) {
-                        alert(`Position recovered: ${data.recovered_position}\nTrade ID: ${data.trade_id}\nEntry Z-Score: ${data.entry_zscore.toFixed(2)}`);
+                        showToast('Position recovered: ' + data.recovered_position + ' | Trade #' + data.trade_id + ' | Entry Z: ' + (data.entry_zscore || 0).toFixed(2), 'success');
                     } else {
-                        alert(data.message || 'No open trades to recover');
+                        showToast(data.message || 'No open trades to recover', 'info');
                     }
                 } else if (action === 'clear') {
-                    alert(`Position cleared.\nPrevious: ${data.previous_position}\nTrades closed in DB: ${data.trades_closed}`);
+                    showToast('Position cleared (was ' + data.previous_position + ', ' + data.trades_closed + ' trade(s) closed)', 'info');
                 }
+                fetch('/api/engine/status').then(r => r.json()).then(d => {
+                    if (d.signal) updateSignal(d.signal);
+                    currentOpenTrade = d.open_trade || null;
+                    updatePosition(d.position || 'NONE');
+                });
             } else {
-                alert('Sync failed: ' + (data.error || 'Unknown error'));
+                showToast('Sync failed: ' + (data.error || 'Unknown error'), 'danger');
             }
         })
         .catch(err => {
             console.error('Sync position error:', err);
-            alert('Error syncing position: ' + err.message);
+            showToast('Sync error: ' + err.message, 'danger');
         });
     }
 
@@ -1790,7 +1795,7 @@ function updateFilterStatus(elementId, passed, value) {
             .catch(err => console.error('Error checking orphaned spots:', err));
     }
 
-    function closeOrphanedSpot() {
+    function closeOrphanedSpot(event) {
         if (!confirm('This will sell your orphaned spot holdings to USDT at market price. Continue?')) {
             return;
         }
@@ -1807,15 +1812,16 @@ function updateFilterStatus(elementId, passed, value) {
         .then(response => response.json())
         .then(data => {
             if (data.success) {
-                alert(`Successfully sold ${data.amount_sold?.toFixed(6) || ''} ${data.currency || 'asset'} to USDT.\nOrder ID: ${data.order_id || 'N/A'}`);
+                const sold = data.amount_sold ? data.amount_sold.toFixed(6) : '';
+                showToast('Sold ' + sold + ' ' + (data.currency || 'asset') + ' to USDT | Order: ' + (data.order_id || 'N/A'), 'success');
                 document.getElementById('orphan-warning').classList.add('d-none');
             } else {
-                alert('Failed to close orphaned spot: ' + (data.error || data.message || 'Unknown error'));
+                showToast('Failed to sell spot: ' + (data.error || data.message || 'Unknown error'), 'danger');
             }
         })
         .catch(err => {
             console.error('Error closing orphaned spot:', err);
-            alert('Error: ' + err.message);
+            showToast('Error: ' + err.message, 'danger');
         })
         .finally(() => {
             btn.disabled = false;
@@ -1924,18 +1930,17 @@ function updateFilterStatus(elementId, passed, value) {
         .then(response => response.json())
         .then(data => {
             if (data.success) {
-                alert(`Position closed successfully.\nOrder ID: ${data.order_id || 'N/A'}`);
-                // Also clear engine state since position is now closed
+                showToast('Position closed | Order: ' + (data.order_id || 'N/A'), 'success');
                 syncPosition('clear');
                 document.getElementById('exchange-position-warning').classList.add('d-none');
                 checkExchangePositions();
             } else {
-                alert('Failed to close position: ' + (data.error || 'Unknown error'));
+                showToast('Failed to close: ' + (data.error || 'Unknown error'), 'danger');
             }
         })
         .catch(err => {
             console.error('Error closing exchange position:', err);
-            alert('Error: ' + err.message);
+            showToast('Error: ' + err.message, 'danger');
         })
         .finally(() => {
             btn.disabled = false;
@@ -1961,7 +1966,7 @@ function updateFilterStatus(elementId, passed, value) {
             }).then(r => r.json());
 
             if (!r1.success) {
-                alert('Step 1 (close margin) failed: ' + (r1.error || 'unknown'));
+                showToast('Step 1 (close margin) failed: ' + (r1.error || 'unknown'), 'danger');
                 return;
             }
 
@@ -1974,14 +1979,14 @@ function updateFilterStatus(elementId, passed, value) {
                 body: JSON.stringify({currency: asset})
             }).then(r => r.json());
 
-            const step2msg = r2.success ? 'Wallet BTC sold (or was already empty).' : `Step 2 (sell wallet) note: ${r2.error}`;
-            alert(`Done.\nStep 1: Margin position closed.\n${step2msg}`);
+            const step2msg = r2.success ? 'Wallet BTC sold' : 'Step 2 note: ' + r2.error;
+            showToast('Done — Margin closed. ' + step2msg, 'success');
 
             document.getElementById('exchange-position-warning').classList.add('d-none');
             document.getElementById('orphan-spot-warning')?.classList.add('d-none');
             checkExchangePositions();
         } catch(err) {
-            alert('Error: ' + err.message);
+            showToast('Error: ' + err.message, 'danger');
         } finally {
             btn.disabled = false;
             btn.innerHTML = '<i class="bi bi-shield-x me-1"></i>Close All + Sell Orphan';
@@ -2189,6 +2194,8 @@ function updateFilterStatus(elementId, passed, value) {
 
     function closePosition() {
         if (!confirm('Close the current position manually?')) return;
+        const btn = document.getElementById('close-position-btn');
+        if (btn) { btn.disabled = true; btn.innerHTML = '<i class="bi bi-hourglass-split"></i> Closing...'; }
         fetch('/api/engine/close-position', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' }
@@ -2197,12 +2204,19 @@ function updateFilterStatus(elementId, passed, value) {
         .then(data => {
             if (data.success) {
                 showToast(data.message || 'Position closed', 'success');
-                fetch('/api/engine/status').then(r => r.json()).then(d => updateSignal(d.signal));
+                fetch('/api/engine/status').then(r => r.json()).then(d => {
+                    if (d.signal) updateSignal(d.signal);
+                    currentOpenTrade = d.open_trade || null;
+                    updatePosition(d.position || 'NONE');
+                });
             } else {
-                showToast('Failed: ' + (data.error || 'Unknown error'), 'error');
+                showToast('Failed: ' + (data.error || 'Unknown error'), 'danger');
             }
         })
-        .catch(err => showToast('Error: ' + err, 'error'));
+        .catch(err => showToast('Error: ' + err, 'danger'))
+        .finally(() => {
+            if (btn) { btn.disabled = false; btn.innerHTML = '<i class="bi bi-x-circle"></i> Close'; }
+        });
     }
 
     function clearTrades() {
@@ -2217,12 +2231,12 @@ function updateFilterStatus(elementId, passed, value) {
             if (data.success) {
                 showToast('Cleared ' + data.deleted + ' trades', 'success');
                 const tbody = document.getElementById('trades-table');
-                tbody.innerHTML = '<tr><td colspan="4" class="text-center text-secondary">No trades</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="6" class="text-center text-secondary">No trades</td></tr>';
             } else {
-                showToast('Failed to clear trades', 'error');
+                showToast('Failed to clear trades', 'danger');
             }
         })
-        .catch(err => showToast('Error: ' + err, 'error'));
+        .catch(err => showToast('Error: ' + err, 'danger'));
     }
 
     function clearSDTouches() {
@@ -2235,9 +2249,9 @@ function updateFilterStatus(elementId, passed, value) {
         .then(response => response.json())
         .then(data => {
             if (data.success) showToast('Cleared ' + data.deleted + ' SD touches', 'success');
-            else showToast('Failed to clear SD touches', 'error');
+            else showToast('Failed to clear SD touches', 'danger');
         })
-        .catch(err => showToast('Error: ' + err, 'error'));
+        .catch(err => showToast('Error: ' + err, 'danger'));
     }
 
     function resetSpreadHistory() {
@@ -2258,10 +2272,10 @@ function updateFilterStatus(elementId, passed, value) {
                 zscoreChart.update();
                 spreadChart.update();
             } else {
-                showToast('Failed to reset spread data', 'error');
+                showToast('Failed to reset spread data', 'danger');
             }
         })
-        .catch(err => showToast('Error: ' + err, 'error'));
+        .catch(err => showToast('Error: ' + err, 'danger'));
     }
 
     function resetTradesOnly() {
@@ -2277,13 +2291,13 @@ function updateFilterStatus(elementId, passed, value) {
                 const d = data.deleted;
                 showToast(`Reset: ${d.trades} trades, ${d.sd_touches} SD touches (spread preserved)`, 'success');
                 const tbody = document.getElementById('trades-table');
-                tbody.innerHTML = '<tr><td colspan="4" class="text-center text-secondary">No trades</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="6" class="text-center text-secondary">No trades</td></tr>';
                 fetch('/api/engine/status').then(r => r.json()).then(d => updateSignal(d.signal));
             } else {
-                showToast('Reset failed', 'error');
+                showToast('Reset failed', 'danger');
             }
         })
-        .catch(err => showToast('Error: ' + err, 'error'));
+        .catch(err => showToast('Error: ' + err, 'danger'));
     }
 
     function resetAll() {
@@ -2299,7 +2313,7 @@ function updateFilterStatus(elementId, passed, value) {
                 const d = data.deleted;
                 showToast(`Reset: ${d.trades} trades, ${d.sd_touches} SD, ${d.spread_history} spreads`, 'success');
                 const tbody = document.getElementById('trades-table');
-                tbody.innerHTML = '<tr><td colspan="4" class="text-center text-secondary">No trades</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="6" class="text-center text-secondary">No trades</td></tr>';
                 zscoreHistory = [];
                 spreadHistory = [];
                 zscoreChart.data.datasets[0].data = [];
@@ -2308,10 +2322,10 @@ function updateFilterStatus(elementId, passed, value) {
                 spreadChart.update();
                 fetch('/api/engine/status').then(r => r.json()).then(d => updateSignal(d.signal));
             } else {
-                showToast('Failed to reset', 'error');
+                showToast('Failed to reset', 'danger');
             }
         })
-        .catch(err => showToast('Error: ' + err, 'error'));
+        .catch(err => showToast('Error: ' + err, 'danger'));
     }
 
     // ========== Exchange Order Log ==========
