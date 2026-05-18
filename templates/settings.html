@@ -297,7 +297,7 @@
                     <div id="live-trading-checklist" class="alert alert-danger mb-3" style="display:{% if not config.paper_trading %}block{% else %}none{% endif %};">
                         <h6 class="mb-2"><i class="bi bi-exclamation-octagon-fill me-2"></i>Live Trading Pre-Flight Checklist</h6>
                         <ul class="mb-2" style="font-size:0.85rem;">
-                            <li>Set <code>OKX_DEMO_MODE=false</code> in your <code>.env</code> file and restart the server</li>
+                            <li>Use the <strong>OKX Server Mode</strong> toggle above to switch from Demo → Live</li>
                             <li>Verify your OKX API key has <strong>Trade</strong> permissions (not read-only)</li>
                             <li>Confirm <strong>position size</strong> and <strong>max position size</strong> below match your risk budget</li>
                             <li>Confirm <strong>futures leverage</strong> is ≤ 5x for a new live account</li>
@@ -648,24 +648,29 @@
                     </small>
                 </div>
 
-                <!-- OKX Demo Mode Status (read-only — controlled by .env) -->
+                <!-- OKX Demo / Live Mode Toggle -->
                 <div class="mb-4">
-                    <div class="d-flex align-items-center gap-2 mb-1">
+                    <div class="d-flex align-items-center gap-3 mb-1">
                         <strong>OKX Server Mode:</strong>
-                        {% if is_demo %}
-                        <span class="badge bg-warning text-dark"><i class="bi bi-cloud-slash me-1"></i>DEMO SERVER</span>
-                        {% else %}
-                        <span class="badge bg-danger"><i class="bi bi-cloud-fill me-1"></i>LIVE SERVER</span>
-                        {% endif %}
+                        <span id="demo-mode-badge">
+                            {% if is_demo %}
+                            <span class="badge bg-warning text-dark"><i class="bi bi-cloud-slash me-1"></i>DEMO SERVER</span>
+                            {% else %}
+                            <span class="badge bg-danger"><i class="bi bi-cloud-fill me-1"></i>LIVE SERVER</span>
+                            {% endif %}
+                        </span>
+                        <div class="form-check form-switch mb-0">
+                            <input class="form-check-input" type="checkbox" id="demoModeSwitch"
+                                   {% if is_demo %}checked{% endif %}>
+                            <label class="form-check-label text-secondary" for="demoModeSwitch">Demo</label>
+                        </div>
+                        <span id="demo-mode-spinner" class="spinner-border spinner-border-sm text-secondary d-none" role="status"></span>
                     </div>
-                    <small class="text-secondary d-block">
-                        Controlled by <code>OKX_DEMO_MODE</code> in your <code>.env</code> file (requires server restart).
+                    <small class="text-secondary d-block" id="demo-mode-desc">
                         {% if is_demo %}
-                        Currently <strong>demo</strong> — orders go to OKX demo exchange (simulated fills, no real money).
-                        Set <code>OKX_DEMO_MODE=false</code> to connect to the live exchange.
+                        Demo mode — orders go to the OKX demo exchange (simulated fills, no real money).
                         {% else %}
-                        Currently <strong>live</strong> — orders execute against the real OKX exchange.
-                        Set <code>OKX_DEMO_MODE=true</code> to switch back to demo mode.
+                        Live mode — orders execute against the real OKX exchange with real funds.
                         {% endif %}
                     </small>
                 </div>
@@ -1415,6 +1420,65 @@
             })
             .catch(err => setFeedback(err.name === 'AbortError' ? 'Test timed out (30s). Check network or API status.' : ('Error: ' + err.message), 'danger'))
             .finally(() => { testBtn.disabled = false; testBtn.textContent = 'Test Connection'; });
+        });
+    })();
+
+    // Demo / Live mode toggle
+    (function() {
+        const toggle = document.getElementById('demoModeSwitch');
+        const badge = document.getElementById('demo-mode-badge');
+        const desc = document.getElementById('demo-mode-desc');
+        const spinner = document.getElementById('demo-mode-spinner');
+
+        toggle.addEventListener('change', function() {
+            const enableDemo = this.checked;
+
+            if (!enableDemo) {
+                const ok = confirm(
+                    '⚠️  Switch to LIVE SERVER?\n\n' +
+                    'This reconnects the engine to the real OKX exchange.\n' +
+                    'Ensure your API key has Trade permission and Paper Trading\n' +
+                    'is still ON if you do not want real orders placed.\n\n' +
+                    'Continue?'
+                );
+                if (!ok) {
+                    this.checked = true;
+                    return;
+                }
+            }
+
+            toggle.disabled = true;
+            spinner.classList.remove('d-none');
+
+            fetch('/api/engine/set-demo-mode', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({demo: enableDemo})
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    if (enableDemo) {
+                        badge.innerHTML = '<span class="badge bg-warning text-dark"><i class="bi bi-cloud-slash me-1"></i>DEMO SERVER</span>';
+                        desc.textContent = 'Demo mode — orders go to the OKX demo exchange (simulated fills, no real money).';
+                    } else {
+                        badge.innerHTML = '<span class="badge bg-danger"><i class="bi bi-cloud-fill me-1"></i>LIVE SERVER</span>';
+                        desc.textContent = 'Live mode — orders execute against the real OKX exchange with real funds.';
+                    }
+                    showToast('Switched to ' + (enableDemo ? 'Demo' : 'Live') + ' server — engine restarted', 'success');
+                } else {
+                    toggle.checked = !enableDemo;
+                    showToast('Failed to switch mode: ' + (data.error || 'unknown error'), 'danger');
+                }
+            })
+            .catch(err => {
+                toggle.checked = !enableDemo;
+                showToast('Error switching mode: ' + err.message, 'danger');
+            })
+            .finally(() => {
+                toggle.disabled = false;
+                spinner.classList.add('d-none');
+            });
         });
     })();
 </script>

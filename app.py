@@ -440,6 +440,42 @@ def save_config():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@app.route('/api/engine/set-demo-mode', methods=['POST'])
+def set_demo_mode():
+    """Switch between OKX Demo and Live server modes.
+
+    Writes OKX_DEMO_MODE to .env, updates os.environ in-process, then
+    stops and restarts the engine so new adapters and WebSocket pick up
+    the change — no server restart required.
+    """
+    global ws_manager
+    data = request.json or {}
+    enable_demo = bool(data.get('demo', False))
+
+    env_path = os.path.join(os.path.dirname(__file__), '.env')
+    _upsert_env_var(env_path, 'OKX_DEMO_MODE', 'true' if enable_demo else 'false')
+    os.environ['OKX_DEMO_MODE'] = 'true' if enable_demo else 'false'
+
+    # Stop engine and WebSocket, then restart with new mode
+    try:
+        if loop:
+            future = asyncio.run_coroutine_threadsafe(engine.stop(), loop)
+            future.result(timeout=10)
+            logger.info("Engine stopped for demo-mode switch (demo=%s)", enable_demo)
+    except Exception as e:
+        logger.warning("Error stopping engine during demo switch: %s", e)
+
+    # Restart — loop already exists so start_engine_loop() reuses it
+    try:
+        start_engine_loop()
+        mode_label = "Demo" if enable_demo else "Live"
+        logger.info("Engine restarted in %s mode", mode_label)
+        return jsonify({'success': True, 'demo': enable_demo})
+    except Exception as e:
+        logger.exception("Failed to restart engine after demo switch: %s", e)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.route('/api/engine/toggle-algo', methods=['POST'])
 def toggle_algo():
     """Toggle algorithmic trading."""
