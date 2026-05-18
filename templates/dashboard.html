@@ -49,6 +49,7 @@
                     <div>
                         <small class="text-secondary">Unrealized P&L</small>
                         <div class="fw-bold pnl-value" id="daily-pnl">$0.00</div>
+                        <small class="text-muted" id="account-last-updated" style="font-size:0.65rem;">—</small>
                     </div>
                 </div>
             </div>
@@ -94,6 +95,7 @@
             <i class="bi bi-exclamation-triangle-fill me-2"></i>
             <strong>Orphaned Spot Position Detected!</strong>
             <span id="orphan-details">You have BTC in your spot wallet without an active position.</span>
+            <small class="text-muted ms-2" id="orphan-detected-at" style="font-size:0.75rem;"></small>
         </div>
         <div>
             <button class="btn btn-warning btn-sm me-2" onclick="closeOrphanedSpot()">
@@ -113,6 +115,7 @@
             <i class="bi bi-exclamation-octagon-fill me-2"></i>
             <strong>Exchange Position Mismatch!</strong>
             <span id="exchange-position-details"></span>
+            <small class="text-muted ms-2" id="mismatch-detected-at" style="font-size:0.75rem;"></small>
         </div>
         <div id="exchange-position-actions">
             <!-- Buttons added dynamically based on mismatch type -->
@@ -1705,6 +1708,8 @@ function updateFilterStatus(elementId, passed, value) {
 
                         detailsEl.textContent = msg;
                         warningEl.classList.remove('d-none');
+                        const tsEl = document.getElementById('orphan-detected-at');
+                        if (tsEl) tsEl.textContent = 'Detected ' + new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});
                     }
                 } else {
                     warningEl.classList.add('d-none');
@@ -1816,6 +1821,8 @@ function updateFilterStatus(elementId, passed, value) {
                     detailsEl.textContent = msg;
                     actionsEl.innerHTML = actionsHtml;
                     warningEl.classList.remove('d-none');
+                    const mtsEl = document.getElementById('mismatch-detected-at');
+                    if (mtsEl) mtsEl.textContent = 'Detected ' + new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});
                 } else {
                     warningEl.classList.add('d-none');
                 }
@@ -2017,6 +2024,13 @@ function updateFilterStatus(elementId, passed, value) {
                             window.futuresLeverageSource = 'exchange';
                         }
                     });
+                }
+
+                // Timestamp: show when P&L was last refreshed
+                const tsEl = document.getElementById('account-last-updated');
+                if (tsEl) {
+                    const now = new Date();
+                    tsEl.textContent = 'Updated ' + now.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'});
                 }
             })
             .catch(err => console.log('Account info error:', err));
