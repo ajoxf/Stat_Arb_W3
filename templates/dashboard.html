@@ -1469,12 +1469,20 @@
         updateBlockedSignal(data.last_blocked_signal);
     }
 
+    let _lastBlockedKey = null;
+
     function updateBlockedSignal(blockedSignal) {
         const card = document.getElementById('blocked-signal-card');
         if (!blockedSignal) {
             if (card) card.style.display = 'none';
+            _lastBlockedKey = null;
             return;
         }
+
+        // Skip DOM update if nothing has changed (prevents flickering on every tick)
+        const key = blockedSignal.timestamp + '|' + blockedSignal.reason;
+        if (key === _lastBlockedKey) return;
+        _lastBlockedKey = key;
 
         // Show the card
         card.style.display = 'block';
@@ -1488,7 +1496,6 @@
         document.getElementById('blocked-signal-zscore').textContent =
             blockedSignal.zscore !== undefined ? blockedSignal.zscore.toFixed(4) : '-';
 
-        // Format timestamp
         if (blockedSignal.timestamp) {
             const time = new Date(blockedSignal.timestamp);
             document.getElementById('blocked-signal-time').textContent = time.toLocaleTimeString();
