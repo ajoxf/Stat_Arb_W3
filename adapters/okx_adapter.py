@@ -676,11 +676,27 @@ class OKXAdapter(ExchangeAdapter):
                     "Closing spot margin %s %s: placing %s MARKET qty=%.8f",
                     pos.side, symbol, cover_side, qty,
                 )
+
+                # For cross-margin SPOT MARKET BUY, OKX interprets sz as USDT (quote
+                # currency), not BTC.  We must pass notional_usdt so place_order can
+                # override sz with the correct USDT amount.
+                notional_usdt: Optional[float] = None
+                if cover_side == "BUY":
+                    tick = await self.get_tick(symbol)
+                    ref_price = tick.ask if (tick and tick.ask > 0) else (tick.last if tick else 0)
+                    if ref_price <= 0 and pos.entry_price > 0:
+                        ref_price = pos.entry_price  # fallback
+                    if ref_price > 0:
+                        notional_usdt = round(qty * ref_price * 1.002, 2)  # 0.2% buffer
+                        logger.info("Cross-margin SPOT MARKET BUY: using notional_usdt=%.2f (ref_price=%.2f)",
+                                    notional_usdt, ref_price)
+
                 result = await self.place_order(
                     symbol=symbol,
                     side=cover_side,
                     order_type="MARKET",
                     quantity=qty,
+                    notional_usdt=notional_usdt,
                 )
                 if result.success:
                     logger.info("Spot margin position closed: %s %s", symbol, pos.side)
