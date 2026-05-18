@@ -444,6 +444,16 @@ class TradingEngine:
         # Execute trading logic if algo enabled
         if self.state.algo_enabled and signal.signal_type != "NONE":
             await self._process_signal(signal)
+        elif not self.state.algo_enabled and signal.signal_type != "NONE":
+            # Signal fired but algo is off — show once in the blocked panel
+            prev = self.signal_generator.last_blocked_signal
+            if not prev or prev.get('reason') != 'Algo disabled':
+                self.signal_generator.last_blocked_signal = {
+                    'timestamp': datetime.utcnow().isoformat(),
+                    'would_be_signal': signal.signal_type,
+                    'zscore': round(signal.zscore, 4),
+                    'reason': 'Algo disabled',
+                }
 
     async def _get_spot_tick(self) -> Optional[MarketTick]:
         """Get current spot price."""

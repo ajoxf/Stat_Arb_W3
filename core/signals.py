@@ -442,17 +442,20 @@ class SignalGenerator:
                     else:
                         signal_type = "SHORT"
 
-                # Record blocked signal if applicable
+                # Record blocked signal if applicable — only update when the reason
+                # changes so the dashboard doesn't flicker on every tick.
                 if blocked_reason:
-                    self.last_blocked_signal = {
-                        'timestamp': timestamp.isoformat(),
-                        'would_be_signal': 'LONG' if z_triggers_long else 'SHORT',
-                        'zscore': round(self.current_zscore, 4),
-                        'reason': blocked_reason,
-                    }
-                    logger.debug("Signal blocked: %s (Z=%.4f) - %s",
-                                'LONG' if z_triggers_long else 'SHORT',
-                                self.current_zscore, blocked_reason)
+                    prev_reason = self.last_blocked_signal.get('reason') if self.last_blocked_signal else None
+                    if blocked_reason != prev_reason:
+                        self.last_blocked_signal = {
+                            'timestamp': timestamp.isoformat(),
+                            'would_be_signal': 'LONG' if z_triggers_long else 'SHORT',
+                            'zscore': round(self.current_zscore, 4),
+                            'reason': blocked_reason,
+                        }
+                        logger.debug("Signal blocked: %s (Z=%.4f) - %s",
+                                    'LONG' if z_triggers_long else 'SHORT',
+                                    self.current_zscore, blocked_reason)
 
         elif self.current_position == "LONG":
             # Exit when spread returns to the mean locked in at entry time.
