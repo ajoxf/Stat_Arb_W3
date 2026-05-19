@@ -62,6 +62,16 @@ class TelegramNotifier:
         self._notify_signals = False
         self._notify_errors = True
 
+        # Fee-aware PnL accounting (read from TradingConfig).
+        # Defaults match OKX VIP 0 Global; OKX UAE Regular tier is ~5× higher.
+        # Update these in Settings to reflect your actual venue/tier.
+        self._spot_maker_bps    = 8.0
+        self._spot_taker_bps    = 10.0
+        self._futures_maker_bps = 2.0
+        self._futures_taker_bps = 5.0
+        self._entry_mode = "LIMIT"
+        self._exit_mode  = "LIMIT"
+
         # Callbacks: set by app.py after engine is available
         self.get_status_cb: Optional[Callable[[], Dict[str, Any]]] = None
         self.get_trades_cb: Optional[Callable[[], list]] = None
@@ -88,8 +98,42 @@ class TelegramNotifier:
         self._notify_signals = getattr(config, 'telegram_notify_signals', False)
         self._notify_errors = getattr(config, 'telegram_notify_errors', True)
 
+        # Fee + execution-mode config drives the "Est. Fees" line in exit
+        # notifications. Previously hardcoded to 0.20% — that under-reports
+        # by ~5× on OKX UAE Regular tier (real round-trip is ~1.00%).
+        legacy_maker = getattr(config, 'maker_fee_bps', 2.0)
+        legacy_taker = getattr(config, 'taker_fee_bps', 5.0)
+        self._spot_maker_bps    = float(getattr(config, 'spot_maker_fee_bps',    legacy_maker))
+        self._spot_taker_bps    = float(getattr(config, 'spot_taker_fee_bps',    legacy_taker))
+        self._futures_maker_bps = float(getattr(config, 'futures_maker_fee_bps', legacy_maker))
+        self._futures_taker_bps = float(getattr(config, 'futures_taker_fee_bps', legacy_taker))
+        order_mode = getattr(config, 'order_execution_mode', 'LIMIT')
+        self._entry_mode = getattr(config, 'entry_execution_mode', order_mode)
+        self._exit_mode  = getattr(config, 'exit_execution_mode',  order_mode)
+
     def is_ready(self) -> bool:
         return bool(self._enabled and self._token and self._chat_id)
+
+    def _estimate_round_trip_fees(self, notional_usd: float) -> tuple:
+        """
+        Estimate a round-trip's fee cost from the configured fee schedule.
+
+        Returns (fee_usd, fee_bps_total) where fee_bps_total is the sum of
+        all four legs (spot entry + spot exit + futures entry + futures exit)
+        based on the entry/exit execution modes.
+
+        For LIMIT exits we assume maker fills (best case). Actual fills can
+        be takers if the price crosses the spread mid-cycle, so this is a
+        lower bound — but it's the same convention `core/signals.py` uses
+        to evaluate trade profitability, keeping the two reports consistent.
+        """
+        spot_entry  = self._spot_maker_bps    if self._entry_mode == "LIMIT" else self._spot_taker_bps
+        fut_entry   = self._futures_maker_bps if self._entry_mode == "LIMIT" else self._futures_taker_bps
+        spot_exit   = self._spot_maker_bps    if self._exit_mode  == "LIMIT" else self._spot_taker_bps
+        fut_exit    = self._futures_maker_bps if self._exit_mode  == "LIMIT" else self._futures_taker_bps
+        total_bps = spot_entry + fut_entry + spot_exit + fut_exit
+        fee_usd = notional_usd * total_bps / 10000.0
+        return fee_usd, total_bps
 
     # ------------------------------------------------------------------
     # Notifications
@@ -164,7 +208,18 @@ class TelegramNotifier:
                     rows.append(R("Half-Life", f"{hl:.1f} periods"))
                 if regime:
                     rows.append(R("Regime", regime))
+            # Surface the expected round-trip fee up front so the trader can
+            # see at entry whether the spread captured is enough to overcome
+            # costs. Same calculation used in the exit notification.
+            est_fees, fee_bps_total = self._estimate_round_trip_fees(trade.notional_usd)
+            breakeven_spread = (
+                est_fees / trade.quantity if trade.quantity > 0 else 0.0
+            )
+
             rows += [
+                "",
+                R("Est. Fees", f"-${est_fees:,.4f}  ({fee_bps_total:.1f} bps RT)"),
+                R("Breakeven", f"{breakeven_spread:+.4f} spread move"),
                 "",
                 R("Orders at", placed_str),
                 R("Filled at", filled_str),
@@ -222,9 +277,26 @@ class TelegramNotifier:
                 (exit_spread - entry_spread) if direction == "SHORT"
                 else (entry_spread - exit_spread)
             )
+            # Gross PnL = signal-spread move × qty. Same formula as
+            # trading_engine uses for `trade.pnl_usd`, which is itself gross
+            # of fees (the field name is historical and misleading).
             gross_pnl = spread_change * trade.quantity
-            est_fees = trade.notional_usd * 0.0020
-            result = "PROFIT" if trade.pnl_usd >= 0 else "LOSS"
+            est_fees, fee_bps_total = self._estimate_round_trip_fees(trade.notional_usd)
+            net_pnl_est = gross_pnl - est_fees
+            net_pct_est = (
+                (net_pnl_est / trade.notional_usd) * 100
+                if trade.notional_usd > 0 else 0.0
+            )
+            # Verdict is based on fee-aware net, not the engine's gross PnL
+            # field — otherwise a "PROFIT" badge would print on trades that
+            # bleed once fees are paid (e.g. the recent +$15 logged trades
+            # that actually cost ~$250 in OKX UAE Regular fees).
+            result = "PROFIT" if net_pnl_est >= 0 else "LOSS"
+
+            fee_mode_label = (
+                f"{self._entry_mode.lower()}→{self._exit_mode.lower()}, "
+                f"{fee_bps_total:.1f} bps round-trip"
+            )
 
             R = self._R
             rows = [
@@ -246,8 +318,9 @@ class TelegramNotifier:
                 R("Latency", latency_str),
                 "",
                 R("Gross PnL", f"${gross_pnl:+.4f}"),
-                R("Est. Fees", f"-${est_fees:.4f}"),
-                R("Net PnL", f"${trade.pnl_usd:+.4f}  ({trade.pnl_percent:+.4f}%)"),
+                R("Est. Fees", f"-${est_fees:,.4f}  ({fee_mode_label})"),
+                R("Net PnL (est)", f"${net_pnl_est:+.4f}  ({net_pct_est:+.4f}%)"),
+                R("Engine PnL", f"${trade.pnl_usd:+.4f}  (gross, no fees)"),
             ]
             parts = [
                 f"<b>TRADE EXIT  ·  {direction} {trade.asset}  ·  {result}</b>",
@@ -580,9 +653,13 @@ class TelegramNotifier:
         R = self._R
         parts = [f"<b>RECENT TRADES  ·  {ts}</b>"]
         for t in closed:
-            pnl = t.get("pnl_usd", 0)
-            pct = t.get("pnl_percent", 0)
-            result = "PROFIT" if pnl >= 0 else "LOSS"
+            gross = t.get("pnl_usd", 0) or 0.0
+            notional = t.get("notional_usd", 0) or 0.0
+            fee_usd, _bps = self._estimate_round_trip_fees(notional)
+            net_pnl = gross - fee_usd
+            net_pct = (net_pnl / notional * 100) if notional > 0 else 0.0
+            # Verdict reflects what actually hit the wallet
+            result = "PROFIT" if net_pnl >= 0 else "LOSS"
 
             duration_str = "—"
             entry_t = t.get("entry_time")
@@ -626,7 +703,9 @@ class TelegramNotifier:
                 R("Entry Z", f"{entry_z:+.4f}"),
                 R("Exit Z", f"{exit_z:+.4f}"),
                 "",
-                R("Net PnL", f"${pnl:+.2f}  ({pct:+.2f}%)  {result}"),
+                R("Gross PnL", f"${gross:+.2f}"),
+                R("Est. Fees", f"-${fee_usd:,.2f}"),
+                R("Net PnL", f"${net_pnl:+.2f}  ({net_pct:+.2f}%)  {result}"),
             ]
             exit_lat = t.get("exit_latency_ms")
             if exit_lat is not None:
@@ -670,34 +749,64 @@ class TelegramNotifier:
         )
 
     def _cmd_pnl(self) -> None:
-        """Handle /pnl command - comprehensive P&L summary."""
+        """Handle /pnl command - comprehensive P&L summary.
+
+        Aggregates use the engine's gross `pnl_usd` plus a fee-aware
+        estimate derived from each trade's notional and the configured
+        execution mode. Both gross and net-of-fees totals are reported
+        so the user can see the gap caused by the venue's fee tier.
+        """
         trades = self.get_trades_cb() if self.get_trades_cb else []
         balance_data = self.get_balance_cb() if self.get_balance_cb else {}
         ts = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
 
         closed = [t for t in trades if not t.get("is_open", True)]
-        total_pnl = sum(t.get("pnl_usd", 0) for t in closed)
-        winners = [t for t in closed if t.get("pnl_usd", 0) > 0]
-        losers = [t for t in closed if t.get("pnl_usd", 0) <= 0]
+
+        def _gross(t):
+            return t.get("pnl_usd", 0) or 0.0
+
+        def _fee(t):
+            notional = t.get("notional_usd", 0) or 0.0
+            fee_usd, _bps = self._estimate_round_trip_fees(notional)
+            return fee_usd
+
+        def _net(t):
+            return _gross(t) - _fee(t)
+
+        total_gross = sum(_gross(t) for t in closed)
+        total_fees  = sum(_fee(t) for t in closed)
+        total_net   = total_gross - total_fees
+
+        # Winners/losers gauged on NET so the win-rate matches what actually
+        # hit the wallet, not what the engine logged before fees.
+        winners = [t for t in closed if _net(t) > 0]
+        losers = [t for t in closed if _net(t) <= 0]
 
         win_rate = (len(winners) / len(closed) * 100) if closed else 0
-        avg_win = (sum(t["pnl_usd"] for t in winners) / len(winners)) if winners else 0
-        avg_loss = (sum(t["pnl_usd"] for t in losers) / len(losers)) if losers else 0
+        avg_win = (sum(_net(t) for t in winners) / len(winners)) if winners else 0
+        avg_loss = (sum(_net(t) for t in losers) / len(losers)) if losers else 0
 
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         today_trades = [t for t in closed if (t.get("exit_time") or "").startswith(today)]
-        today_pnl = sum(t.get("pnl_usd", 0) for t in today_trades)
+        today_gross = sum(_gross(t) for t in today_trades)
+        today_fees  = sum(_fee(t) for t in today_trades)
+        today_net   = today_gross - today_fees
         upnl = balance_data.get("unrealized_pnl", 0)
 
         R = self._R
         rows = [
             R("Closed Trades", str(len(closed))),
-            R("Win Rate", f"{win_rate:.1f}%  ({len(winners)}W / {len(losers)}L)"),
-            R("Avg Win", f"${avg_win:+.2f}"),
-            R("Avg Loss", f"${avg_loss:+.2f}"),
+            R("Win Rate", f"{win_rate:.1f}%  ({len(winners)}W / {len(losers)}L net)"),
+            R("Avg Win (net)", f"${avg_win:+.2f}"),
+            R("Avg Loss (net)", f"${avg_loss:+.2f}"),
             "",
-            R("Today", f"${today_pnl:+.2f}  ({len(today_trades)} trades)"),
-            R("All-time", f"${total_pnl:+.2f}"),
+            R("Today Gross", f"${today_gross:+.2f}  ({len(today_trades)} trades)"),
+            R("Today Fees", f"-${today_fees:,.2f}"),
+            R("Today Net", f"${today_net:+.2f}"),
+            "",
+            R("All-time Gross", f"${total_gross:+.2f}"),
+            R("All-time Fees", f"-${total_fees:,.2f}"),
+            R("All-time Net", f"${total_net:+.2f}"),
             R("Unrealized", f"${upnl:+.2f}"),
         ]
         self._send(
