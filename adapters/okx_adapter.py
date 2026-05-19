@@ -568,7 +568,8 @@ class OKXAdapter(ExchangeAdapter):
                         "order_type": o.get("ordType", ""),
                         "quantity": float(o.get("sz", 0) or 0),
                         "price": float(o.get("px", 0) or 0),
-                        "filled_qty": float(o.get("fillSz", 0) or 0),
+                        # accFillSz = cumulative; fillSz = last chunk only
+                        "filled_qty": float(o.get("accFillSz", 0) or o.get("fillSz", 0) or 0),
                         "state": o.get("state", ""),
                         "created_at": o.get("cTime", ""),
                     })
@@ -1062,8 +1063,12 @@ class OKXAdapter(ExchangeAdapter):
                 for o in result["data"]:
                     try:
                         fee = o.get("fee", "0") or "0"
-                        fill_px = o.get("fillPx", "") or o.get("avgPx", "") or "0"
-                        fill_sz = o.get("fillSz", "") or o.get("accFillSz", "") or "0"
+                        # Prefer accumulated/average across all fills over last-chunk
+                        # values — OKX fills market orders in pieces and `fillSz`/`fillPx`
+                        # only reflect the final chunk, which made the 02:13:13 market
+                        # sell appear as 0.0005 BTC instead of the full 0.286 BTC.
+                        fill_px = o.get("avgPx", "") or o.get("fillPx", "") or "0"
+                        fill_sz = o.get("accFillSz", "") or o.get("fillSz", "") or "0"
                         orders.append({
                             "order_id":    o.get("ordId", ""),
                             "symbol":      o.get("instId", ""),

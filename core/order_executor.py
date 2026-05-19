@@ -111,9 +111,20 @@ class OrderExecutor:
     (track best bid/ask for better fills).
     """
 
-    # How often to check limit order status (ms)
-    # Increased from 200ms to reduce excessive polling and order amendments
+    # How often to re-price / amend limit orders (ms)
     PRICE_UPDATE_INTERVAL_MS = 1000  # 1 second
+
+    # How often to poll fill status (ms). Faster than the amend cadence so fills
+    # are detected promptly even when the price hasn't moved enough to trigger
+    # a re-quote. Avoids the case where an order fills shortly after placement
+    # but isn't seen until the next 1-second amend tick (which on trade 11
+    # left a filled order undetected for ~50 seconds before timeout).
+    STATUS_POLL_INTERVAL_MS = 250
+
+    # Pause after placing/amending an order before the first status check.
+    # OKX needs a brief moment to acknowledge state changes — too short and the
+    # poll comes back "live" for an already-filled order.
+    POST_PLACE_POLL_DELAY_MS = 200
 
     def __init__(
         self,
@@ -355,10 +366,20 @@ class OrderExecutor:
         # Calculate initial prices
         self._update_target_prices(spread_order, spot_tick, futures_tick)
 
-        # Place initial limit orders
+        # Place initial limit orders, then poll once shortly after so an
+        # instant-fill (market-crossing limit, deep book) is registered
+        # before the next status tick.
         await self._place_limit_orders(spread_order)
+        await asyncio.sleep(self.POST_PLACE_POLL_DELAY_MS / 1000)
+        await self._check_order_status(spread_order)
 
-        # Monitor and adjust until filled or timeout
+        poll_interval_sec = self.STATUS_POLL_INTERVAL_MS / 1000
+        amend_interval_sec = self.PRICE_UPDATE_INTERVAL_MS / 1000
+        last_amend_check = datetime.utcnow()
+
+        # Monitor and adjust until filled or timeout. Status polls run on the
+        # fast cadence; price re-quotes only on the slower amend cadence so we
+        # don't thrash the exchange with cancel/replace cycles.
         while not spread_order.is_complete and not spread_order.is_failed:
             # Check timeout
             if datetime.utcnow() >= spread_order.timeout_at:
@@ -368,35 +389,43 @@ class OrderExecutor:
                     self.on_timeout(spread_order)
                 break
 
-            # Wait before next update
-            await asyncio.sleep(self.PRICE_UPDATE_INTERVAL_MS / 1000)
+            await asyncio.sleep(poll_interval_sec)
 
-            # Get fresh ticks
+            # Always poll fill status on the fast cadence
+            await self._check_order_status(spread_order)
+            if spread_order.is_complete or spread_order.is_failed:
+                break
+
+            # Re-quote prices on the slower amend cadence only
+            now = datetime.utcnow()
+            if (now - last_amend_check).total_seconds() < amend_interval_sec:
+                continue
+            last_amend_check = now
+
             new_spot_tick = await self.spot_adapter.get_tick(self.config.spot_symbol)
             new_futures_tick = await self.futures_adapter.get_tick(self.config.futures_symbol)
 
             if not new_spot_tick or not new_futures_tick:
                 continue
 
-            # Check order status
-            await self._check_order_status(spread_order)
+            old_spot_price = spread_order.spot_leg.target_price
+            old_futures_price = spread_order.futures_leg.target_price
 
-            # If not filled, update prices
-            if not spread_order.is_complete:
-                old_spot_price = spread_order.spot_leg.target_price
-                old_futures_price = spread_order.futures_leg.target_price
+            self._update_target_prices(spread_order, new_spot_tick, new_futures_tick)
 
-                self._update_target_prices(spread_order, new_spot_tick, new_futures_tick)
+            # Amend orders if prices changed by more than 1 bps
+            # 5 bps was too coarse: on BTC that's ~$32, causing orders to sit
+            # unfilled for 60s when market trends away from the limit price
+            spot_change_pct = abs(spread_order.spot_leg.target_price - old_spot_price) / old_spot_price if old_spot_price else 0
+            futures_change_pct = abs(spread_order.futures_leg.target_price - old_futures_price) / old_futures_price if old_futures_price else 0
+            amend_threshold = 0.0001  # 0.01% = 1 basis point (~$6.50 on BTC)
 
-                # Amend orders if prices changed by more than 1 bps
-                # 5 bps was too coarse: on BTC that's ~$32, causing orders to sit
-                # unfilled for 60s when market trends away from the limit price
-                spot_change_pct = abs(spread_order.spot_leg.target_price - old_spot_price) / old_spot_price if old_spot_price else 0
-                futures_change_pct = abs(spread_order.futures_leg.target_price - old_futures_price) / old_futures_price if old_futures_price else 0
-                amend_threshold = 0.0001  # 0.01% = 1 basis point (~$6.50 on BTC)
-
-                if spot_change_pct > amend_threshold or futures_change_pct > amend_threshold:
-                    await self._amend_limit_orders(spread_order)
+            if spot_change_pct > amend_threshold or futures_change_pct > amend_threshold:
+                await self._amend_limit_orders(spread_order)
+                # Re-poll immediately after amend so a fast fill on the new
+                # order doesn't have to wait a full poll cycle to be noticed.
+                await asyncio.sleep(self.POST_PLACE_POLL_DELAY_MS / 1000)
+                await self._check_order_status(spread_order)
 
         # Handle partial fills or orphan risk (one leg filled, other cancelled/failed)
         if spread_order.has_partial_fill or spread_order.has_orphan_risk:
