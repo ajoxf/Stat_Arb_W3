@@ -260,7 +260,126 @@ class OrderExecutor:
             seconds=self.config.limit_order_timeout_sec
         )
 
+        # Pre-flight: ask the exchange what we actually hold. If a previous
+        # cycle's fill went undetected, the corresponding leg's position is
+        # already flat and we MUST NOT place a fresh order for it — that's
+        # what double-sold the spot on the 04:30 trade and left an accidental
+        # naked margin SHORT.
+        await self._reconcile_exit_with_exchange(spread_order)
+
         return await self._execute_spread(spread_order, spot_tick, futures_tick)
+
+    async def _reconcile_exit_with_exchange(self, spread_order: SpreadOrder) -> None:
+        """
+        Query the exchange for current positions and pre-mark any leg whose
+        underlying position is already flat as FILLED. Subsequent placement
+        code (`_place_limit_orders`, `_execute_market`) skips legs that are
+        already FILLED so we never accidentally open a new naked position
+        when "exiting" a leg that was already closed by a previous cycle.
+
+        Only runs on exits. Fails open: if the position query errors out we
+        proceed with the full exit quantity rather than blocking the close.
+        """
+        if spread_order.is_entry:
+            return
+
+        # What position should each leg currently be holding (= what we want to close)?
+        if spread_order.position_type == "LONG":
+            expected_spot_side = "LONG"     # we bought spot at entry
+            expected_fut_side = "SHORT"     # we sold the perp short at entry
+        else:
+            expected_spot_side = "SHORT"    # we sold spot at entry (margin short)
+            expected_fut_side = "LONG"      # we bought the perp long at entry
+
+        # Consider a leg flat if exchange holds < 10% of the expected qty
+        # (handles dust positions and floating-point noise).
+        flat_threshold = 0.1
+        # Treat anything between 10% and 95% as partial — scale exit qty
+        # rather than over-closing or skipping outright.
+        partial_threshold = 0.95
+
+        # ---- spot leg ----
+        try:
+            spot_positions = await self.spot_adapter.get_positions(spread_order.spot_leg.symbol)
+            spot_qty = next(
+                (p.quantity for p in spot_positions
+                 if p.symbol == spread_order.spot_leg.symbol and p.side == expected_spot_side),
+                0.0,
+            )
+            expected = spread_order.spot_leg.quantity
+            if spot_qty < expected * flat_threshold:
+                logger.warning(
+                    "Exit reconcile: spot %s position is flat on exchange "
+                    "(have=%.6f, expected=%.6f) — skipping spot leg placement",
+                    expected_spot_side, spot_qty, expected,
+                )
+                spread_order.spot_leg.status = LegStatus.FILLED
+                spread_order.spot_leg.filled_qty = expected
+                # 0.0 fill price: engine PnL will be off but that's preferable
+                # to over-closing into a naked position.
+                spread_order.spot_leg.filled_price = 0.0
+            elif spot_qty < expected * partial_threshold:
+                logger.warning(
+                    "Exit reconcile: spot position partial (have=%.6f, expected=%.6f) — "
+                    "scaling exit qty down",
+                    spot_qty, expected,
+                )
+                spread_order.spot_leg.quantity = spot_qty
+        except Exception as e:
+            logger.error(
+                "Exit reconcile: spot position lookup failed (%s) — proceeding with full exit qty",
+                e,
+            )
+
+        # ---- futures leg ----
+        # SWAP position quantities are in CONTRACTS; the leg quantity is in BTC.
+        # Convert contracts → BTC via ctVal so we compare like-for-like.
+        try:
+            fut_positions = await self.futures_adapter.get_positions(spread_order.futures_leg.symbol)
+            fut_contracts = next(
+                (p.quantity for p in fut_positions
+                 if p.symbol == spread_order.futures_leg.symbol and p.side == expected_fut_side),
+                0.0,
+            )
+            info = await self.futures_adapter.get_symbol_info(spread_order.futures_leg.symbol)
+            ct_val = float(info.get("contract_val") or 0) if info else 0.0
+            if ct_val <= 0:
+                logger.warning(
+                    "Exit reconcile: missing contract_val for %s — cannot compare position "
+                    "to leg quantity, skipping futures reconcile",
+                    spread_order.futures_leg.symbol,
+                )
+                return
+            fut_qty_btc = fut_contracts * ct_val
+            expected = spread_order.futures_leg.quantity
+            if fut_qty_btc < expected * flat_threshold:
+                logger.warning(
+                    "Exit reconcile: futures %s position is flat on exchange "
+                    "(have=%.6f BTC / %.0f contracts, expected=%.6f BTC) — "
+                    "skipping futures leg placement",
+                    expected_fut_side, fut_qty_btc, fut_contracts, expected,
+                )
+                spread_order.futures_leg.status = LegStatus.FILLED
+                spread_order.futures_leg.filled_qty = expected
+                spread_order.futures_leg.filled_price = 0.0
+            elif fut_qty_btc < expected * partial_threshold:
+                logger.warning(
+                    "Exit reconcile: futures position partial (have=%.6f BTC, expected=%.6f BTC) — "
+                    "scaling exit qty down",
+                    fut_qty_btc, expected,
+                )
+                spread_order.futures_leg.quantity = fut_qty_btc
+        except Exception as e:
+            logger.error(
+                "Exit reconcile: futures position lookup failed (%s) — proceeding with full exit qty",
+                e,
+            )
+
+        if spread_order.is_complete:
+            logger.info(
+                "Exit reconcile: both legs already flat on exchange — trade already closed, "
+                "no orders needed",
+            )
 
     async def _execute_spread(
         self,
@@ -307,33 +426,54 @@ class OrderExecutor:
             else None
         )
 
-        # Execute both legs simultaneously
-        spot_task = self._place_market_order(
-            self.spot_adapter,
-            spread_order.spot_leg,
-            notional_usdt=spot_notional,
+        # Honour the pre-flight reconcile: don't re-place a leg the exchange
+        # says is already flat (that's the bug that double-sold the spot).
+        spot_skip = spread_order.spot_leg.status == LegStatus.FILLED
+        futures_skip = spread_order.futures_leg.status == LegStatus.FILLED
+
+        if spot_skip and futures_skip:
+            logger.info("Reconcile-skip: both legs already FILLED, no orders to place")
+            if self.on_fill:
+                self.on_fill(spread_order)
+            return spread_order
+
+        # Execute both legs simultaneously (or just one if the other is pre-filled)
+        async def _already_done():
+            return None  # placeholder so asyncio.gather stays symmetric
+
+        spot_task = (
+            _already_done() if spot_skip
+            else self._place_market_order(
+                self.spot_adapter, spread_order.spot_leg, notional_usdt=spot_notional,
+            )
         )
-        futures_task = self._place_market_order(
-            self.futures_adapter,
-            spread_order.futures_leg,
+        futures_task = (
+            _already_done() if futures_skip
+            else self._place_market_order(self.futures_adapter, spread_order.futures_leg)
         )
 
         spot_result, futures_result = await asyncio.gather(
             spot_task, futures_task, return_exceptions=True
         )
 
-        # Process results
-        if isinstance(spot_result, Exception):
-            spread_order.spot_leg.status = LegStatus.FAILED
-            logger.error("Spot leg failed: %s", spot_result)
+        # Process results (skipped legs stay FILLED from reconcile)
+        if not spot_skip:
+            if isinstance(spot_result, Exception):
+                spread_order.spot_leg.status = LegStatus.FAILED
+                logger.error("Spot leg failed: %s", spot_result)
+            else:
+                self._update_leg_from_result(spread_order.spot_leg, spot_result)
         else:
-            self._update_leg_from_result(spread_order.spot_leg, spot_result)
+            logger.info("Reconcile-skip: spot leg already FILLED, did not place market order")
 
-        if isinstance(futures_result, Exception):
-            spread_order.futures_leg.status = LegStatus.FAILED
-            logger.error("Futures leg failed: %s", futures_result)
+        if not futures_skip:
+            if isinstance(futures_result, Exception):
+                spread_order.futures_leg.status = LegStatus.FAILED
+                logger.error("Futures leg failed: %s", futures_result)
+            else:
+                self._update_leg_from_result(spread_order.futures_leg, futures_result)
         else:
-            self._update_leg_from_result(spread_order.futures_leg, futures_result)
+            logger.info("Reconcile-skip: futures leg already FILLED, did not place market order")
 
         # Handle partial fills (leg risk)
         if spread_order.has_partial_fill:
@@ -514,25 +654,41 @@ class OrderExecutor:
         # (at best bid for BUY, best ask for SELL) which should achieve maker fills
         order_type = "LIMIT"
 
-        # Place spot limit order first
-        spot_result = await self.spot_adapter.place_order(
-            symbol=spread_order.spot_leg.symbol,
-            side=spread_order.spot_leg.side,
-            order_type=order_type,
-            quantity=spread_order.spot_leg.quantity,
-            price=spread_order.spot_leg.target_price,
-            pos_side=spread_order.spot_leg.pos_side,
-        )
+        # Skip legs already marked FILLED by the pre-flight reconcile — those
+        # are positions the exchange says we no longer hold, so placing a fresh
+        # order would open a new naked position in the wrong direction.
+        spot_skip = spread_order.spot_leg.status == LegStatus.FILLED
+        futures_skip = spread_order.futures_leg.status == LegStatus.FILLED
 
-        if spot_result.success:
-            spread_order.spot_leg.order_id = spot_result.order_id
-            spread_order.spot_leg.status = LegStatus.OPEN
-            logger.info("Placed spot LIMIT order: %s @ %.2f",
-                       spread_order.spot_leg.side, spread_order.spot_leg.target_price)
+        # Place spot limit order first (unless reconcile says it's already done)
+        if not spot_skip:
+            spot_result = await self.spot_adapter.place_order(
+                symbol=spread_order.spot_leg.symbol,
+                side=spread_order.spot_leg.side,
+                order_type=order_type,
+                quantity=spread_order.spot_leg.quantity,
+                price=spread_order.spot_leg.target_price,
+                pos_side=spread_order.spot_leg.pos_side,
+            )
+
+            if spot_result.success:
+                spread_order.spot_leg.order_id = spot_result.order_id
+                spread_order.spot_leg.status = LegStatus.OPEN
+                logger.info("Placed spot LIMIT order: %s @ %.2f",
+                           spread_order.spot_leg.side, spread_order.spot_leg.target_price)
+            else:
+                spread_order.spot_leg.status = LegStatus.FAILED
+                logger.error("Failed to place spot limit order: %s", spot_result.error)
+                # Don't place futures if spot failed immediately
+                return
         else:
-            spread_order.spot_leg.status = LegStatus.FAILED
-            logger.error("Failed to place spot limit order: %s", spot_result.error)
-            # Don't place futures if spot failed immediately
+            logger.info("Reconcile-skip: spot leg already FILLED, not placing")
+
+        if futures_skip:
+            logger.info("Reconcile-skip: futures leg already FILLED, not placing")
+            # Brief delay then check status of whatever we did place
+            await asyncio.sleep(0.1)
+            await self._check_order_status(spread_order)
             return
 
         # Place futures limit order
@@ -564,16 +720,17 @@ class OrderExecutor:
         else:
             spread_order.futures_leg.status = LegStatus.FAILED
             logger.error("Failed to place futures limit order: %s", futures_result.error)
-            # Futures failed - cancel spot to prevent orphan
-            logger.warning("Cancelling spot order since futures placement failed")
-            try:
-                await self.spot_adapter.cancel_order(
-                    spread_order.spot_leg.symbol,
-                    spread_order.spot_leg.order_id,
-                )
-                spread_order.spot_leg.status = LegStatus.CANCELLED
-            except Exception as e:
-                logger.error("Failed to cancel spot after futures failure: %s", e)
+            # Futures failed - cancel spot to prevent orphan (only if we placed one)
+            if not spot_skip and spread_order.spot_leg.order_id:
+                logger.warning("Cancelling spot order since futures placement failed")
+                try:
+                    await self.spot_adapter.cancel_order(
+                        spread_order.spot_leg.symbol,
+                        spread_order.spot_leg.order_id,
+                    )
+                    spread_order.spot_leg.status = LegStatus.CANCELLED
+                except Exception as e:
+                    logger.error("Failed to cancel spot after futures failure: %s", e)
             return
 
         # Brief delay then check status (LIMIT orders won't auto-cancel like POST_ONLY)
