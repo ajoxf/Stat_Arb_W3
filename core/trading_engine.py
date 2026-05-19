@@ -1024,22 +1024,41 @@ class TradingEngine:
 
             close_side = "sell" if side == "LONG" else "buy"
             pos_side = "long" if side == "LONG" else "short"
-            qty_int = int(round(qty))  # OKX swap qty must be integer contracts
+
+            # `qty` from get_positions() is in CONTRACTS for SWAP. `place_order`
+            # expects BTC and divides by ctVal again, so passing the contract
+            # count directly inflates the order size by 1/ctVal (e.g. 32
+            # contracts → adapter sees "32 BTC" → sends sz=3200). That's why
+            # every AUTO-CLOSE in the log fails with 51169 — OKX has only 32
+            # contracts on the LONG side, not 3200. Convert here.
+            info = await self.futures_adapter.get_symbol_info(symbol)
+            ct_val = float(info.get("contract_val") or 0) if info else 0.0
+            if ct_val <= 0:
+                logger.error(
+                    "AUTO-CLOSE skipped for %s: could not fetch contract_val "
+                    "(needed to convert %s contracts → BTC for place_order)",
+                    symbol, qty,
+                )
+                continue
+            qty_btc = qty * ct_val
 
             logger.warning(
-                "AUTO-CLOSE orphan %s %s: %s contracts (%.2f), PnL=%.2f",
-                side, symbol, qty_int, qty, pos['unrealized_pnl'],
+                "AUTO-CLOSE orphan %s %s: %d contracts (%.6f BTC), PnL=%.2f",
+                side, symbol, int(round(qty)), qty_btc, pos['unrealized_pnl'],
             )
 
-            if qty_int == 0:
-                logger.warning("Auto-close skipped: rounded qty=0 for %s (raw=%.4f)", symbol, qty)
+            if qty_btc <= 0:
+                logger.warning(
+                    "Auto-close skipped: qty_btc=0 for %s (raw contracts=%.4f, ctVal=%.4f)",
+                    symbol, qty, ct_val,
+                )
                 continue
 
             result = await self.futures_adapter.place_order(
                 symbol=symbol,
                 side=close_side.upper(),
                 order_type="MARKET",
-                quantity=qty_int,
+                quantity=qty_btc,
                 pos_side=pos_side,
                 reduce_only=True,
             )
