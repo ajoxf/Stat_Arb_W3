@@ -654,8 +654,25 @@ class OKXAdapter(ExchangeAdapter):
                             side = "LONG"
                             qty  = abs(pos_raw)
                     else:
-                        # SWAP / FUTURES: pos = number of contracts (integer); sign = direction
-                        side = "LONG" if pos_raw > 0 else "SHORT"
+                        # SWAP / FUTURES direction depends on the account's position mode:
+                        #
+                        #   long_short_mode (hedge): `pos` is always positive (just the
+                        #     absolute size); direction comes from `posSide` which is
+                        #     "long" or "short". This is the user's current account mode.
+                        #
+                        #   net_mode (one-way): `pos` is signed (+ = long, - = short)
+                        #     and `posSide` is "net".
+                        #
+                        # Reading the sign of `pos` alone (which we did) mis-classifies
+                        # every long_short_mode SHORT as a LONG (since `pos` is positive),
+                        # which then causes the orphan auto-close to send
+                        # posSide=long → OKX 51169 (no long position to close).
+                        pos_side_field = (p.get("posSide", "") or "").lower()
+                        if pos_side_field in ("long", "short"):
+                            side = pos_side_field.upper()
+                        else:
+                            # net_mode (posSide=="net") or unspecified: fall back to sign.
+                            side = "LONG" if pos_raw > 0 else "SHORT"
                         qty  = abs(pos_raw)
 
                     if qty == 0:
