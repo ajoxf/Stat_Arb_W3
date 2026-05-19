@@ -272,6 +272,49 @@ class SignalGenerator:
         except Exception:
             return float('inf')
 
+    def _compute_round_trip_cost(self) -> Dict[str, float]:
+        """
+        Compute the full round-trip cost breakdown in bps.
+
+        Round-trip = entry (spot + futures) + exit (spot + futures) + slippage × 4 legs.
+        Returns a dict with per-leg components so the UI can show the breakdown.
+        """
+        spot_maker = getattr(self.config, 'spot_maker_fee_bps', self.config.maker_fee_bps)
+        spot_taker = getattr(self.config, 'spot_taker_fee_bps', self.config.taker_fee_bps)
+        fut_maker  = getattr(self.config, 'futures_maker_fee_bps', self.config.maker_fee_bps)
+        fut_taker  = getattr(self.config, 'futures_taker_fee_bps', self.config.taker_fee_bps)
+
+        entry_mode = getattr(self.config, 'entry_execution_mode', self.config.order_execution_mode)
+        exit_mode  = getattr(self.config, 'exit_execution_mode',  self.config.order_execution_mode)
+
+        entry_spot_bps = spot_maker if entry_mode == "LIMIT" else spot_taker
+        entry_fut_bps  = fut_maker  if entry_mode == "LIMIT" else fut_taker
+        exit_spot_bps  = spot_maker if exit_mode  == "LIMIT" else spot_taker
+        exit_fut_bps   = fut_maker  if exit_mode  == "LIMIT" else fut_taker
+
+        entry_cost_bps = entry_spot_bps + entry_fut_bps
+        exit_cost_bps  = exit_spot_bps  + exit_fut_bps
+        fees_bps       = entry_cost_bps + exit_cost_bps
+
+        slippage_per_leg = getattr(self.config, 'slippage_bps', 0.0)
+        slippage_bps = slippage_per_leg * 4  # 4 legs: spot+futures × entry+exit
+
+        round_trip_bps = fees_bps + slippage_bps
+
+        return {
+            'entry_spot_bps':   entry_spot_bps,
+            'entry_fut_bps':    entry_fut_bps,
+            'exit_spot_bps':    exit_spot_bps,
+            'exit_fut_bps':     exit_fut_bps,
+            'entry_cost_bps':   entry_cost_bps,
+            'exit_cost_bps':    exit_cost_bps,
+            'fees_bps':         fees_bps,
+            'slippage_bps':     slippage_bps,
+            'round_trip_bps':   round_trip_bps,
+            'entry_mode':       entry_mode,
+            'exit_mode':        exit_mode,
+        }
+
     def _check_std_filter(self) -> Tuple[bool, float]:
         """
         Check if STD is sufficient to cover trading costs.
@@ -280,7 +323,7 @@ class SignalGenerator:
           Spot (non-VIP):    Maker 8 bps, Taker 10 bps
           Futures (non-VIP): Maker 2 bps, Taker  5 bps
 
-        Round-trip cost = entry (spot + futures) + exit (spot + futures)
+        Round-trip cost = entry (spot + futures) + exit (spot + futures) + slippage × 4.
 
         Returns (passed, profitability_ratio)
         """
@@ -294,33 +337,7 @@ class SignalGenerator:
         if spot_price <= 0:
             return False, 0.0
 
-        # Get separate spot/futures fees (fall back to legacy fields if not set)
-        spot_maker   = getattr(self.config, 'spot_maker_fee_bps',    self.config.maker_fee_bps)
-        spot_taker   = getattr(self.config, 'spot_taker_fee_bps',    self.config.taker_fee_bps)
-        fut_maker    = getattr(self.config, 'futures_maker_fee_bps',  self.config.maker_fee_bps)
-        fut_taker    = getattr(self.config, 'futures_taker_fee_bps',  self.config.taker_fee_bps)
-
-        # Entry fees: based on entry execution mode
-        entry_mode = getattr(self.config, 'entry_execution_mode', self.config.order_execution_mode)
-        if entry_mode == "LIMIT":
-            entry_cost_bps = spot_maker + fut_maker   # e.g. 8 + 2 = 10 bps
-        else:
-            entry_cost_bps = spot_taker + fut_taker   # e.g. 10 + 5 = 15 bps
-
-        # Exit fees: based on exit execution mode
-        exit_mode = getattr(self.config, 'exit_execution_mode', self.config.order_execution_mode)
-        if exit_mode == "LIMIT":
-            exit_cost_bps = spot_maker + fut_maker
-        else:
-            exit_cost_bps = spot_taker + fut_taker    # e.g. 10 + 5 = 15 bps
-
-        # Slippage: applies to all 4 legs (spot+futures × entry+exit)
-        # Even with LIMIT orders there is queue/amendment slippage
-        slippage_per_leg = getattr(self.config, 'slippage_bps', 0.0)
-        total_slippage_bps = slippage_per_leg * 4
-
-        # Total round-trip cost in price terms (fees + slippage)
-        total_cost_bps = entry_cost_bps + exit_cost_bps + total_slippage_bps
+        total_cost_bps = self._compute_round_trip_cost()['round_trip_bps']
         costs_price = (total_cost_bps / 10000) * spot_price
 
         # Profitability ratio: how many times STD covers the costs
@@ -552,6 +569,8 @@ class SignalGenerator:
         hl = self.current_half_life
         suggested_lookback = round(2.5 * hl) if hl != float('inf') and hl > 0 else None
 
+        cost = self._compute_round_trip_cost()
+
         return {
             'zscore': round(self.current_zscore, 4),
             'spread': round(self.current_spread, 6),
@@ -566,13 +585,18 @@ class SignalGenerator:
             'std_ratio_required': self.config.min_std_multiple,
             'std_filter_enabled': self.config.std_filter_enabled,
             'order_mode': self.config.order_execution_mode,
-            'fee_bps_used': (
-                getattr(self.config, 'spot_maker_fee_bps', self.config.maker_fee_bps) +
-                getattr(self.config, 'futures_maker_fee_bps', self.config.maker_fee_bps)
-            ) if getattr(self.config, 'entry_execution_mode', self.config.order_execution_mode) == "LIMIT" else (
-                getattr(self.config, 'spot_taker_fee_bps', self.config.taker_fee_bps) +
-                getattr(self.config, 'futures_taker_fee_bps', self.config.taker_fee_bps)
-            ),
+            'fee_bps_used': round(cost['entry_cost_bps'], 2),
+            'round_trip_cost_bps': round(cost['round_trip_bps'], 2),
+            'round_trip_fees_bps': round(cost['fees_bps'], 2),
+            'round_trip_slippage_bps': round(cost['slippage_bps'], 2),
+            'cost_breakdown': {
+                'entry_spot_bps': round(cost['entry_spot_bps'], 2),
+                'entry_fut_bps':  round(cost['entry_fut_bps'], 2),
+                'exit_spot_bps':  round(cost['exit_spot_bps'], 2),
+                'exit_fut_bps':   round(cost['exit_fut_bps'], 2),
+                'entry_mode':     cost['entry_mode'],
+                'exit_mode':      cost['exit_mode'],
+            },
             'regime': regime if data_ready else "COLLECTING",
             'data_points': len(self.spread_history),
             'lookback': self.lookback,
