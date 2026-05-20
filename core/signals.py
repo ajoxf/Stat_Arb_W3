@@ -584,7 +584,7 @@ class SignalGenerator:
             'std_ratio': round(std_ratio, 2) if std_ratio != float('inf') else None,
             'std_ratio_required': self.config.min_std_multiple,
             'std_filter_enabled': self.config.std_filter_enabled,
-            'order_mode': self.config.order_execution_mode,
+            'order_mode': cost['entry_mode'],
             'fee_bps_used': round(cost['entry_cost_bps'], 2),
             'round_trip_cost_bps': round(cost['round_trip_bps'], 2),
             'round_trip_fees_bps': round(cost['fees_bps'], 2),
