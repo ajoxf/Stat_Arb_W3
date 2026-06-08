@@ -725,6 +725,65 @@ def close_exchange_position():
     return jsonify({'success': False, 'error': 'Event loop not running'})
 
 
+@app.route('/api/sweep-dust', methods=['POST'])
+def sweep_dust_positions():
+    """
+    Close every sub-MIN_POSITION_USD exchange position in one shot.
+
+    These are typically rounding residue left in the cross-margin ledger
+    after closed test/real trades. Closing them on demand keeps the ledger
+    tidy without spamming the position-mismatch banner.
+    """
+    spot_adapter = engine.spot_adapter or engine.futures_adapter
+    futures_adapter = engine.futures_adapter
+    if not (spot_adapter or futures_adapter):
+        return jsonify({'success': False, 'error': 'No adapter available'}), 400
+    if not loop:
+        return jsonify({'success': False, 'error': 'Event loop not running'}), 500
+
+    async def fetch_and_sweep():
+        positions = await (futures_adapter or spot_adapter).get_positions()
+        results = []
+        for pos in positions:
+            usd_value = abs(pos.quantity * pos.entry_price) if pos.entry_price else 0
+            if usd_value >= MIN_POSITION_USD:
+                continue
+            is_swap = any(x in pos.symbol for x in ('-SWAP', '-FUTURES', '-PERP'))
+            adapter = futures_adapter if is_swap else spot_adapter
+            if not adapter:
+                results.append({'symbol': pos.symbol, 'success': False,
+                                'error': 'No adapter for symbol'})
+                continue
+            try:
+                res = await adapter.close_position(pos.symbol)
+                results.append({
+                    'symbol': pos.symbol,
+                    'usd_value': round(usd_value, 4),
+                    'success': bool(res.success),
+                    'error': None if res.success else res.error,
+                })
+            except Exception as exc:
+                results.append({'symbol': pos.symbol, 'success': False, 'error': str(exc)})
+        return results
+
+    try:
+        future = asyncio.run_coroutine_threadsafe(fetch_and_sweep(), loop)
+        results = future.result(timeout=60)
+        ok_count = sum(1 for r in results if r['success'])
+        fail_count = len(results) - ok_count
+        logger.info("Dust sweep: %d closed, %d failed, %d total", ok_count, fail_count, len(results))
+        return jsonify({
+            'success': True,
+            'swept': ok_count,
+            'failed': fail_count,
+            'total': len(results),
+            'results': results,
+        })
+    except Exception as e:
+        logger.exception("Dust sweep failed")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.route('/api/spot-holdings', methods=['GET'])
 def get_spot_holdings():
     """

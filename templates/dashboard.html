@@ -101,6 +101,19 @@
     </div>
 </div>
 
+<!-- Dust Positions Info (sub-$1 residue, never raises a warning) -->
+<div class="alert alert-info py-2 mb-2 d-none" id="dust-positions-info" style="font-size:0.85rem;">
+    <div class="d-flex align-items-center justify-content-between">
+        <div>
+            <i class="bi bi-info-circle me-2"></i>
+            <span id="dust-positions-text">—</span>
+        </div>
+        <button class="btn btn-sm btn-outline-info" id="btn-sweep-dust" onclick="sweepDust()">
+            <i class="bi bi-eraser me-1"></i>Sweep
+        </button>
+    </div>
+</div>
+
 <!-- Exchange Position Mismatch Warning Banner -->
 <div class="alert alert-danger mb-3 d-none" id="exchange-position-warning">
     <div class="d-flex align-items-center justify-content-between">
@@ -1863,6 +1876,25 @@ function updateFilterStatus(elementId, passed, value) {
         document.getElementById('orphan-warning').classList.add('d-none');
     }
 
+    function sweepDust() {
+        const btn = document.getElementById('btn-sweep-dust');
+        const orig = btn ? btn.innerHTML : '';
+        if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Sweeping…'; }
+        fetch('/api/sweep-dust', { method: 'POST' })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    showToast(`Dust sweep: ${data.swept} closed, ${data.failed} failed`,
+                              data.failed ? 'warning' : 'success');
+                    checkExchangePositions();
+                } else {
+                    showToast('Sweep failed: ' + (data.error || 'unknown'), 'danger');
+                }
+            })
+            .catch(e => showToast('Sweep error: ' + e, 'danger'))
+            .finally(() => { if (btn) { btn.disabled = false; btn.innerHTML = orig; } });
+    }
+
     // Exchange position mismatch tracking
     let exchangePositionWarningDismissed = false;
 
@@ -1872,6 +1904,23 @@ function updateFilterStatus(elementId, passed, value) {
         fetch('/api/exchange-positions')
             .then(response => response.json())
             .then(data => {
+                // Dust info badge — shown only when sub-$1 residue exists.
+                const dustEl = document.getElementById('dust-positions-info');
+                const dustText = document.getElementById('dust-positions-text');
+                const dust = data.dust_positions || [];
+                if (dustEl) {
+                    if (dust.length > 0) {
+                        const total = dust.reduce((s, p) => s + (p.usd_value || 0), 0);
+                        const desc = dust.map(p =>
+                            `${p.side} ${p.quantity.toFixed(6)} ${p.symbol} (~$${(p.usd_value||0).toFixed(2)})`
+                        ).join(', ');
+                        dustText.textContent = `Dust on exchange (${dust.length}, total ~$${total.toFixed(2)}): ${desc}`;
+                        dustEl.classList.remove('d-none');
+                    } else {
+                        dustEl.classList.add('d-none');
+                    }
+                }
+
                 const warningEl = document.getElementById('exchange-position-warning');
                 const detailsEl = document.getElementById('exchange-position-details');
                 const actionsEl = document.getElementById('exchange-position-actions');
