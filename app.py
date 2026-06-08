@@ -588,6 +588,12 @@ def sync_position():
         return jsonify({'success': False, 'error': f'Unknown action: {action}'}), 400
 
 
+# Any exchange position worth less than this is treated as rounding dust —
+# kept visible in /api/exchange-positions for sweeping, but excluded from
+# mismatch detection so test-trade residue doesn't flip the warning banner.
+MIN_POSITION_USD = 1.0
+
+
 @app.route('/api/exchange-positions', methods=['GET'])
 def get_exchange_positions():
     """
@@ -612,10 +618,18 @@ def get_exchange_positions():
             #   SWAP/FUTURES: qty = contracts, side from sign
             #   MARGIN SHORT: qty converted from USDT→BTC via avgPx, side = SHORT
             #   MARGIN LONG:  qty in BTC, side = LONG
+            #
+            # Anything worth less than MIN_POSITION_USD is rounding residue from
+            # closed test/real trades on cross margin, not a tradeable position.
+            # We split it into a separate `dust_positions` bucket so the UI can
+            # still show & sweep it, but it doesn't flip the mismatch banner.
             position_list = []
+            dust_list = []
             for pos in positions:
                 is_swap = any(x in pos.symbol for x in ('-SWAP', '-FUTURES', '-PERP'))
-                position_list.append({
+                usd_value = abs(pos.quantity * pos.entry_price) if pos.entry_price else 0
+                is_dust = usd_value < MIN_POSITION_USD
+                entry = {
                     'symbol': pos.symbol,
                     'side': pos.side,
                     'quantity': pos.quantity,
@@ -623,7 +637,10 @@ def get_exchange_positions():
                     'unrealized_pnl': pos.unrealized_pnl,
                     'leverage': pos.leverage,
                     'is_swap': is_swap,  # hint for UI: SWAP = bot-managed
-                })
+                    'usd_value': round(usd_value, 4),
+                    'is_dust': is_dust,
+                }
+                (dust_list if is_dust else position_list).append(entry)
 
             # Compare with engine state.
             # Guard: during entry execution the engine position is still NONE
@@ -634,7 +651,8 @@ def get_exchange_positions():
             engine_has_position = engine_position != "NONE" or entry_in_progress
             exchange_has_position = len(position_list) > 0
 
-            # Detect mismatch
+            # Detect mismatch — dust is excluded so sub-$1 residue from closed
+            # test trades never raises a false alarm.
             mismatch = False
             mismatch_reason = None
 
@@ -648,6 +666,7 @@ def get_exchange_positions():
             return jsonify({
                 'success': True,
                 'positions': position_list,
+                'dust_positions': dust_list,
                 'engine_position': engine_position,
                 'engine_has_position': engine_has_position,
                 'exchange_has_position': exchange_has_position,
