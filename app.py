@@ -272,6 +272,11 @@ if hasattr(signal, 'SIGTERM'):
 # Callback functions for engine events
 def on_tick_callback(spot_tick: MarketTick, futures_tick: MarketTick):
     """Handle tick updates."""
+    # Engine Reset (and the brief window during adapter rebuild) can leave one
+    # or both ticks momentarily None. Drop the tick rather than crash — the
+    # next valid tick will refresh state.
+    if spot_tick is None or futures_tick is None:
+        return
     try:
         tick_data = {
             'spot': spot_tick.to_dict(),
