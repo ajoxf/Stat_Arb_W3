@@ -761,6 +761,83 @@ def ai_monitor_status():
     return jsonify(monitor.get_status())
 
 
+@app.route('/api/key-env-probe', methods=['POST'])
+def key_env_probe():
+    """
+    Definitive diagnostic for 50101: try the stored credentials against BOTH
+    the live and the demo OKX endpoints and report which one accepts them.
+    The result tells the operator exactly which environment their API key
+    belongs to, removing any ambiguity from OKX's UI.
+    """
+    adapter = engine.spot_adapter or engine.futures_adapter
+    if adapter is None:
+        return jsonify({'success': False, 'error': 'no adapter configured'}), 400
+    api_key = getattr(adapter, 'api_key', None)
+    secret = getattr(adapter, 'secret_key', None)
+    passphrase = getattr(adapter, 'passphrase', None)
+    if not (api_key and secret and passphrase):
+        return jsonify({'success': False,
+                        'error': 'no API credentials stored on the adapter'}), 400
+
+    async def probe(is_testnet: bool):
+        probe_adapter = OKXAdapter(
+            api_key=api_key, secret_key=secret, passphrase=passphrase,
+            is_testnet=is_testnet,
+        )
+        try:
+            await probe_adapter.connect()
+            result = await probe_adapter._request("GET", "/api/v5/account/config")
+            return {
+                'accepted': bool(result and result.get('code') == '0'),
+                'code': result.get('code') if result else None,
+                'msg': result.get('msg') if result else None,
+            }
+        except Exception as exc:
+            return {'accepted': False, 'code': None, 'msg': str(exc)}
+        finally:
+            try:
+                await probe_adapter.disconnect()
+            except Exception:
+                pass
+
+    async def run_both():
+        live = await probe(is_testnet=False)
+        demo = await probe(is_testnet=True)
+        return live, demo
+
+    if not loop:
+        return jsonify({'success': False, 'error': 'event loop not running'}), 500
+    try:
+        future = asyncio.run_coroutine_threadsafe(run_both(), loop)
+        live, demo = future.result(timeout=20)
+    except Exception as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 500
+
+    if live['accepted'] and not demo['accepted']:
+        verdict = 'LIVE — key is correctly issued for the live environment'
+    elif demo['accepted'] and not live['accepted']:
+        verdict = ('DEMO — key was issued in OKX demo trading. '
+                   'Recreate at https://www.okx.com (Live mode) to use with paper_trading=False.')
+    elif live['accepted'] and demo['accepted']:
+        verdict = 'BOTH (unexpected) — investigate manually'
+    else:
+        verdict = ('NEITHER — credentials are rejected by both environments. '
+                   'Possible causes: deleted/disabled key, IP not whitelisted, '
+                   'or typo in stored secret/passphrase.')
+
+    # First 6 chars of the API key as a fingerprint so the operator can
+    # cross-check which key the bot has in memory (full key never logged/returned).
+    key_fingerprint = (api_key[:6] + '…' + api_key[-4:]) if len(api_key) > 12 else 'short'
+
+    return jsonify({
+        'success': True,
+        'key_fingerprint': key_fingerprint,
+        'live':  live,
+        'demo':  demo,
+        'verdict': verdict,
+    })
+
+
 @app.route('/api/sweep-dust', methods=['POST'])
 def sweep_dust_positions():
     """
