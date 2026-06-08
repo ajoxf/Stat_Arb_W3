@@ -17,6 +17,7 @@ from core.signals import SignalGenerator
 from core.order_executor import OrderExecutor
 from core.trade_logger import get_trade_logger
 from core.telegram_bot import get_notifier
+from core.ai_monitor import AIMonitor
 from adapters.base import ExchangeAdapter
 from adapters.okx_websocket import OKXWebSocketManager
 
@@ -125,6 +126,9 @@ class TradingEngine:
 
         # Tick interval in seconds
         self.tick_interval = 0.5  # 500ms
+
+        # Periodic AI health monitor (self-disables without ANTHROPIC_API_KEY)
+        self.ai_monitor = AIMonitor(self)
 
     def update_config(self, config: TradingConfig) -> None:
         """Update trading configuration."""
@@ -346,10 +350,21 @@ class TradingEngine:
             self._task = asyncio.create_task(self._main_loop())
             logger.info("REST polling task created successfully")
 
+        # Spin up the periodic AI health monitor.
+        try:
+            self.ai_monitor.start()
+        except Exception:
+            logger.exception("AI monitor failed to start (continuing)")
+
     async def stop(self) -> None:
         """Stop the trading engine."""
         self._running = False
         self.state.is_running = False
+
+        try:
+            self.ai_monitor.stop()
+        except Exception:
+            logger.debug("AI monitor stop raised (ignored)")
 
         # Stop WebSocket if running
         if self.ws_manager:

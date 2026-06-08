@@ -725,6 +725,15 @@ def close_exchange_position():
     return jsonify({'success': False, 'error': 'Event loop not running'})
 
 
+@app.route('/api/ai-monitor/status', methods=['GET'])
+def ai_monitor_status():
+    """Return the AI monitor's last verdict and run time."""
+    monitor = getattr(engine, 'ai_monitor', None)
+    if monitor is None:
+        return jsonify({'enabled': False, 'reason': 'monitor not attached'})
+    return jsonify(monitor.get_status())
+
+
 @app.route('/api/sweep-dust', methods=['POST'])
 def sweep_dust_positions():
     """
