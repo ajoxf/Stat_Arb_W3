@@ -606,7 +606,26 @@ def get_exchange_positions():
         return jsonify({'positions': [], 'error': 'No futures adapter available'})
 
     async def fetch_positions():
-        return await adapter.get_positions()
+        positions = await adapter.get_positions()
+        # Enrich every position with min_qty so the caller knows whether the
+        # quantity is large enough to close via API. Dust below min_qty is
+        # locked at the exchange and can't be swept by us.
+        spot_adapter = engine.spot_adapter or adapter
+        out = []
+        for pos in positions:
+            usd_value = abs(pos.quantity * pos.entry_price) if pos.entry_price else 0
+            is_swap = any(x in pos.symbol for x in ('-SWAP', '-FUTURES', '-PERP'))
+            picker = adapter if is_swap else spot_adapter
+            min_qty = 0.0
+            try:
+                if hasattr(picker, 'get_symbol_info'):
+                    info = await picker.get_symbol_info(pos.symbol)
+                    if info:
+                        min_qty = float(info.get('min_qty') or 0)
+            except Exception:
+                pass
+            out.append((pos, usd_value, is_swap, min_qty))
+        return out
 
     if loop:
         try:
@@ -625,10 +644,11 @@ def get_exchange_positions():
             # still show & sweep it, but it doesn't flip the mismatch banner.
             position_list = []
             dust_list = []
-            for pos in positions:
-                is_swap = any(x in pos.symbol for x in ('-SWAP', '-FUTURES', '-PERP'))
-                usd_value = abs(pos.quantity * pos.entry_price) if pos.entry_price else 0
+            for pos, usd_value, is_swap, min_qty in positions:
                 is_dust = usd_value < MIN_POSITION_USD
+                # Dust is "closeable" only if the quantity meets the exchange
+                # minimum lot size — otherwise the close order would be rejected.
+                closeable = (min_qty <= 0) or (abs(pos.quantity) >= min_qty)
                 entry = {
                     'symbol': pos.symbol,
                     'side': pos.side,
@@ -639,6 +659,8 @@ def get_exchange_positions():
                     'is_swap': is_swap,  # hint for UI: SWAP = bot-managed
                     'usd_value': round(usd_value, 4),
                     'is_dust': is_dust,
+                    'min_qty': min_qty,
+                    'closeable': closeable,
                 }
                 (dust_list if is_dust else position_list).append(entry)
 
@@ -761,29 +783,62 @@ def sweep_dust_positions():
             adapter = futures_adapter if is_swap else spot_adapter
             if not adapter:
                 results.append({'symbol': pos.symbol, 'success': False,
-                                'error': 'No adapter for symbol'})
+                                'error': 'No adapter for symbol', 'locked': False})
                 continue
+
+            # Pre-flight: if the dust quantity is below the exchange minimum
+            # lot size the order would be rejected. Mark it as locked and skip
+            # — repeatedly hitting the API only fills the log with errors.
+            min_qty = 0.0
+            try:
+                if hasattr(adapter, 'get_symbol_info'):
+                    info = await adapter.get_symbol_info(pos.symbol)
+                    if info:
+                        min_qty = float(info.get('min_qty') or 0)
+            except Exception:
+                pass
+            if min_qty > 0 and abs(pos.quantity) < min_qty:
+                results.append({
+                    'symbol': pos.symbol,
+                    'usd_value': round(usd_value, 4),
+                    'quantity': pos.quantity,
+                    'min_qty': min_qty,
+                    'success': False,
+                    'locked': True,
+                    'error': (f'Below exchange min lot size '
+                              f'({pos.quantity:.8f} < {min_qty:.8f}) — '
+                              'sweep manually on OKX'),
+                })
+                continue
+
             try:
                 res = await adapter.close_position(pos.symbol)
                 results.append({
                     'symbol': pos.symbol,
                     'usd_value': round(usd_value, 4),
                     'success': bool(res.success),
+                    'locked': False,
                     'error': None if res.success else res.error,
                 })
             except Exception as exc:
-                results.append({'symbol': pos.symbol, 'success': False, 'error': str(exc)})
+                results.append({'symbol': pos.symbol, 'success': False,
+                                'locked': False, 'error': str(exc)})
         return results
 
     try:
         future = asyncio.run_coroutine_threadsafe(fetch_and_sweep(), loop)
         results = future.result(timeout=60)
         ok_count = sum(1 for r in results if r['success'])
-        fail_count = len(results) - ok_count
-        logger.info("Dust sweep: %d closed, %d failed, %d total", ok_count, fail_count, len(results))
+        locked_count = sum(1 for r in results if r.get('locked'))
+        fail_count = len(results) - ok_count - locked_count
+        logger.info(
+            "Dust sweep: %d closed, %d locked (below exchange min), %d failed, %d total",
+            ok_count, locked_count, fail_count, len(results),
+        )
         return jsonify({
             'success': True,
             'swept': ok_count,
+            'locked': locked_count,
             'failed': fail_count,
             'total': len(results),
             'results': results,

@@ -1884,8 +1884,11 @@ function updateFilterStatus(elementId, passed, value) {
             .then(r => r.json())
             .then(data => {
                 if (data.success) {
-                    showToast(`Dust sweep: ${data.swept} closed, ${data.failed} failed`,
-                              data.failed ? 'warning' : 'success');
+                    const bits = [`${data.swept} closed`];
+                    if (data.locked) bits.push(`${data.locked} below OKX min lot`);
+                    if (data.failed) bits.push(`${data.failed} failed`);
+                    const tone = data.failed ? 'warning' : (data.swept ? 'success' : 'info');
+                    showToast('Dust sweep: ' + bits.join(', '), tone);
                     checkExchangePositions();
                 } else {
                     showToast('Sweep failed: ' + (data.error || 'unknown'), 'danger');
@@ -1907,15 +1910,34 @@ function updateFilterStatus(elementId, passed, value) {
                 // Dust info badge — shown only when sub-$1 residue exists.
                 const dustEl = document.getElementById('dust-positions-info');
                 const dustText = document.getElementById('dust-positions-text');
+                const sweepBtn = document.getElementById('btn-sweep-dust');
                 const dust = data.dust_positions || [];
                 if (dustEl) {
                     if (dust.length > 0) {
                         const total = dust.reduce((s, p) => s + (p.usd_value || 0), 0);
-                        const desc = dust.map(p =>
-                            `${p.side} ${p.quantity.toFixed(6)} ${p.symbol} (~$${(p.usd_value||0).toFixed(2)})`
-                        ).join(', ');
-                        dustText.textContent = `Dust on exchange (${dust.length}, total ~$${total.toFixed(2)}): ${desc}`;
+                        const closeable = dust.filter(p => p.closeable !== false);
+                        const locked    = dust.filter(p => p.closeable === false);
+                        const fmt = (p, tag) => {
+                            const t = tag ? ` <span class="text-warning">[${tag}]</span>` : '';
+                            return `${p.side} ${p.quantity.toFixed(6)} ${p.symbol} ` +
+                                   `(~$${(p.usd_value||0).toFixed(2)})${t}`;
+                        };
+                        const parts = [
+                            ...closeable.map(p => fmt(p, '')),
+                            ...locked.map(p => fmt(p, 'below min lot')),
+                        ];
+                        let summary = `Dust on exchange (${dust.length}, total ~$${total.toFixed(2)})`;
+                        if (locked.length > 0) {
+                            summary += ` — ${locked.length} locked below OKX min lot size, sweep manually if desired`;
+                        }
+                        dustText.innerHTML = `${summary}: ${parts.join(', ')}`;
                         dustEl.classList.remove('d-none');
+                        if (sweepBtn) {
+                            sweepBtn.disabled = closeable.length === 0;
+                            sweepBtn.title = closeable.length === 0
+                                ? 'All dust below exchange minimum lot size — cannot sweep via API'
+                                : `Sweep ${closeable.length} dust position(s)`;
+                        }
                     } else {
                         dustEl.classList.add('d-none');
                     }
