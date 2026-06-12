@@ -994,6 +994,62 @@ class OKXAdapter(ExchangeAdapter):
 
         return None
 
+    async def get_instruments(self, inst_type: str = "SPOT") -> List[Dict[str, Any]]:
+        """List all tradable instruments of a given type from OKX.
+
+        Public (unauthenticated) endpoint, so it works before login and in
+        demo mode. Used to let the user pick any spot leg and any futures
+        leg independently — same underlying or two different instruments.
+
+        Args:
+            inst_type: "SPOT" or "SWAP" (USDT-margined perpetuals).
+
+        Returns:
+            Sorted list of {instId, base, quote, label}. Restricted to live,
+            linear USDT-quoted (spot) / USDT-settled (swap) instruments;
+            inverse/coin-margined contracts are skipped.
+        """
+        inst_type = inst_type.upper()
+        out: List[Dict[str, Any]] = []
+        try:
+            result = await self._request(
+                "GET",
+                "/api/v5/public/instruments",
+                params={"instType": inst_type},
+            )
+
+            if not (result and result.get("code") == "0" and result.get("data")):
+                return out
+
+            for d in result["data"]:
+                inst_id = d.get("instId", "")
+                if not inst_id or d.get("state") != "live":
+                    continue
+
+                if inst_type == "SPOT":
+                    if d.get("quoteCcy") != "USDT":
+                        continue
+                    base = d.get("baseCcy") or inst_id.split("-")[0]
+                else:  # SWAP — linear USDT-settled only
+                    if d.get("settleCcy") != "USDT":
+                        continue
+                    base = d.get("ctValCcy") or inst_id.split("-")[0]
+
+                out.append({
+                    "instId": inst_id,
+                    "base": base,
+                    "quote": "USDT",
+                    "label": inst_id,
+                })
+
+            out.sort(key=lambda x: x["instId"])
+            logger.info("OKX %s instruments listed: %d", inst_type, len(out))
+
+        except Exception as e:
+            logger.error("Error fetching OKX instruments (%s): %s", inst_type, e)
+
+        return out
+
     async def set_leverage(self, symbol: str, leverage: int, margin_mode: str = "cross") -> bool:
         """
         Set leverage for a symbol.
