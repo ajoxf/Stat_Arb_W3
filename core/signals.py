@@ -321,13 +321,22 @@ class SignalGenerator:
 
     def _check_std_filter(self) -> Tuple[bool, float]:
         """
-        Check if STD is sufficient to cover trading costs.
+        Check if spread STD is sufficient to cover trading costs.
 
         Uses separate spot and futures fees since they differ significantly:
           Spot (non-VIP):    Maker 8 bps, Taker 10 bps
           Futures (non-VIP): Maker 2 bps, Taker  5 bps
 
         Round-trip cost = entry (spot + futures) + exit (spot + futures) + slippage × 4.
+
+        The comparison must be in *spread units*, not dollar-per-leg units.
+        Spread = futures - beta*spot, so a $1 spread move translates to
+        ``futures_qty`` dollars of PnL, where ``futures_qty = position_size /
+        (beta * spot_price)`` (engine's sizing rule). Breakeven spread move is
+        therefore ``rt_bps/10000 * beta * spot_price`` — note the beta factor.
+        For the classic basis trade (beta = 1) this reduces to the original
+        ``rt_bps/10000 * spot_price``; for cross pairs (beta != 1) it correctly
+        scales cost up to the futures-price magnitude.
 
         Returns (passed, profitability_ratio)
         """
@@ -342,7 +351,8 @@ class SignalGenerator:
             return False, 0.0
 
         total_cost_bps = self._compute_round_trip_cost()['round_trip_bps']
-        costs_price = (total_cost_bps / 10000) * spot_price
+        beta = max(getattr(self.config, 'hedge_ratio', 1.0) or 1.0, 1e-9)
+        costs_price = (total_cost_bps / 10000) * beta * spot_price
 
         # Profitability ratio: how many times STD covers the costs
         profitability_ratio = self.current_std / costs_price if costs_price > 0 else float('inf')
