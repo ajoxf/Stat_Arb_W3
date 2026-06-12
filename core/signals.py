@@ -585,11 +585,18 @@ class SignalGenerator:
 
         cost = self._compute_round_trip_cost()
 
+        beta = getattr(self.config, 'hedge_ratio', 1.0) or 1.0
+        last_spot = self.spot_prices[-1] if self.spot_prices else 0.0
+        last_fut  = self.futures_prices[-1] if self.futures_prices else 0.0
+
         return {
             'zscore': round(self.current_zscore, 4),
             'spread': round(self.current_spread, 6),
             'spread_mean': round(self.current_mean, 6),
             'spread_std': round(self.current_std, 6),
+            'hedge_ratio': beta,
+            'beta_x_spot': round(beta * last_spot, 6) if last_spot else 0.0,
+            'fut_div_beta': round(last_fut / beta, 6) if last_fut and beta else 0.0,
             'hurst': round(self.current_hurst, 4),
             'half_life': round(hl, 1) if hl != float('inf') else None,
             'suggested_lookback': suggested_lookback,
