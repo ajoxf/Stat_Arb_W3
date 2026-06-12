@@ -45,6 +45,17 @@
                                    placeholder="e.g. SOL-USDT-SWAP" autocomplete="off">
                             <datalist id="futures_symbols_list"></datalist>
                         </div>
+                        <div class="col-md-4 mt-3">
+                            <label class="form-label">Hedge Ratio (&beta;)</label>
+                            <input type="number" class="form-control" id="hedge_ratio" name="hedge_ratio"
+                                   value="{{ config.hedge_ratio }}" step="0.0001" min="0.0001">
+                            <small class="text-secondary">
+                                spread = futures &minus; &beta; &times; spot. Use <strong>1</strong> for the
+                                same underlying (e.g. BTC vs BTC-SWAP). For a cross pair (e.g. BTC vs ETH)
+                                set &beta; so the legs are comparable &mdash; the spot leg is scaled by &beta;
+                                to stay dollar-hedged.
+                            </small>
+                        </div>
                         <div class="col-12 mt-2">
                             <small class="text-secondary">
                                 Pair label: <span id="pair_label_display" class="text-info">&mdash;</span>
@@ -942,6 +953,7 @@
             asset: document.getElementById('asset').value,
             spot_symbol: document.getElementById('spot_symbol').value,
             futures_symbol: document.getElementById('futures_symbol').value,
+            hedge_ratio: parseFloat(document.getElementById('hedge_ratio').value) || 1.0,
             entry_threshold: parseFloat(document.getElementById('entry_threshold').value),
             exit_threshold: parseFloat(document.getElementById('exit_threshold').value),
             stop_loss_threshold: parseFloat(document.getElementById('stop_loss_threshold').value),
@@ -1059,6 +1071,7 @@
                 document.getElementById('asset').value = config.asset;
                 document.getElementById('spot_symbol').value = config.spot_symbol;
                 document.getElementById('futures_symbol').value = config.futures_symbol;
+                document.getElementById('hedge_ratio').value = config.hedge_ratio;
                 updatePairLabel();
                 document.getElementById('entry_threshold').value = config.entry_threshold;
                 document.getElementById('exit_threshold').value = config.exit_threshold;
