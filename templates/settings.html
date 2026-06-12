@@ -60,6 +60,8 @@
                             <small class="text-secondary">
                                 Pair label: <span id="pair_label_display" class="text-info">&mdash;</span>
                                 <span id="instruments_status" class="ms-2 text-secondary"></span>
+                                <a href="#" id="refresh_instruments_btn" class="ms-2"
+                                   title="Re-fetch the instrument list from OKX (bypasses 1h cache)">&#x21bb; refresh</a>
                             </small>
                         </div>
                         <div class="col-12 mt-2">
@@ -963,6 +965,29 @@
                 status.textContent = '· could not load instrument list';
             });
     }
+
+    // Manual refresh: bypass the 1h server-side cache; also clear the in-page
+    // category map so a stale tag can't linger on an instId OKX has changed.
+    (function() {
+        const btn = document.getElementById('refresh_instruments_btn');
+        if (!btn) return;
+        btn.addEventListener('click', function(ev) {
+            ev.preventDefault();
+            if (btn.dataset.busy === '1') return;   // ignore double-clicks
+            btn.dataset.busy = '1';
+            btn.style.pointerEvents = 'none';
+            btn.style.opacity = '0.5';
+            instrumentCategories.clear();
+            loadInstruments(true);
+            // Re-enable after the fetch resolves (handled inline by setTimeout
+            // since loadInstruments doesn't return a promise)
+            setTimeout(function() {
+                btn.dataset.busy = '0';
+                btn.style.pointerEvents = '';
+                btn.style.opacity = '';
+            }, 1500);
+        });
+    })();
 
     loadInstruments(false);
     updatePairLabel();
