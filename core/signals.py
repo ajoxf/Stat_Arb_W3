@@ -11,6 +11,7 @@ from typing import Optional, Tuple, List, Dict, Any, Callable
 import logging
 
 from models import Signal, TradingConfig, MarketTick, SDTouchEvent
+from adapters.base import is_derivative
 
 logger = logging.getLogger(__name__)
 
@@ -280,8 +281,14 @@ class SignalGenerator:
         """
         Compute the full round-trip cost breakdown in bps.
 
-        Round-trip = entry (spot + futures) + exit (spot + futures) + slippage × 4 legs.
-        Returns a dict with per-leg components so the UI can show the breakdown.
+        Round-trip = entry (Leg A + Leg B) + exit (Leg A + Leg B) + slippage × 4.
+        Fees are picked per-leg from the instrument shape (spot rates for spot,
+        futures rates for any perp/dated future) so the cost estimate is correct
+        regardless of which leg-slot holds which instrument type — futures/futures,
+        calendar spreads, and the classic basis trade are all handled.
+
+        The breakdown keys keep their legacy names (entry_spot_bps / entry_fut_bps)
+        for dashboard backward-compatibility; semantically they're Leg A / Leg B.
         """
         spot_maker = getattr(self.config, 'spot_maker_fee_bps', self.config.maker_fee_bps)
         spot_taker = getattr(self.config, 'spot_taker_fee_bps', self.config.taker_fee_bps)
@@ -291,10 +298,18 @@ class SignalGenerator:
         entry_mode = getattr(self.config, 'entry_execution_mode', self.config.order_execution_mode)
         exit_mode  = getattr(self.config, 'exit_execution_mode',  self.config.order_execution_mode)
 
-        entry_spot_bps = spot_maker if entry_mode == "LIMIT" else spot_taker
-        entry_fut_bps  = fut_maker  if entry_mode == "LIMIT" else fut_taker
-        exit_spot_bps  = spot_maker if exit_mode  == "LIMIT" else spot_taker
-        exit_fut_bps   = fut_maker  if exit_mode  == "LIMIT" else fut_taker
+        # Pick the per-leg fee schedule based on what each leg actually is
+        leg_a_is_deriv = is_derivative(getattr(self.config, 'spot_symbol', ''))
+        leg_b_is_deriv = is_derivative(getattr(self.config, 'futures_symbol', ''))
+        leg_a_maker = fut_maker if leg_a_is_deriv else spot_maker
+        leg_a_taker = fut_taker if leg_a_is_deriv else spot_taker
+        leg_b_maker = fut_maker if leg_b_is_deriv else spot_maker
+        leg_b_taker = fut_taker if leg_b_is_deriv else spot_taker
+
+        entry_spot_bps = leg_a_maker if entry_mode == "LIMIT" else leg_a_taker
+        entry_fut_bps  = leg_b_maker if entry_mode == "LIMIT" else leg_b_taker
+        exit_spot_bps  = leg_a_maker if exit_mode  == "LIMIT" else leg_a_taker
+        exit_fut_bps   = leg_b_maker if exit_mode  == "LIMIT" else leg_b_taker
 
         entry_cost_bps = entry_spot_bps + entry_fut_bps
         exit_cost_bps  = exit_spot_bps  + exit_fut_bps
