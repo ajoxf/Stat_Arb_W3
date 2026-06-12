@@ -62,6 +62,10 @@
                                 <span id="instruments_status" class="ms-2 text-secondary"></span>
                             </small>
                         </div>
+                        <div class="col-12 mt-2">
+                            <div id="pair_warning" class="alert alert-warning py-2 px-3 small mb-0"
+                                 style="display:none;"></div>
+                        </div>
                     </div>
                     <!-- asset is now derived from the chosen legs (DB/history key) -->
                     <input type="hidden" id="asset" name="asset" value="{{ config.asset }}">
@@ -852,21 +856,93 @@
         }
     });
 
-    // Re-label whenever either leg is edited directly
-    document.getElementById('spot_symbol').addEventListener('input', updatePairLabel);
-    document.getElementById('futures_symbol').addEventListener('input', updatePairLabel);
+    // Re-label and re-check warning whenever either leg is edited directly
+    document.getElementById('spot_symbol').addEventListener('input', function() {
+        updatePairLabel(); checkPairWarning();
+    });
+    document.getElementById('futures_symbol').addEventListener('input', function() {
+        updatePairLabel(); checkPairWarning();
+    });
+
+    // Per-instId category lookup, populated as the datalists fill
+    const instrumentCategories = new Map();
+
+    function formatExpiry(epochMs) {
+        if (!epochMs) return '';
+        const n = parseInt(epochMs, 10);
+        if (!n) return '';
+        const d = new Date(n);
+        if (isNaN(d.getTime())) return '';
+        return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit' });
+    }
+
+    function badgeFor(it) {
+        const base = it.base || '';
+        const quote = it.quote || '';
+        const exp = formatExpiry(it.expiry);
+        switch (it.category) {
+            case 'usdt_linear':   return base + ' / ' + quote;
+            case 'usdc_linear':   return base + ' / ' + quote + ' · USDC rail';
+            case 'inverse':       return base + ' · inverse perp';
+            case 'dated_usdt':    return base + ' dated · ' + (exp || 'expiry');
+            case 'dated_usdc':    return base + ' dated · USDC · ' + (exp || 'expiry');
+            case 'inverse_dated': return base + ' dated · inverse · ' + (exp || 'expiry');
+            case 'non_usd_quoted':return base + ' / ' + quote + ' · non-USD quote';
+            default:              return it.instId;
+        }
+    }
 
     // Populate the spot/futures datalists from the live exchange instrument universe
     function fillDatalist(id, items) {
         const dl = document.getElementById(id);
         dl.innerHTML = '';
         items.forEach(function(it) {
+            instrumentCategories.set(it.instId, it.category || 'unknown');
             const opt = document.createElement('option');
             opt.value = it.instId;
-            if (it.base) opt.label = it.base + ' / ' + it.quote;
+            opt.label = badgeFor(it);
             dl.appendChild(opt);
         });
     }
+
+    // Warning chip when either leg is anything other than USDT linear
+    const CATEGORY_NOTES = {
+        usdc_linear:    'USDC rail — sizing assumes USDC ≈ 1 USD (small basis vs USDT).',
+        inverse:        'inverse / coin-margined — margin & PnL in the base coin, not USD.',
+        dated_usdt:     'dated future — basis compresses to zero at expiry.',
+        dated_usdc:     'dated future + USDC rail — both caveats apply.',
+        inverse_dated:  'dated inverse — expiry + coin-margined caveats apply.',
+        non_usd_quoted: 'non-USD quote — position_size_usd will size in quote units, not USD.',
+        other:          'non-standard configuration — review manually.',
+        other_dated:    'non-standard configuration — review manually.'
+    };
+
+    function checkPairWarning() {
+        const warnEl = document.getElementById('pair_warning');
+        if (!warnEl) return;
+        const legs = [
+            ['Spot', document.getElementById('spot_symbol').value],
+            ['Futures', document.getElementById('futures_symbol').value]
+        ];
+        const issues = [];
+        legs.forEach(function(pair) {
+            const cat = instrumentCategories.get(pair[1]);
+            if (cat && cat !== 'usdt_linear' && cat !== 'unknown') {
+                issues.push(pair[0] + ' (' + pair[1] + '): ' + (CATEGORY_NOTES[cat] || cat));
+            }
+        });
+        if (issues.length === 0) {
+            warnEl.style.display = 'none';
+            warnEl.innerHTML = '';
+        } else {
+            warnEl.style.display = 'block';
+            warnEl.innerHTML =
+                '<strong>Heads up &mdash; engine math assumes USDT linear:</strong><ul class="mb-0 mt-1">' +
+                issues.map(function(t){ return '<li>' + t + '</li>'; }).join('') +
+                '</ul>';
+        }
+    }
+
     function loadInstruments(refresh) {
         const status = document.getElementById('instruments_status');
         status.textContent = '· loading instruments…';
@@ -877,7 +953,8 @@
                     fillDatalist('spot_symbols_list', data.spot || []);
                     fillDatalist('futures_symbols_list', data.futures || []);
                     status.textContent = '· ' + (data.spot_count || 0) + ' spot · ' +
-                                         (data.futures_count || 0) + ' futures available';
+                                         (data.futures_count || 0) + ' futures+dated available';
+                    checkPairWarning();
                 } else {
                     status.textContent = '· could not load instrument list (connect the exchange first)';
                 }

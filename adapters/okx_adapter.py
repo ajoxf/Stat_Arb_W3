@@ -19,6 +19,24 @@ from models import MarketTick, OrderResult, Position, AccountInfo
 logger = logging.getLogger(__name__)
 
 
+def _detect_inst_type(symbol: str) -> str:
+    """Classify an OKX instId by its segment shape.
+
+    - "BTC-USDT"            -> SPOT      (1 dash)
+    - "BTC-USDT-SWAP" /
+      "BTC-USD-SWAP"        -> SWAP      (suffix)
+    - "BTC-USDT-250628" /
+      "BTC-USD-250628"      -> FUTURES   (3 segments, no -SWAP suffix)
+    """
+    if not symbol:
+        return "SPOT"
+    if symbol.endswith("-SWAP"):
+        return "SWAP"
+    if symbol.count("-") >= 2:
+        return "FUTURES"
+    return "SPOT"
+
+
 class OKXAdapter(ExchangeAdapter):
     """
     OKX exchange adapter supporting spot and perpetual swaps.
@@ -259,7 +277,7 @@ class OKXAdapter(ExchangeAdapter):
         """
         try:
             # Determine instrument type and trade mode
-            inst_type = "SWAP" if "-SWAP" in symbol else "SPOT"
+            inst_type = _detect_inst_type(symbol)
             td_mode = "cross" if inst_type == "SWAP" else self._spot_td_mode
             if force_td_mode:
                 td_mode = force_td_mode
@@ -962,7 +980,7 @@ class OKXAdapter(ExchangeAdapter):
     async def get_symbol_info(self, symbol: str) -> Optional[Dict[str, Any]]:
         """Get symbol trading information."""
         try:
-            inst_type = "SWAP" if "-SWAP" in symbol else "SPOT"
+            inst_type = _detect_inst_type(symbol)
             result = await self._request(
                 "GET",
                 "/api/v5/public/instruments",
@@ -998,16 +1016,32 @@ class OKXAdapter(ExchangeAdapter):
         """List all tradable instruments of a given type from OKX.
 
         Public (unauthenticated) endpoint, so it works before login and in
-        demo mode. Used to let the user pick any spot leg and any futures
-        leg independently — same underlying or two different instruments.
+        demo mode. Each entry is tagged with a ``category`` describing its
+        trade-time math characteristics:
+
+        - ``usdt_linear``: USDT spot or USDT-settled linear perpetual.
+          Sizing (position_size_usd / price), fees (bps), PnL and the
+          hedge-ratio math are all correct.
+        - ``usdc_linear``: USDC rail. USDC ~= 1 USD so the math is
+          approximately correct (small USDT/USDC basis).
+        - ``inverse``: coin-margined perpetual. Margin and PnL are in the
+          base coin, not USD.
+        - ``dated_usdt`` / ``dated_usdc``: dated futures, USD-stable settled.
+          Basis compresses to zero at expiry.
+        - ``inverse_dated``: dated + inverse — both caveats apply.
+        - ``non_usd_quoted`` / ``other`` / ``other_dated``: spot quoted in
+          another crypto/fiat, or anything else exotic.
+
+        Only ``usdt_linear`` is guaranteed safe with the current engine; the
+        UI surfaces the category so the operator can choose with eyes open.
 
         Args:
-            inst_type: "SPOT" or "SWAP" (USDT-margined perpetuals).
+            inst_type: "SPOT", "SWAP", or "FUTURES".
 
         Returns:
-            Sorted list of {instId, base, quote, label}. Restricted to live,
-            linear USDT-quoted (spot) / USDT-settled (swap) instruments;
-            inverse/coin-margined contracts are skipped.
+            Sorted list of {instId, base, quote, category, expiry, label}.
+            ``usdt_linear`` entries are listed first to keep the common case
+            at the top of the dropdown.
         """
         inst_type = inst_type.upper()
         out: List[Dict[str, Any]] = []
@@ -1026,23 +1060,62 @@ class OKXAdapter(ExchangeAdapter):
                 if not inst_id or d.get("state") != "live":
                     continue
 
+                expiry = ""
+
                 if inst_type == "SPOT":
-                    if d.get("quoteCcy") != "USDT":
-                        continue
                     base = d.get("baseCcy") or inst_id.split("-")[0]
-                else:  # SWAP — linear USDT-settled only
-                    if d.get("settleCcy") != "USDT":
-                        continue
+                    quote = d.get("quoteCcy") or (
+                        inst_id.split("-", 1)[1] if "-" in inst_id else ""
+                    )
+                    if quote == "USDT":
+                        category = "usdt_linear"
+                    elif quote == "USDC":
+                        category = "usdc_linear"
+                    else:
+                        category = "non_usd_quoted"
+
+                elif inst_type == "SWAP":
                     base = d.get("ctValCcy") or inst_id.split("-")[0]
+                    quote = d.get("settleCcy") or ""
+                    ct_type = (d.get("ctType") or "linear").lower()
+                    if ct_type == "inverse":
+                        category = "inverse"
+                    elif quote == "USDT":
+                        category = "usdt_linear"
+                    elif quote == "USDC":
+                        category = "usdc_linear"
+                    else:
+                        category = "other"
+
+                elif inst_type == "FUTURES":
+                    base = d.get("ctValCcy") or inst_id.split("-")[0]
+                    quote = d.get("settleCcy") or ""
+                    ct_type = (d.get("ctType") or "linear").lower()
+                    expiry = d.get("expTime") or ""
+                    if ct_type == "inverse":
+                        category = "inverse_dated"
+                    elif quote == "USDT":
+                        category = "dated_usdt"
+                    elif quote == "USDC":
+                        category = "dated_usdc"
+                    else:
+                        category = "other_dated"
+
+                else:
+                    # OPTION / MARGIN — not usable as a stat-arb leg
+                    continue
 
                 out.append({
                     "instId": inst_id,
                     "base": base,
-                    "quote": "USDT",
+                    "quote": quote,
+                    "category": category,
+                    "expiry": expiry,
                     "label": inst_id,
                 })
 
-            out.sort(key=lambda x: x["instId"])
+            # Safe instruments first; alphabetic within each tier
+            out.sort(key=lambda x: (x["category"] != "usdt_linear", x["instId"]))
             logger.info("OKX %s instruments listed: %d", inst_type, len(out))
 
         except Exception as e:

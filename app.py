@@ -493,12 +493,17 @@ def list_instruments():
 
     async def _fetch():
         spot = await spot_adapter.get_instruments("SPOT") if spot_adapter else []
-        fut = await futures_adapter.get_instruments("SWAP") if futures_adapter else []
+        swap = await futures_adapter.get_instruments("SWAP") if futures_adapter else []
+        dated = await futures_adapter.get_instruments("FUTURES") if futures_adapter else []
+        # Swap + dated futures share the "futures" leg in the UI; the
+        # category tag on each entry distinguishes them.
+        fut = swap + dated
+        fut.sort(key=lambda x: (x.get("category") != "usdt_linear", x["instId"]))
         return spot, fut
 
     try:
         future = asyncio.run_coroutine_threadsafe(_fetch(), loop)
-        spot, fut = future.result(timeout=15)
+        spot, fut = future.result(timeout=20)
         payload = {
             'success': True,
             'spot': spot,
