@@ -288,27 +288,35 @@ class OKXAdapter(ExchangeAdapter):
             sz = quantity
             sz_str = ""
 
-            if inst_type == "SWAP":
-                # For SWAP: convert quantity to contracts
+            if inst_type in ("SWAP", "FUTURES"):
+                # SWAP *and* dated FUTURES are denominated in CONTRACTS on OKX,
+                # not base units. The caller passes a base-currency quantity
+                # (e.g. 0.0075 BTC); convert to contract count via ctVal. Dated
+                # futures previously fell through to the spot branch and the
+                # base quantity was sent as a raw contract count, placing a
+                # position 10-75x off intended size and breaking the hedge.
                 if symbol_info:
                     ct_val = float(symbol_info.get("contract_val") or 0.01)
                     if ct_val <= 0:
                         return OrderResult(success=False, error=f"Invalid contract value {ct_val}")
-                    # Convert BTC quantity to number of contracts
-                    # Use floor (int) not round — rounding up would make futures
-                    # larger than the spot leg, creating an unhedged short exposure.
+                    # Convert base quantity to number of contracts.
+                    # Use floor (int) not round — rounding up would over-size the
+                    # leg, creating unhedged exposure.
                     contracts = quantity / ct_val
                     sz = int(contracts)
                     # Validate minimum 1 contract - don't silently inflate small positions
                     if sz < 1:
-                        logger.error("SWAP quantity %.6f = %.2f contracts (ctVal=%.4f), minimum is 1",
-                                    quantity, contracts, ct_val)
-                        return OrderResult(success=False, error=f"Quantity {quantity} too small, need at least {ct_val} for 1 contract")
-                    logger.info("SWAP order: %.6f %s = %d contracts (ctVal=%.4f)",
-                               quantity, symbol.split("-")[0], sz, ct_val)
+                        logger.error("%s quantity %.6f = %.2f contracts (ctVal=%.4f), minimum is 1",
+                                    inst_type, quantity, contracts, ct_val)
+                        return OrderResult(success=False,
+                                           error=f"Quantity {quantity} too small for {symbol}: "
+                                                 f"need at least {ct_val} (1 contract)")
+                    logger.info("%s order: %.6f %s = %d contracts (ctVal=%.4f)",
+                               inst_type, quantity, symbol.split("-")[0], sz, ct_val)
                 else:
-                    # No symbol info - cannot safely place SWAP order
-                    return OrderResult(success=False, error="Cannot place SWAP order without symbol info")
+                    # No symbol info - cannot safely place a contract-denominated order
+                    return OrderResult(success=False,
+                                       error=f"Cannot place {inst_type} order without symbol info")
                 sz_str = str(int(sz))
             else:
                 # For SPOT: validate and format quantity properly
@@ -374,7 +382,7 @@ class OKXAdapter(ExchangeAdapter):
                     px_str = str(round(price, 2))
                 order_data["px"] = px_str
 
-            if reduce_only and inst_type == "SWAP":
+            if reduce_only and inst_type in ("SWAP", "FUTURES"):
                 order_data["reduceOnly"] = True
 
             # For spot cash-mode (tdMode=cash) market BUY, OKX defaults sz to quote (USDT).
