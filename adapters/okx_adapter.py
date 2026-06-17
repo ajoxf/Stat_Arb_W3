@@ -1315,6 +1315,39 @@ class OKXAdapter(ExchangeAdapter):
 
         return balances
 
+    async def get_trading_balances_detailed(self) -> List[Dict[str, Any]]:
+        """Per-currency breakdown of the Trading (Unified) account.
+
+        Returned by OKX's /api/v5/account/balance under data[0].details[]. Each
+        entry carries both the native balance (cashBal/availBal) and OKX's
+        USD-converted equity contribution (eq/availEq). The pair eq>0,
+        availEq=0 is the key 'has value but not margin-eligible' signature —
+        the canonical case being fiat (AED/EUR) or illiquid altcoins on most
+        account tiers. The diagnostic uses this to explain why the dashboard
+        can show \$X equity with \$0 available.
+        """
+        try:
+            result = await self._request("GET", "/api/v5/account/balance")
+            if not (result and result.get("code") == "0" and result.get("data")):
+                return []
+            out = []
+            for d in (result["data"][0].get("details") or []):
+                cash_bal = float(d.get("cashBal") or 0)
+                eq = float(d.get("eq") or 0)
+                if cash_bal == 0 and eq == 0:
+                    continue
+                out.append({
+                    "ccy":      d.get("ccy", ""),
+                    "cashBal":  cash_bal,
+                    "availBal": float(d.get("availBal") or 0),
+                    "eq":       eq,
+                    "availEq":  float(d.get("availEq") or 0),
+                })
+            return out
+        except Exception as e:
+            logger.error("Error fetching OKX trading balance details: %s", e)
+            return []
+
     async def get_funding_balances(self, include_zero: bool = False) -> List[Dict[str, Any]]:
         """List balances in the **Funding** (asset) account.
 

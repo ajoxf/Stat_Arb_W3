@@ -2683,8 +2683,17 @@ function updateFilterStatus(elementId, passed, value) {
                           '─────────────────────\n\n';
                 txt += 'TRADING wallet (what the algo uses):\n';
                 txt += '   Equity:    $' + (d.trading.equity_usd || 0).toFixed(2) + '\n';
-                txt += '   Available: $' + (d.trading.available_usd || 0).toFixed(2) + '\n\n';
-                txt += 'FUNDING wallet (where deposits land):\n';
+                txt += '   Available: $' + (d.trading.available_usd || 0).toFixed(2) + '\n';
+                if (d.trading.currencies && d.trading.currencies.length > 0) {
+                    txt += '   Currencies:\n';
+                    d.trading.currencies.forEach(function(c) {
+                        const eligible = c.availEq > 0.01 ? '✓ margin-eligible' : '✗ NOT margin-eligible';
+                        txt += '     ' + c.ccy + ': ' + c.cashBal +
+                               ' (= $' + (c.eq || 0).toFixed(2) + ' equity, $' +
+                               (c.availEq || 0).toFixed(2) + ' available)  ' + eligible + '\n';
+                    });
+                }
+                txt += '\nFUNDING wallet (where deposits land):\n';
                 if (d.funding.currencies && d.funding.currencies.length > 0) {
                     d.funding.currencies.forEach(function(c) {
                         txt += '   ' + c.ccy + ': ' + c.bal +
