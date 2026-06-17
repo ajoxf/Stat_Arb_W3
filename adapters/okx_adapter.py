@@ -1315,6 +1315,54 @@ class OKXAdapter(ExchangeAdapter):
 
         return balances
 
+    async def get_funding_balances(self, include_zero: bool = False) -> List[Dict[str, Any]]:
+        """List balances in the **Funding** (asset) account.
+
+        Critical OKX distinction: deposits land in the Funding account by
+        default. The Trading (Unified) account — which the algo and the rest
+        of get_account_info query via /api/v5/account/balance — is separate.
+        Money in Funding is invisible to anything that only reads Trading.
+
+        Returns a list of {ccy, bal, availBal, frozenBal} dicts. Empty list
+        on error (caller decides what to display).
+        """
+        try:
+            result = await self._request("GET", "/api/v5/asset/balances")
+            if not (result and result.get("code") == "0"):
+                return []
+            out = []
+            for d in (result.get("data") or []):
+                bal = float(d.get("bal") or 0)
+                if not include_zero and bal == 0:
+                    continue
+                out.append({
+                    "ccy": d.get("ccy", ""),
+                    "bal": bal,
+                    "availBal": float(d.get("availBal") or 0),
+                    "frozenBal": float(d.get("frozenBal") or 0),
+                })
+            return out
+        except Exception as e:
+            logger.error("Error fetching OKX funding balances: %s", e)
+            return []
+
+    async def get_asset_valuation(self, ccy: str = "USDT") -> Optional[float]:
+        """Total cross-account valuation in ``ccy``, summed across Trading +
+        Funding + Earn. The honest 'how much is in my OKX account total' number.
+        Returns None on error so callers can show '—'.
+        """
+        try:
+            result = await self._request(
+                "GET", "/api/v5/asset/asset-valuation",
+                params={"ccy": ccy},
+            )
+            if not (result and result.get("code") == "0" and result.get("data")):
+                return None
+            return float(result["data"][0].get("totalBal") or 0)
+        except Exception as e:
+            logger.error("Error fetching OKX asset valuation: %s", e)
+            return None
+
     async def get_asset_balance(self, currency: str) -> Dict[str, float]:
         """
         Get balance info for a specific currency.

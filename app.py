@@ -626,6 +626,88 @@ def get_leg_prices():
     return jsonify(payload)
 
 
+@app.route('/api/balance-debug', methods=['GET'])
+def balance_debug():
+    """Diagnostic for 'why does my balance show \\$0?' situations.
+
+    OKX has separate wallets for Trading (Unified) and Funding (assets/deposit).
+    The algo's get_account_info only reads Trading. New deposits — especially
+    non-USDT ones — land in Funding by default and stay invisible until you
+    transfer + (often) convert. This endpoint returns both side by side plus
+    a cross-account valuation so it's obvious where the money actually is.
+    """
+    adapter = engine.futures_adapter or engine.spot_adapter
+    if not adapter or not loop:
+        return jsonify({'success': False,
+                        'error': 'No exchange adapter connected'}), 503
+
+    async def _fetch():
+        # Run all three in parallel — different OKX endpoints, no dependencies
+        return await asyncio.gather(
+            adapter.get_account_info(),
+            adapter.get_funding_balances() if hasattr(adapter, 'get_funding_balances') else asyncio.sleep(0, result=[]),
+            adapter.get_asset_valuation('USDT') if hasattr(adapter, 'get_asset_valuation') else asyncio.sleep(0, result=None),
+            return_exceptions=True,
+        )
+
+    try:
+        future = asyncio.run_coroutine_threadsafe(_fetch(), loop)
+        trading, funding, total_usd = future.result(timeout=15)
+    except Exception as e:
+        logger.error("balance-debug fetch failed: %s", e)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+    def _ok(x):
+        return x if not isinstance(x, Exception) else None
+
+    trading_info = _ok(trading)
+    funding_list = _ok(funding) or []
+    valuation    = _ok(total_usd)
+
+    # Build a concrete, plain-English diagnosis
+    trading_eq = trading_info.total_equity if trading_info else 0.0
+    trading_av = trading_info.available_balance_usd if trading_info else 0.0
+    funding_total = sum(b['bal'] for b in funding_list) if funding_list else 0.0
+
+    diagnosis = []
+    if trading_eq < 0.01 and funding_total > 0:
+        diagnosis.append(
+            "Funds detected in your Funding wallet but Trading is empty. "
+            "OKX deposits land in Funding by default. The algo can only use "
+            "the Trading (Unified) wallet."
+        )
+        diagnosis.append("Fix: in OKX, go to Assets → Transfer, move funds "
+                         "from Funding to Trading. Non-USDT currencies "
+                         "(AED, EUR, BTC) often need to be converted to "
+                         "USDT first before they count toward unified equity.")
+    elif trading_eq < 0.01 and funding_total < 0.01:
+        diagnosis.append(
+            "Both Trading and Funding wallets are empty. If you've made a "
+            "recent deposit, OKX may take a few minutes (and sometimes "
+            "blockchain confirmations) to credit it. Check the OKX 'Deposits' "
+            "history page."
+        )
+    elif trading_eq > 0:
+        diagnosis.append(f"Trading wallet has ${trading_eq:.2f} equity — "
+                         "the algo should be seeing this.")
+
+    return jsonify({
+        'success': True,
+        'trading': {
+            'equity_usd':    round(trading_eq, 4),
+            'available_usd': round(trading_av, 4),
+            'note': 'This is what the algo and the Margin Details card use.',
+        },
+        'funding': {
+            'currencies':    funding_list,
+            'total_native':  round(funding_total, 4),
+            'note': 'Deposits land here. Algo CANNOT use this directly.',
+        },
+        'cross_account_valuation_usdt': round(valuation, 4) if valuation else None,
+        'diagnosis': diagnosis,
+    })
+
+
 @app.route('/api/engine/set-demo-mode', methods=['POST'])
 def set_demo_mode():
     """Switch between OKX Demo and Live server modes.
