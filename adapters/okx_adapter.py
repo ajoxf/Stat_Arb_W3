@@ -1203,7 +1203,9 @@ class OKXAdapter(ExchangeAdapter):
         """
         orders = []
 
-        inst_types = ["SPOT", "SWAP"]
+        # Include dated FUTURES, not just SPOT + perpetual SWAP — otherwise
+        # dated-future trades (e.g. ETH-USDT-260626) never show in the order log.
+        inst_types = ["SPOT", "SWAP", "FUTURES"]
         for inst_type in inst_types:
             params: Dict[str, Any] = {"instType": inst_type, "limit": str(limit)}
             if symbol:
