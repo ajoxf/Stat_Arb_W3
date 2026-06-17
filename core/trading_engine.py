@@ -1024,8 +1024,14 @@ class TradingEngine:
                         # get_positions() returns ALL margin positions including pre-existing
                         # spot margin positions that are not managed by this bot.
                         # Spot margin positions can be $10M+ and must not be auto-closed.
-                        is_futures = any(x in pos.symbol for x in ('-SWAP', '-FUTURES', '-PERP'))
-                        if not is_futures:
+                        # is_derivative covers SWAP *and* dated FUTURES (e.g.
+                        # BTC-USDT-260626). The old substring check missed dated
+                        # futures entirely, so the monitor classified a real
+                        # futures position as 'not futures', ignored it, declared
+                        # the exchange flat, and force-cleared the engine — orphaning
+                        # the live position. Spot-margin symbols (BTC-USDT) remain
+                        # excluded, so they're still never auto-touched.
+                        if not is_derivative(pos.symbol):
                             logger.debug(
                                 "Ignoring non-futures position in mismatch check: %s %s qty=%.4f",
                                 pos.side, pos.symbol, pos.quantity,
@@ -1130,11 +1136,10 @@ class TradingEngine:
             side = pos['side']    # "LONG" or "SHORT"
             qty = pos['quantity'] # contracts (as reported by exchange)
 
-            # Safety: only auto-close SWAP/FUTURES positions.
+            # Safety: only auto-close SWAP / dated FUTURES positions.
             # Spot margin positions on the account are not bot-managed and
             # must never be touched by auto-close (could be $M+ user positions).
-            is_futures = any(x in symbol for x in ('-SWAP', '-FUTURES', '-PERP'))
-            if not is_futures:
+            if not is_derivative(symbol):
                 logger.warning(
                     "AUTO-CLOSE skipped: %s is not a SWAP/FUTURES position — "
                     "only bot-managed futures orphans are auto-closed. "

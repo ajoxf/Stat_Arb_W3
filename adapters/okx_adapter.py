@@ -13,7 +13,7 @@ from datetime import datetime
 from typing import Optional, Dict, Any, List
 import aiohttp
 
-from .base import ExchangeAdapter
+from .base import ExchangeAdapter, is_derivative
 from models import MarketTick, OrderResult, Position, AccountInfo
 
 logger = logging.getLogger(__name__)
@@ -764,7 +764,7 @@ class OKXAdapter(ExchangeAdapter):
                 return OrderResult(success=True)  # Nothing to close
 
             pos = positions[0]
-            is_swap = any(x in symbol for x in ("-SWAP", "-FUTURES", "-PERP"))
+            is_swap = is_derivative(symbol)
 
             if not is_swap:
                 # Spot margin: place explicit covering market order
@@ -812,7 +812,7 @@ class OKXAdapter(ExchangeAdapter):
                 "instId": symbol,
                 "mgnMode": "cross",
             }
-            is_perp = any(x in symbol for x in ("-SWAP", "-FUTURES", "-PERP"))
+            is_perp = is_derivative(symbol)
             if not is_perp:
                 parts = symbol.split("-")
                 if len(parts) >= 2:
@@ -1142,8 +1142,8 @@ class OKXAdapter(ExchangeAdapter):
             True if successful, False otherwise
         """
         try:
-            # Leverage setting is only for derivatives (SWAP/FUTURES), not spot
-            if "-SWAP" not in symbol and "-FUTURES" not in symbol:
+            # Leverage setting is only for derivatives (SWAP + dated FUTURES), not spot
+            if not is_derivative(symbol):
                 logger.debug("Leverage not applicable for spot symbol: %s", symbol)
                 return True
 
@@ -1178,7 +1178,7 @@ class OKXAdapter(ExchangeAdapter):
             Current leverage value or None if error
         """
         try:
-            if "-SWAP" not in symbol and "-FUTURES" not in symbol:
+            if not is_derivative(symbol):
                 return 1  # Spot doesn't have leverage
 
             result = await self._request(
