@@ -750,9 +750,18 @@ class OrderExecutor:
         spot_skip = spread_order.spot_leg.status == LegStatus.FILLED
         futures_skip = spread_order.futures_leg.status == LegStatus.FILLED
 
-        # Place spot limit order first (unless reconcile says it's already done)
-        if not spot_skip:
-            spot_result = await self.spot_adapter.place_order(
+        # Place both legs in PARALLEL via asyncio.gather. Sequential placement
+        # (spot, await, futures) introduces ~200-400ms of clock between the
+        # two POST_ONLY orders — during which the slower-moving side's bid/ask
+        # can drift enough to trigger cancelSource=31 (POST_ONLY would-cross
+        # after placement). Parallel placement collapses that window to near
+        # zero: both quotes are computed from the same tick and submitted at
+        # the same instant. Matches the existing pattern used by the MARKET
+        # path on line 515.
+        async def _place_spot():
+            if spot_skip:
+                return None
+            return await self.spot_adapter.place_order(
                 symbol=spread_order.spot_leg.symbol,
                 side=spread_order.spot_leg.side,
                 order_type=order_type,
@@ -761,44 +770,55 @@ class OrderExecutor:
                 pos_side=spread_order.spot_leg.pos_side,
             )
 
-            if spot_result.success:
-                spread_order.spot_leg.order_id = spot_result.order_id
-                spread_order.spot_leg.placed_price = spread_order.spot_leg.target_price
-                spread_order.spot_leg.status = LegStatus.OPEN
-                logger.info("Placed spot LIMIT order: %s @ %.2f",
-                           spread_order.spot_leg.side, spread_order.spot_leg.target_price)
-            else:
-                spread_order.spot_leg.status = LegStatus.FAILED
-                logger.error("Failed to place spot limit order: %s", spot_result.error)
-                # Don't place futures if spot failed immediately
-                return
-        else:
-            logger.info("Reconcile-skip: spot leg already FILLED, not placing")
+        async def _place_futures():
+            if futures_skip:
+                return None
+            return await self.futures_adapter.place_order(
+                symbol=spread_order.futures_leg.symbol,
+                side=spread_order.futures_leg.side,
+                order_type=order_type,
+                quantity=spread_order.futures_leg.quantity,
+                price=spread_order.futures_leg.target_price,
+                pos_side=spread_order.futures_leg.pos_side,
+            )
 
-        if futures_skip:
-            logger.info("Reconcile-skip: futures leg already FILLED, not placing")
-            # Brief delay then check status of whatever we did place
-            await asyncio.sleep(0.1)
-            await self._check_order_status(spread_order)
-            return
-
-        # Place futures limit order
-        futures_result = await self.futures_adapter.place_order(
-            symbol=spread_order.futures_leg.symbol,
-            side=spread_order.futures_leg.side,
-            order_type=order_type,
-            quantity=spread_order.futures_leg.quantity,
-            price=spread_order.futures_leg.target_price,
-            pos_side=spread_order.futures_leg.pos_side,  # CRITICAL for OKX long_short_mode
+        spot_result, futures_result = await asyncio.gather(
+            _place_spot(), _place_futures(), return_exceptions=True,
         )
 
-        if futures_result.success:
+        # ---- Process spot result ----
+        if spot_skip:
+            logger.info("Reconcile-skip: spot leg already FILLED, not placing")
+        elif isinstance(spot_result, Exception):
+            spread_order.spot_leg.status = LegStatus.FAILED
+            logger.error("Spot leg placement raised: %s", spot_result)
+        elif spot_result and spot_result.success:
+            spread_order.spot_leg.order_id = spot_result.order_id
+            spread_order.spot_leg.placed_price = spread_order.spot_leg.target_price
+            spread_order.spot_leg.status = LegStatus.OPEN
+            logger.info("Placed spot LIMIT order: %s @ %.2f",
+                       spread_order.spot_leg.side, spread_order.spot_leg.target_price)
+        else:
+            spread_order.spot_leg.status = LegStatus.FAILED
+            logger.error("Failed to place spot limit order: %s",
+                         getattr(spot_result, 'error', 'unknown'))
+
+        # ---- Process futures result ----
+        if futures_skip:
+            logger.info("Reconcile-skip: futures leg already FILLED, not placing")
+            await asyncio.sleep(0.1)
+            await self._check_order_status(spread_order)
+            # Don't return early — we may have placed spot in parallel above.
+        elif isinstance(futures_result, Exception):
+            spread_order.futures_leg.status = LegStatus.FAILED
+            logger.error("Futures leg placement raised: %s", futures_result)
+        elif futures_result and futures_result.success:
             spread_order.futures_leg.order_id = futures_result.order_id
             spread_order.futures_leg.placed_price = spread_order.futures_leg.target_price
             spread_order.futures_leg.status = LegStatus.OPEN
             logger.info("Placed futures LIMIT order: %s @ %.2f",
                        spread_order.futures_leg.side, spread_order.futures_leg.target_price)
-        elif getattr(futures_result, 'already_flat', False) and not spread_order.is_entry:
+        elif futures_result and getattr(futures_result, 'already_flat', False) and not spread_order.is_entry:
             # OKX 51169: futures position already closed on exchange (e.g. filled during a
             # previous timeout). Treat the futures leg as already handled and close spot only.
             logger.warning(
@@ -811,18 +831,39 @@ class OrderExecutor:
             # Do NOT return — let the loop continue waiting for spot to fill
         else:
             spread_order.futures_leg.status = LegStatus.FAILED
-            logger.error("Failed to place futures limit order: %s", futures_result.error)
-            # Futures failed - cancel spot to prevent orphan (only if we placed one)
-            if not spot_skip and spread_order.spot_leg.order_id:
-                logger.warning("Cancelling spot order since futures placement failed")
-                try:
-                    await self.spot_adapter.cancel_order(
-                        spread_order.spot_leg.symbol,
-                        spread_order.spot_leg.order_id,
-                    )
-                    spread_order.spot_leg.status = LegStatus.CANCELLED
-                except Exception as e:
-                    logger.error("Failed to cancel spot after futures failure: %s", e)
+            err = getattr(futures_result, 'error', 'unknown') if futures_result else 'no response'
+            logger.error("Failed to place futures limit order: %s", err)
+
+        # ---- Orphan-prevention cleanup ----
+        # With parallel placement, EITHER leg can fail independently of the
+        # other. Cancel any orphan-risk leg that the OPPOSITE leg's failure
+        # would leave dangling on the exchange.
+        spot_open    = spread_order.spot_leg.status    == LegStatus.OPEN
+        futures_open = spread_order.futures_leg.status == LegStatus.OPEN
+        spot_failed    = spread_order.spot_leg.status    == LegStatus.FAILED
+        futures_failed = spread_order.futures_leg.status == LegStatus.FAILED
+
+        if futures_failed and spot_open and spread_order.spot_leg.order_id:
+            logger.warning("Cancelling spot order since futures placement failed")
+            try:
+                await self.spot_adapter.cancel_order(
+                    spread_order.spot_leg.symbol, spread_order.spot_leg.order_id,
+                )
+                spread_order.spot_leg.status = LegStatus.CANCELLED
+            except Exception as e:
+                logger.error("Failed to cancel spot after futures failure: %s", e)
+            return
+        if spot_failed and futures_open and spread_order.futures_leg.order_id:
+            logger.warning("Cancelling futures order since spot placement failed")
+            try:
+                await self.futures_adapter.cancel_order(
+                    spread_order.futures_leg.symbol, spread_order.futures_leg.order_id,
+                )
+                spread_order.futures_leg.status = LegStatus.CANCELLED
+            except Exception as e:
+                logger.error("Failed to cancel futures after spot failure: %s", e)
+            return
+        if spot_failed and futures_failed:
             return
 
         # Brief delay then check status (LIMIT orders won't auto-cancel like POST_ONLY)
