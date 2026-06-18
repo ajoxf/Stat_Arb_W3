@@ -861,16 +861,30 @@ class TradingEngine:
         # when fills weren't recorded, falls back to the mid placeholders we
         # set above. Fees are subtracted to give the net the dashboard logs.
         beta = max(getattr(self.config, 'hedge_ratio', 1.0) or 1.0, 1e-9)
-        # Spread from fills (futures - β × spot)
-        entry_spread_fills = trade.entry_futures_price - beta * trade.entry_spot_price
-        exit_spread_fills  = trade.exit_futures_price  - beta * trade.exit_spot_price
 
-        if trade.position_type == "LONG":
-            # LONG profits when spread falls
-            spread_change = entry_spread_fills - exit_spread_fills
-        else:
-            spread_change = exit_spread_fills - entry_spread_fills
-        pnl_gross = spread_change * trade.quantity
+        # Use actual filled quantities when available (set by the writeback in
+        # _execute_entry_orders). Falls back to intended (trade.quantity × β)
+        # for trades that pre-date that writeback. The fallback path keeps the
+        # historical contract-rounding miscount; the new path eliminates it.
+        spot_qty = trade.spot_qty_actual if trade.spot_qty_actual > 0 else trade.quantity * beta
+        fut_qty  = trade.quantity
+
+        # Per-leg direct P&L — what each side actually made/lost on its own
+        # quantity at its own fill prices. Reconciles with OKX's per-row PnL
+        # to the cent. The previous spread×qty formula assumed a perfectly-
+        # hedged β position, which broke when OKX rounded the smaller leg
+        # to an integer contract count and the effective β drifted away
+        # from the configured β.
+        #
+        # Convention:
+        #   LONG  spread = BUY spot,  SELL futures
+        #   SHORT spread = SELL spot, BUY  futures
+        spot_sign = +1 if trade.position_type == "LONG" else -1
+        fut_sign  = -1 if trade.position_type == "LONG" else +1
+
+        spot_pnl = spot_sign * (trade.exit_spot_price    - trade.entry_spot_price)    * spot_qty
+        fut_pnl  = fut_sign  * (trade.exit_futures_price - trade.entry_futures_price) * fut_qty
+        pnl_gross = spot_pnl + fut_pnl
 
         # Per-leg fee bps from the same schedule the signal filter uses, so
         # cost estimates and realized P&L can never silently diverge.
@@ -888,12 +902,13 @@ class TradingEngine:
             return fut_taker if deriv else spot_taker
         a_entry, b_entry = _bps(leg_a_deriv, entry_mode), _bps(leg_b_deriv, entry_mode)
         a_exit,  b_exit  = _bps(leg_a_deriv, exit_mode),  _bps(leg_b_deriv, exit_mode)
-        spot_qty = trade.quantity * beta
+        # Fees use the SAME actual quantities as the P&L calc, so an under-
+        # filled trade reports correctly-scaled fees too.
         fees_usd = (
-            a_entry / 10000.0 * spot_qty       * trade.entry_spot_price +
-            b_entry / 10000.0 * trade.quantity * trade.entry_futures_price +
-            a_exit  / 10000.0 * spot_qty       * trade.exit_spot_price +
-            b_exit  / 10000.0 * trade.quantity * trade.exit_futures_price
+            a_entry / 10000.0 * spot_qty * trade.entry_spot_price +
+            b_entry / 10000.0 * fut_qty  * trade.entry_futures_price +
+            a_exit  / 10000.0 * spot_qty * trade.exit_spot_price +
+            b_exit  / 10000.0 * fut_qty  * trade.exit_futures_price
         )
 
         pnl = pnl_gross - fees_usd
@@ -917,9 +932,11 @@ class TradingEngine:
         trade.fees_usd = fees_usd
         trade.capital_locked_usd = capital_locked
         trade.pnl_pct_on_capital = pnl_pct_on_capital
-        # Audit trail: store fill-derived spreads so the DB matches OKX
-        trade.entry_spread = entry_spread_fills
-        trade.exit_spread  = exit_spread_fills
+        # Audit trail: keep fill-derived spreads on the trade record so the
+        # dashboard's Δ-spread display reflects what actually happened.
+        # P&L itself no longer uses these — it uses per-leg direct calc above.
+        trade.entry_spread = trade.entry_futures_price - beta * trade.entry_spot_price
+        trade.exit_spread  = trade.exit_futures_price  - beta * trade.exit_spot_price
 
         # Daily-loss tracker tracks NET realized P&L
         self._daily_loss_usd += pnl
@@ -1515,6 +1532,50 @@ class TradingEngine:
                 trade.entry_spread = (
                     trade.entry_futures_price - _beta * trade.entry_spot_price
                 )
+
+                # Write back ACTUAL filled quantities (contract-rounded by OKX)
+                # so the P&L formula multiplies by the real position size, not
+                # the intended one. Without this, a 0.012454 BTC intent rounds
+                # to 1 contract = 0.010 BTC on exchange but the engine still
+                # uses 0.012454 in pnl_gross = spread_change × qty, producing
+                # the ~$0.30-0.50 systematic miscount per trade the operator
+                # spotted comparing OKX vs Trade Journal. The executor's
+                # filled_qty is in CONTRACTS (OKX accFillSz); multiply by ctVal
+                # to get base units. Best-effort: on lookup failure, leave the
+                # original intended quantity and accept the small miscount
+                # rather than fail the trade record.
+                try:
+                    spot_info = await self.spot_adapter.get_symbol_info(self.config.spot_symbol)
+                    fut_info  = await self.futures_adapter.get_symbol_info(self.config.futures_symbol)
+                    spot_ct_val = float((spot_info or {}).get("contract_val") or 1.0) or 1.0
+                    fut_ct_val  = float((fut_info  or {}).get("contract_val") or 1.0) or 1.0
+                    spot_filled_contracts = spread_order.spot_leg.filled_qty or 0
+                    fut_filled_contracts  = spread_order.futures_leg.filled_qty or 0
+                    actual_spot_qty = spot_filled_contracts * spot_ct_val
+                    actual_fut_qty  = fut_filled_contracts  * fut_ct_val
+                    intended_fut_qty = trade.quantity  # before overwrite
+                    intended_spot_qty = trade.quantity * _beta
+                    if actual_fut_qty > 0:
+                        trade.quantity = actual_fut_qty
+                    if actual_spot_qty > 0:
+                        trade.spot_qty_actual = actual_spot_qty
+                    effective_beta = (
+                        actual_spot_qty / actual_fut_qty
+                        if actual_fut_qty > 0 else _beta
+                    )
+                    logger.info(
+                        "ACTUAL FILLED: spot=%.6f (intended %.6f) | "
+                        "futures=%.6f (intended %.6f) | effective β=%.4f vs configured %.4f",
+                        actual_spot_qty, intended_spot_qty,
+                        actual_fut_qty,  intended_fut_qty,
+                        effective_beta,  _beta,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "Could not write back actual filled quantities (%s) — "
+                        "P&L will use intended qty with small contract-rounding error",
+                        e,
+                    )
                 # Execution timing
                 trade.entry_placed_at = spread_order.created_at
                 fill_ts = (spread_order.spot_leg.last_update or

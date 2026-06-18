@@ -281,6 +281,13 @@ class Trade:
     # Position details
     quantity: float = 0.0
     notional_usd: float = 0.0
+    # Actual filled spot quantity (base units, e.g. ETH). Differs from
+    # quantity × β by the OKX contract-rounding factor — the exchange
+    # only trades whole contracts, so the effective hedge ratio drifts
+    # from the configured β each trade. Storing the actual fill lets
+    # the P&L formula multiply by the right size instead of the intended
+    # one, eliminating the ~$0.30-0.50 systematic miscount per trade.
+    spot_qty_actual: float = 0.0
 
     # P&L
     pnl_usd: float = 0.0
@@ -338,6 +345,7 @@ class Trade:
             'exit_reason': self.exit_reason,
             'quantity': self.quantity,
             'notional_usd': self.notional_usd,
+            'spot_qty_actual': self.spot_qty_actual,
             'pnl_usd': self.pnl_usd,
             'pnl_percent': self.pnl_percent,
             'pnl_gross_usd': self.pnl_gross_usd,

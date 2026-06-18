@@ -126,6 +126,7 @@ class DatabaseManager:
                     exit_zscore REAL,
                     exit_reason TEXT,
                     quantity REAL,
+                    spot_qty_actual REAL DEFAULT 0,
                     notional_usd REAL,
                     pnl_usd REAL DEFAULT 0,
                     pnl_percent REAL DEFAULT 0,
@@ -358,6 +359,8 @@ class DatabaseManager:
                 cursor.execute("ALTER TABLE trades ADD COLUMN capital_locked_usd REAL DEFAULT 0")
             if 'pnl_pct_on_capital' not in trade_cols:
                 cursor.execute("ALTER TABLE trades ADD COLUMN pnl_pct_on_capital REAL DEFAULT 0")
+            if 'spot_qty_actual' not in trade_cols:
+                cursor.execute("ALTER TABLE trades ADD COLUMN spot_qty_actual REAL DEFAULT 0")
 
             logger.info("Database initialized: %s", self.db_path)
 
@@ -725,9 +728,10 @@ class DatabaseManager:
                     INSERT INTO trades (
                         asset, position_type, entry_time, entry_spot_price,
                         entry_futures_price, entry_spread, entry_zscore,
-                        quantity, notional_usd, spot_order_id, futures_order_id,
+                        quantity, spot_qty_actual, notional_usd,
+                        spot_order_id, futures_order_id,
                         is_open, is_paper
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     trade.asset,
                     trade.position_type,
@@ -737,6 +741,7 @@ class DatabaseManager:
                     trade.entry_spread,
                     trade.entry_zscore,
                     trade.quantity,
+                    trade.spot_qty_actual,
                     trade.notional_usd,
                     trade.spot_order_id,
                     trade.futures_order_id,
@@ -784,6 +789,7 @@ class DatabaseManager:
             exit_reason=row["exit_reason"] or "",
             quantity=row["quantity"] or 0,
             notional_usd=row["notional_usd"] or 0,
+            spot_qty_actual=row["spot_qty_actual"] if "spot_qty_actual" in row.keys() else 0.0,
             pnl_usd=row["pnl_usd"] or 0,
             pnl_percent=row["pnl_percent"] or 0,
             pnl_gross_usd=row["pnl_gross_usd"] or 0,
