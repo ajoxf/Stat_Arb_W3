@@ -1647,9 +1647,15 @@ class TradingEngine:
             )
 
             if spread_order and spread_order.is_complete:
-                # Update actual exit prices from fills
-                trade.exit_spot_price = spread_order.spot_leg.filled_price
-                trade.exit_futures_price = spread_order.futures_leg.filled_price
+                # Update actual exit prices from fills. Guard against 0.0 from
+                # the reconcile-skip path: a 0.0 fill price would zero out
+                # exit_spread in _close_position and produce a wildly wrong
+                # net (e.g. trade 30 logged -$24 on a +$0.65 actual trade).
+                # The mid placeholder set above is far better than 0.0.
+                if spread_order.spot_leg.filled_price > 0:
+                    trade.exit_spot_price = spread_order.spot_leg.filled_price
+                if spread_order.futures_leg.filled_price > 0:
+                    trade.exit_futures_price = spread_order.futures_leg.filled_price
                 # Execution timing
                 trade.exit_placed_at = spread_order.created_at
                 fill_ts = (spread_order.spot_leg.last_update or

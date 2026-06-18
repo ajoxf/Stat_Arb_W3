@@ -343,9 +343,27 @@ class OrderExecutor:
                 )
                 spread_order.spot_leg.status = LegStatus.FILLED
                 spread_order.spot_leg.filled_qty = expected
-                # 0.0 fill price: engine PnL will be off but that's preferable
-                # to over-closing into a naked position.
-                spread_order.spot_leg.filled_price = 0.0
+                # Reconcile-skip: we missed the fill but the position IS flat,
+                # so an order this cycle must have filled. POST_ONLY fills at
+                # the posted price, so the last target_price is the best
+                # available approximation. Falling back to 0.0 here would
+                # make _close_position compute exit_spread = -β × 0 = 0,
+                # producing a wildly wrong P&L (trade 30 hit this: -$24
+                # logged on a +$0.65 actual trade).
+                spread_order.spot_leg.filled_price = (
+                    spread_order.spot_leg.target_price or 0.0
+                )
+                if spread_order.spot_leg.filled_price > 0:
+                    logger.warning(
+                        "Exit reconcile: spot fill price not detected — "
+                        "approximating with last quoted price %.4f for P&L",
+                        spread_order.spot_leg.filled_price,
+                    )
+                else:
+                    logger.warning(
+                        "Exit reconcile: spot fill price unknown and no "
+                        "quoted price available — P&L will use mid placeholder",
+                    )
             elif spot_qty < expected * partial_threshold:
                 logger.warning(
                     "Exit reconcile: spot position partial (have=%.6f, expected=%.6f) — "
@@ -389,7 +407,21 @@ class OrderExecutor:
                 )
                 spread_order.futures_leg.status = LegStatus.FILLED
                 spread_order.futures_leg.filled_qty = expected
-                spread_order.futures_leg.filled_price = 0.0
+                # See spot-side comment above re: target_price fallback.
+                spread_order.futures_leg.filled_price = (
+                    spread_order.futures_leg.target_price or 0.0
+                )
+                if spread_order.futures_leg.filled_price > 0:
+                    logger.warning(
+                        "Exit reconcile: futures fill price not detected — "
+                        "approximating with last quoted price %.4f for P&L",
+                        spread_order.futures_leg.filled_price,
+                    )
+                else:
+                    logger.warning(
+                        "Exit reconcile: futures fill price unknown and no "
+                        "quoted price available — P&L will use mid placeholder",
+                    )
             elif fut_qty_btc < expected * partial_threshold:
                 logger.warning(
                     "Exit reconcile: futures position partial (have=%.6f BTC, expected=%.6f BTC) — "
