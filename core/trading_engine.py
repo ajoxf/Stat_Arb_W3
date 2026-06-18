@@ -1323,16 +1323,21 @@ class TradingEngine:
                     symbol, qty,
                 )
                 continue
-            qty_btc = qty * ct_val
+            qty_base = qty * ct_val
+            # Derive the base-asset label from the symbol so ETH legs aren't
+            # logged as "BTC". ETH-USDT-260626 → ETH, BTC-USDT-260626 → BTC,
+            # SOL-USDT-SWAP → SOL, etc.
+            base_label = symbol.split("-")[0] if symbol else "?"
 
             logger.warning(
-                "AUTO-CLOSE orphan %s %s: %d contracts (%.6f BTC), PnL=%.2f",
-                side, symbol, int(round(qty)), qty_btc, pos['unrealized_pnl'],
+                "AUTO-CLOSE orphan %s %s: %d contracts (%.6f %s), PnL=%.2f",
+                side, symbol, int(round(qty)), qty_base, base_label,
+                pos['unrealized_pnl'],
             )
 
-            if qty_btc <= 0:
+            if qty_base <= 0:
                 logger.warning(
-                    "Auto-close skipped: qty_btc=0 for %s (raw contracts=%.4f, ctVal=%.4f)",
+                    "Auto-close skipped: qty_base=0 for %s (raw contracts=%.4f, ctVal=%.4f)",
                     symbol, qty, ct_val,
                 )
                 continue
@@ -1341,7 +1346,7 @@ class TradingEngine:
                 symbol=symbol,
                 side=close_side.upper(),
                 order_type="MARKET",
-                quantity=qty_btc,
+                quantity=qty_base,
                 pos_side=pos_side,
                 reduce_only=True,
             )
