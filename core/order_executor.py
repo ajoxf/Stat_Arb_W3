@@ -880,6 +880,33 @@ class OrderExecutor:
             except Exception as e:
                 logger.error("Failed to amend futures order: %s", e)
 
+    # Map of OKX cancelSource codes → human-readable explanations.
+    # Source: OKX docs and observed behaviour. The 20/21/13 codes are the
+    # ones we hit in practice; everything else routes to "exchange/system".
+    _OKX_CANCEL_REASONS = {
+        "0":  "user initiated",
+        "1":  "system cancelled",
+        "2":  "not matched and cancelled",
+        "13": "price limit breach",
+        "17": "IOC unfilled portion",
+        "20": "POST_ONLY would have crossed the book — quoted price was too aggressive",
+        "21": "self-trade prevented",
+        "31": "trigger-order limit",
+    }
+
+    @classmethod
+    def _explain_cancel(cls, status: Dict[str, Any]) -> str:
+        """Translate an OKX cancelled-order status into a human-readable reason."""
+        code = str(status.get("cancel_source") or "")
+        text = (status.get("cancel_source_reason") or "").strip()
+        if code and code in cls._OKX_CANCEL_REASONS:
+            return f"{cls._OKX_CANCEL_REASONS[code]} (cancelSource={code})"
+        if text:
+            return f"{text} (cancelSource={code or 'n/a'})"
+        if code:
+            return f"exchange cancelled (cancelSource={code})"
+        return "exchange cancelled (no reason supplied)"
+
     async def _check_order_status(self, spread_order: SpreadOrder) -> None:
         """Check the fill status of both legs by querying the exchange."""
         # Check spot leg
@@ -902,7 +929,10 @@ class OrderExecutor:
                         spread_order.spot_leg.filled_price = status["filled_price"]
                     elif status["state"] == "canceled":
                         spread_order.spot_leg.status = LegStatus.CANCELLED
-                        logger.warning("Spot leg was cancelled (POST_ONLY rejected or external)")
+                        logger.warning(
+                            "Spot leg cancelled: %s",
+                            self._explain_cancel(status),
+                        )
             except Exception as e:
                 logger.error("Error checking spot order status: %s", e)
 
@@ -926,7 +956,10 @@ class OrderExecutor:
                         spread_order.futures_leg.filled_price = status["filled_price"]
                     elif status["state"] == "canceled":
                         spread_order.futures_leg.status = LegStatus.CANCELLED
-                        logger.warning("Futures leg was cancelled (POST_ONLY rejected or external)")
+                        logger.warning(
+                            "Futures leg cancelled: %s",
+                            self._explain_cancel(status),
+                        )
             except Exception as e:
                 logger.error("Error checking futures order status: %s", e)
 
