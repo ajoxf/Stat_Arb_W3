@@ -82,6 +82,42 @@ def run_async_loop(loop: asyncio.AbstractEventLoop):
     loop.run_forever()
 
 
+def _backfill_capital_metrics() -> None:
+    """Recompute capital_locked_usd + pnl_pct_on_capital for closed trades
+    that pre-date the new fields (recorded as 0). Uses the trade's stored
+    entry prices and quantity together with the CURRENT leverage and M2M
+    buffer config — exact when config hasn't changed, approximate otherwise.
+    """
+    try:
+        leg_a_deriv = is_derivative(config.spot_symbol)
+        leg_b_deriv = is_derivative(config.futures_symbol)
+        leg_a_lev = max(config.spot_leverage    if leg_a_deriv else 1, 1)
+        leg_b_lev = max(config.futures_leverage if leg_b_deriv else 1, 1)
+        buffer_pct = getattr(config, 'm2m_buffer_pct', 0.0) or 0.0
+        buffer_mult = 1 + buffer_pct / 100.0
+
+        n = 0
+        for trade in db.get_trades(limit=10000, open_only=False):
+            if trade.is_open or trade.capital_locked_usd:
+                continue
+            if not (trade.entry_spot_price and trade.entry_futures_price and trade.quantity):
+                continue
+            # notional_usd is Leg A notional set at open: entry_spot * spot_qty
+            margin_a = (trade.notional_usd or 0) / leg_a_lev
+            margin_b = (trade.entry_futures_price * trade.quantity) / leg_b_lev
+            capital = (margin_a + margin_b) * buffer_mult
+            if capital <= 0:
+                continue
+            trade.capital_locked_usd = capital
+            trade.pnl_pct_on_capital = (trade.pnl_usd / capital) * 100
+            db.save_trade(trade)
+            n += 1
+        if n:
+            logger.info("Back-filled capital metrics on %d closed trade(s)", n)
+    except Exception as e:
+        logger.warning("Capital metric back-fill skipped: %s", e)
+
+
 def _get_balance_for_telegram() -> Dict[str, Any]:
     """Fetch account balance data for Telegram /balance command."""
     try:
@@ -153,6 +189,13 @@ def start_engine_loop():
     _telegram.optimize_cb = lambda: engine.signal_generator.optimize_parameters()
     # Start command polling in a background daemon thread
     _telegram.start_polling()
+
+    # One-time back-fill: closed trades from before the capital-locked column
+    # existed have capital_locked_usd = 0 (default). Recompute from each
+    # trade's stored entry prices + quantity using the CURRENT leverage and
+    # M2M buffer config. This is an approximation when leverage has changed
+    # mid-history, but covers the common case.
+    _backfill_capital_metrics()
 
     # Load spread history from database for recovery.
     # Pass the raw spot/futures prices so the signal generator recomputes every
