@@ -355,12 +355,29 @@ class OKXAdapter(ExchangeAdapter):
                 if not sz_str or sz_str == "0":
                     return OrderResult(success=False, error=f"Order size formatted to invalid value: {sz_str}")
 
-            # OKX order types: market, limit, post_only, fok, ioc
-            # post_only = limit order that's cancelled if it would fill immediately (ensures maker)
+            # OKX order types: market, limit, post_only, fok, ioc, optimal_limit_ioc
+            # - post_only: limit that cancels if it would take liquidity (maker only)
+            # - ioc: immediate-or-cancel — fill what you can right now at the limit
+            #        price or better, cancel the rest. Taker fees apply to fills.
+            # - fok: fill-or-kill — fill the full size immediately or cancel
+            #        entirely. Useful when partial fills are not acceptable
+            #        (we generally allow partials so this is rarely the right
+            #        choice for stat-arb).
+            # - optimal_limit_ioc: OKX-specific — uses the best available price
+            #        from the top of the book as the effective limit, then IOC.
+            #        Caps slippage at "what's available right now, at best
+            #        market prices". Good for "I want a fill now, but don't
+            #        wreck me on slippage" scenarios.
             if order_type == "MARKET":
                 okx_ord_type = "market"
             elif order_type == "POST_ONLY":
                 okx_ord_type = "post_only"  # Maker-only limit order
+            elif order_type == "IOC":
+                okx_ord_type = "ioc"
+            elif order_type == "FOK":
+                okx_ord_type = "fok"
+            elif order_type == "OPTIMAL_LIMIT_IOC":
+                okx_ord_type = "optimal_limit_ioc"
             else:
                 okx_ord_type = "limit"
 
@@ -372,7 +389,9 @@ class OKXAdapter(ExchangeAdapter):
                 "sz": sz_str,
             }
 
-            if order_type in ("LIMIT", "POST_ONLY") and price:
+            # IOC and FOK at a limit price need the price field; MARKET and
+            # OPTIMAL_LIMIT_IOC don't (OPTIMAL_LIMIT_IOC uses the top of book).
+            if order_type in ("LIMIT", "POST_ONLY", "IOC", "FOK") and price:
                 # Use price_precision from symbol_info (calculated from original API string)
                 if symbol_info:
                     price_decimals = symbol_info.get("price_precision", 2)
