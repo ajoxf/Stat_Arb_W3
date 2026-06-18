@@ -520,12 +520,14 @@ def save_config():
             if field not in data or data.get(field) == '***':
                 data[field] = getattr(existing, field)
 
-        # Validate leverage bounds before saving
+        # Validate leverage bounds before saving. OKX caps Expiry Futures
+        # at 20x; perpetual SWAPs go higher but we match the more conservative
+        # ceiling for the strategy this bot was built for.
         for lev_key in ('spot_leverage', 'futures_leverage'):
             if lev_key in data:
                 try:
                     v = int(float(data[lev_key]))
-                    data[lev_key] = max(1, min(v, 25))
+                    data[lev_key] = max(1, min(v, 20))
                 except (TypeError, ValueError):
                     data[lev_key] = 1
 
@@ -2174,8 +2176,8 @@ def apply_ai_insight(insight_id: int):
 
         # Hard bounds for safety-critical parameters
         PARAM_BOUNDS = {
-            'spot_leverage':     (1, 10),
-            'futures_leverage':  (1, 25),
+            'spot_leverage':     (1, 20),
+            'futures_leverage':  (1, 20),
             'position_size_usd': (10, 1_000_000),
             'entry_threshold':   (0.1, 10.0),
             'exit_threshold':    (0.0, 10.0),

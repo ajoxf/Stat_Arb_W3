@@ -25,9 +25,9 @@ from adapters.okx_websocket import OKXWebSocketManager
 logger = logging.getLogger(__name__)
 
 # Hard safety cap on futures leverage to prevent accidental over-leveraging.
-# OKX technically allows up to 125x on BTC, but statistical arbitrage has
-# correlated legs that reduce net risk — 25x on the futures leg is already generous.
-MAX_SAFE_FUTURES_LEVERAGE = 25
+# OKX caps Expiry (dated) Futures at 20x and that's the contract type this
+# bot targets; perpetuals go higher but we use the more conservative ceiling.
+MAX_SAFE_FUTURES_LEVERAGE = 20
 
 
 @dataclass
