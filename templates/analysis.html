@@ -132,8 +132,15 @@
     <!-- Trade Journal -->
     <div class="col-12">
         <div class="card">
-            <div class="card-header">
-                <i class="bi bi-journal-text me-2"></i>Trade Journal
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span><i class="bi bi-journal-text me-2"></i>Trade Journal</span>
+                <button class="btn btn-sm btn-outline-info" id="reconcile-btn"
+                        title="Cross-check the bot's trade history against OKX's order history. Reports orphan auto-closes, recovered entries that didn't persist, and price mismatches.">
+                    <i class="bi bi-shield-check me-1"></i>Reconcile with OKX
+                </button>
+            </div>
+            <div id="reconcile-panel" class="card-body py-2" style="display:none; border-bottom: 1px solid var(--border-color);">
+                <div id="reconcile-content"></div>
             </div>
             <div class="card-body p-0">
                 <div class="table-responsive">
@@ -260,6 +267,97 @@
             document.getElementById('trade-journal-table').innerHTML =
                 '<tr><td colspan="15" class="text-center text-danger">Error loading trades</td></tr>';
         });
+
+    // ─── OKX Reconciliation ────────────────────────────────────────
+    document.getElementById('reconcile-btn').addEventListener('click', function() {
+        const btn = this;
+        const panel = document.getElementById('reconcile-panel');
+        const content = document.getElementById('reconcile-content');
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Reconciling…';
+        panel.style.display = 'block';
+        content.innerHTML = '<div class="text-secondary py-2"><i class="bi bi-hourglass-split me-2"></i>Fetching OKX order history and matching against DB…</div>';
+
+        fetch('/api/reconcile')
+            .then(r => r.json())
+            .then(data => {
+                if (!data.success) {
+                    content.innerHTML = `<div class="alert alert-danger py-2 mb-0">${data.error || 'Reconciliation failed'}</div>`;
+                    return;
+                }
+                renderReconcileReport(content, data);
+            })
+            .catch(err => {
+                content.innerHTML = `<div class="alert alert-danger py-2 mb-0">Network error: ${err.message}</div>`;
+            })
+            .finally(() => {
+                btn.disabled = false;
+                btn.innerHTML = '<i class="bi bi-shield-check me-1"></i>Reconcile with OKX';
+            });
+    });
+
+    function renderReconcileReport(container, data) {
+        const s = data.summary;
+        const clean = s.issues_total === 0;
+        const badgeCls = clean ? 'bg-success' : 'bg-warning text-dark';
+        const headline = clean
+            ? '✅ Clean — DB and OKX are aligned within tolerance.'
+            : `⚠️ ${s.issues_total} issue(s) found.`;
+
+        let html = `
+            <div class="d-flex justify-content-between align-items-center mb-2">
+                <div><span class="badge ${badgeCls}">${headline}</span>
+                     <small class="text-secondary ms-2">Generated ${new Date(data.generated_at).toLocaleString()}</small></div>
+                <button class="btn btn-sm btn-outline-secondary" onclick="document.getElementById('reconcile-panel').style.display='none'">
+                    <i class="bi bi-x"></i>
+                </button>
+            </div>
+            <div class="row g-2 mb-2" style="font-size:0.75rem;">
+                <div class="col"><div class="p-2 rounded" style="background:var(--bg-tertiary);"><div class="text-secondary">DB trades</div><div class="fw-bold">${s.db_trades_checked}</div></div></div>
+                <div class="col"><div class="p-2 rounded" style="background:var(--bg-tertiary);"><div class="text-secondary">Fully matched</div><div class="fw-bold text-success">${s.fully_matched}</div></div></div>
+                <div class="col"><div class="p-2 rounded" style="background:var(--bg-tertiary);"><div class="text-secondary">Missing legs</div><div class="fw-bold ${s.partial_or_missing ? 'text-warning' : ''}">${s.partial_or_missing}</div></div></div>
+                <div class="col"><div class="p-2 rounded" style="background:var(--bg-tertiary);"><div class="text-secondary">Price Δ &gt; 1bp</div><div class="fw-bold ${s.price_mismatches ? 'text-warning' : ''}">${s.price_mismatches}</div></div></div>
+                <div class="col"><div class="p-2 rounded" style="background:var(--bg-tertiary);"><div class="text-secondary">Unmatched OKX</div><div class="fw-bold ${s.unmatched_okx_orders ? 'text-danger' : ''}">${s.unmatched_okx_orders}</div></div></div>
+            </div>
+        `;
+
+        if (data.partial_db_trades && data.partial_db_trades.length) {
+            html += '<details class="mb-2"><summary class="fw-bold text-warning">DB trades with missing OKX legs</summary>';
+            html += '<table class="table table-sm mb-0 mt-1" style="font-size:0.7rem;"><thead><tr><th>Trade</th><th>Type</th><th>Entry</th><th>Exit</th><th>PnL</th><th>Missing</th></tr></thead><tbody>';
+            data.partial_db_trades.forEach(p => {
+                html += `<tr><td>#${p.trade_id}</td><td>${p.position_type}</td><td>${(p.entry_time||'').slice(0,19)}</td><td>${(p.exit_time||'').slice(0,19)}</td><td>$${p.pnl_usd.toFixed(2)}</td><td><span class="text-warning">${p.missing.join(', ')}</span></td></tr>`;
+            });
+            html += '</tbody></table></details>';
+        }
+
+        if (data.price_mismatches && data.price_mismatches.length) {
+            html += '<details class="mb-2"><summary class="fw-bold text-warning">Price mismatches (&gt; 1 bp)</summary>';
+            html += '<table class="table table-sm mb-0 mt-1" style="font-size:0.7rem;"><thead><tr><th>Trade</th><th>Leg</th><th>DB price</th><th>OKX price</th><th>Δ bps</th></tr></thead><tbody>';
+            data.price_mismatches.forEach(pm => {
+                html += `<tr><td>#${pm.trade_id}</td><td>${pm.leg}</td><td>${pm.db_price.toFixed(4)}</td><td>${pm.okx_price.toFixed(4)}</td><td class="text-warning">${pm.diff_bps.toFixed(2)}</td></tr>`;
+            });
+            html += '</tbody></table></details>';
+        }
+
+        if (data.unmatched_okx && Object.keys(data.unmatched_okx).length) {
+            const labels = {
+                'market_orphan_close': 'MARKET orphan close (auto-flatten by orphan detector)',
+                'limit_no_db_record':  'LIMIT trade with no DB record (entry never persisted)',
+                'market_no_db_record': 'MARKET trade with no DB record (manual or auto-close)',
+            };
+            Object.entries(data.unmatched_okx).forEach(([key, g]) => {
+                const lbl = labels[key] || key;
+                html += `<details class="mb-2" open><summary class="fw-bold text-danger">${lbl} — ${g.count} order(s), ΣPnL ${g.total_pnl.toFixed(2)}, Σfees ${g.total_fees.toFixed(2)}</summary>`;
+                html += '<table class="table table-sm mb-0 mt-1" style="font-size:0.7rem;"><thead><tr><th>Time</th><th>Symbol</th><th>Side</th><th>Type</th><th>Qty</th><th>Price</th><th>PnL</th><th>Fee</th></tr></thead><tbody>';
+                g.orders.forEach(o => {
+                    html += `<tr><td>${(o.order_time||'').slice(0,19)}</td><td>${o.symbol}</td><td>${o.side}</td><td>${o.order_type}</td><td>${o.filled_qty.toFixed(4)}</td><td>${o.avg_fill_price.toFixed(4)}</td><td>${o.pnl.toFixed(2)}</td><td>${o.fee.toFixed(4)}</td></tr>`;
+                });
+                html += '</tbody></table></details>';
+            });
+        }
+
+        container.innerHTML = html;
+    }
 
     // Asset filter
     document.getElementById('asset-filter').addEventListener('change', function() {

@@ -2275,6 +2275,97 @@ def download_trades_csv():
     )
 
 
+@app.route('/api/reconcile', methods=['GET'])
+def reconcile_okx():
+    """Live OKX-vs-DB reconciliation. Pulls recent order history from OKX
+    (via futures_adapter) and matches against the bot's trades table to
+    surface orphan auto-closes, recovered entries that didn't persist,
+    and price mismatches.
+
+    Query params:
+      window_sec    int   match window (default 600)
+      price_tol_bps float price tolerance bps (default 10)
+      limit         int   recent OKX orders to scan (default 200)
+    """
+    from core.reconcile import (
+        DBTrade, from_okx_rest_dict, reconcile, build_json_report,
+    )
+    from datetime import datetime
+
+    window_sec    = request.args.get('window_sec', 600, type=int)
+    price_tol_bps = request.args.get('price_tol_bps', 10.0, type=float)
+    limit         = request.args.get('limit', 200, type=int)
+
+    if not engine.futures_adapter or not loop:
+        return jsonify({
+            'success': False,
+            'error': 'No exchange adapter connected — start the engine first',
+        }), 503
+
+    spot_symbol = config.spot_symbol
+    fut_symbol  = config.futures_symbol
+
+    async def _fetch_all():
+        # Pull recent orders for both legs. get_order_history scans the
+        # symbol you pass; we fetch both to capture spot-vs-futures pairs.
+        spot_orders = await engine.spot_adapter.get_order_history(
+            symbol=spot_symbol, limit=limit
+        ) if engine.spot_adapter else []
+        fut_orders = await engine.futures_adapter.get_order_history(
+            symbol=fut_symbol, limit=limit
+        ) if engine.futures_adapter else []
+        return spot_orders + fut_orders
+
+    try:
+        future = asyncio.run_coroutine_threadsafe(_fetch_all(), loop)
+        raw_orders = future.result(timeout=20)
+    except Exception as e:
+        logger.exception("Reconcile: failed to fetch OKX order history")
+        return jsonify({'success': False,
+                        'error': f'OKX fetch failed: {e}'}), 502
+
+    okx_orders = [from_okx_rest_dict(d) for d in raw_orders]
+    okx_orders = [o for o in okx_orders if o is not None]
+    # Deduplicate by order_id in case spot/futures fetches overlap.
+    seen = set()
+    deduped = []
+    for o in okx_orders:
+        if o.order_id in seen:
+            continue
+        seen.add(o.order_id)
+        deduped.append(o)
+    okx_orders = deduped
+
+    # Load DB trades. Use the same field set as the CLI script for parity.
+    db_rows = db.get_trades(limit=500, open_only=False)
+    db_trades = [
+        DBTrade(
+            id=t.id,
+            position_type=t.position_type,
+            entry_time=t.entry_time,
+            exit_time=t.exit_time,
+            entry_spot_price=t.entry_spot_price or 0.0,
+            entry_futures_price=t.entry_futures_price or 0.0,
+            exit_spot_price=t.exit_spot_price or 0.0,
+            exit_futures_price=t.exit_futures_price or 0.0,
+            quantity=t.quantity or 0.0,
+            pnl_usd=t.pnl_usd or 0.0,
+            is_open=bool(t.is_open),
+        )
+        for t in db_rows
+    ]
+
+    matches, unmatched = reconcile(
+        okx_orders, db_trades,
+        window_sec=window_sec, price_tol_bps=price_tol_bps,
+    )
+    report = build_json_report(matches, unmatched)
+    report['success'] = True
+    report['generated_at'] = datetime.utcnow().isoformat() + 'Z'
+    report['scanned_okx_orders'] = len(okx_orders)
+    return jsonify(report)
+
+
 @app.route('/api/active-orders', methods=['GET'])
 def get_active_orders():
     """Get currently active/pending orders."""
