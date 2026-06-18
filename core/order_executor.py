@@ -646,6 +646,15 @@ class OrderExecutor:
                 logger.warning("PARTIAL FILL after limit execution - Leg risk!")
             await self._handle_leg_risk(spread_order)
 
+        # Final sanity refresh: catches the case where the legs both became
+        # FILLED on the exchange after our last poll (matching-engine lag).
+        # Without this, is_complete can stay False because a PARTIAL status
+        # never got upgraded to FILLED, even though both legs are 100% filled
+        # on the exchange. The engine then mis-reports the entry as a
+        # failure and the orphan detector kills the position.
+        if not spread_order.is_complete and not spread_order.is_failed:
+            await self._refresh_partial_legs(spread_order)
+
         if spread_order.is_complete and self.on_fill:
             self.on_fill(spread_order)
 
@@ -969,6 +978,11 @@ class OrderExecutor:
                         spread_order.spot_leg.status = LegStatus.PARTIAL
                         spread_order.spot_leg.filled_qty = status["filled_qty"]
                         spread_order.spot_leg.filled_price = status["filled_price"]
+                        logger.info(
+                            "Spot leg partially filled: %.6f / %.6f @ %.4f (will continue polling for full fill)",
+                            status["filled_qty"], spread_order.spot_leg.quantity,
+                            status["filled_price"],
+                        )
                     elif status["state"] == "canceled":
                         spread_order.spot_leg.status = LegStatus.CANCELLED
                         logger.warning(
@@ -995,6 +1009,11 @@ class OrderExecutor:
                     elif status["state"] == "partially_filled":
                         spread_order.futures_leg.status = LegStatus.PARTIAL
                         spread_order.futures_leg.filled_qty = status["filled_qty"]
+                        logger.info(
+                            "Futures leg partially filled: %.6f / %.6f @ %.4f (will continue polling for full fill)",
+                            status["filled_qty"], spread_order.futures_leg.quantity,
+                            status.get("filled_price", 0.0),
+                        )
                         spread_order.futures_leg.filled_price = status["filled_price"]
                     elif status["state"] == "canceled":
                         spread_order.futures_leg.status = LegStatus.CANCELLED
@@ -1097,6 +1116,38 @@ class OrderExecutor:
         if spread_order.has_partial_fill:
             await self._handle_leg_risk(spread_order)
 
+    async def _refresh_partial_legs(self, spread_order: SpreadOrder) -> None:
+        """Re-poll any leg currently in PARTIAL state to catch fills the
+        polling loop missed (state-transition lag between matching engine
+        and our 250ms poll). Upgrades PARTIAL → FILLED when the exchange
+        confirms the leg is complete.
+        """
+        for label, leg, adapter in (
+            ("spot",    spread_order.spot_leg,    self.spot_adapter),
+            ("futures", spread_order.futures_leg, self.futures_adapter),
+        ):
+            if leg.status != LegStatus.PARTIAL or not leg.order_id:
+                continue
+            try:
+                status = await adapter.get_order_status(leg.symbol, leg.order_id)
+                if not status:
+                    continue
+                state = status.get("state")
+                if state == "filled":
+                    leg.status = LegStatus.FILLED
+                    leg.filled_qty = status["filled_qty"]
+                    leg.filled_price = status["filled_price"]
+                    logger.info(
+                        "Re-poll caught up: %s leg fully filled now (qty=%.6f @ %.4f) — upgrading PARTIAL → FILLED",
+                        label, leg.filled_qty, leg.filled_price,
+                    )
+                elif state == "partially_filled":
+                    # Stay PARTIAL but update the qty in case it grew.
+                    leg.filled_qty = status["filled_qty"]
+                    leg.filled_price = status["filled_price"]
+            except Exception as e:
+                logger.warning("Re-poll for %s PARTIAL leg failed: %s", label, e)
+
     async def _handle_leg_risk(self, spread_order: SpreadOrder) -> None:
         """
         Handle leg risk when one leg is filled but the other isn't.
@@ -1110,6 +1161,15 @@ class OrderExecutor:
         recovered as a complete spread trade at maker rates.
         """
         filled_states = (LegStatus.FILLED, LegStatus.PARTIAL)
+
+        # FIRST: re-poll any PARTIAL leg from the exchange. Polling can lag
+        # behind the matching engine — a leg that read partially_filled on
+        # our last poll may have completed since then. Without this refresh,
+        # is_complete stays False (PARTIAL != FILLED) even though both legs
+        # are 100% filled on the exchange. The engine then auto-closes the
+        # "orphaned" positions at MARKET, eating fees + slippage on every
+        # cycle. Root cause of the 07/25-07/37 destructive loop.
+        await self._refresh_partial_legs(spread_order)
 
         spot_filled = spread_order.spot_leg.status in filled_states and spread_order.spot_leg.filled_qty > 0
         futures_filled = spread_order.futures_leg.status in filled_states and spread_order.futures_leg.filled_qty > 0
