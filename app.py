@@ -83,39 +83,71 @@ def run_async_loop(loop: asyncio.AbstractEventLoop):
 
 
 def _backfill_capital_metrics() -> None:
-    """Recompute capital_locked_usd + pnl_pct_on_capital for closed trades
-    that pre-date the new fields (recorded as 0). Uses the trade's stored
-    entry prices and quantity together with the CURRENT leverage and M2M
-    buffer config — exact when config hasn't changed, approximate otherwise.
+    """Recompute notional/margin/capital metrics for closed trades using the
+    trade's stored entry prices, quantity, and current β + leverage config.
+    Exact when config hasn't changed; approximate otherwise.
+
+    Three things get re-derived per closed trade:
+
+    1. notional_usd → total (Leg A + Leg B). Was previously only Leg A
+       (position_size_usd), under-reporting by ~2× on dollar-neutral pairs.
+    2. margin_usd → total margin across both legs (was futures-only).
+    3. capital_locked_usd + pnl_pct_on_capital (the locked-capital % metric).
+
+    pnl_percent is also recomputed against the new total notional so the
+    Trade Journal % column is internally consistent.
     """
     try:
         leg_a_deriv = is_derivative(config.spot_symbol)
         leg_b_deriv = is_derivative(config.futures_symbol)
         leg_a_lev = max(config.spot_leverage    if leg_a_deriv else 1, 1)
         leg_b_lev = max(config.futures_leverage if leg_b_deriv else 1, 1)
+        beta = max(getattr(config, 'hedge_ratio', 1.0) or 1.0, 1e-9)
         buffer_pct = getattr(config, 'm2m_buffer_pct', 0.0) or 0.0
         buffer_mult = 1 + buffer_pct / 100.0
 
         n = 0
         for trade in db.get_trades(limit=10000, open_only=False):
-            if trade.is_open or trade.capital_locked_usd:
+            if trade.is_open:
                 continue
             if not (trade.entry_spot_price and trade.entry_futures_price and trade.quantity):
                 continue
-            # notional_usd is Leg A notional set at open: entry_spot * spot_qty
-            margin_a = (trade.notional_usd or 0) / leg_a_lev
-            margin_b = (trade.entry_futures_price * trade.quantity) / leg_b_lev
-            capital = (margin_a + margin_b) * buffer_mult
-            if capital <= 0:
+
+            # Recompute leg notionals from the stored entry fills.
+            leg_a_notional = trade.entry_spot_price * trade.quantity * beta
+            leg_b_notional = trade.entry_futures_price * trade.quantity
+            new_total_notional = leg_a_notional + leg_b_notional
+
+            # Margin totals across both legs.
+            margin_a = leg_a_notional / leg_a_lev
+            margin_b = leg_b_notional / leg_b_lev
+            new_total_margin = margin_a + margin_b
+
+            # Capital metric (margin + M2M buffer).
+            capital = new_total_margin * buffer_mult
+
+            # Skip rows where nothing would change (e.g. already back-filled).
+            old_notional_close = abs((trade.notional_usd or 0) - new_total_notional) < 0.01
+            old_margin_close   = abs((trade.margin_usd or 0)   - new_total_margin)   < 0.01
+            old_capital_close  = abs((trade.capital_locked_usd or 0) - capital)      < 0.01
+            if old_notional_close and old_margin_close and old_capital_close:
                 continue
-            trade.capital_locked_usd = capital
-            trade.pnl_pct_on_capital = (trade.pnl_usd / capital) * 100
+
+            trade.notional_usd        = round(new_total_notional, 2)
+            trade.margin_usd          = round(new_total_margin, 2)
+            trade.capital_locked_usd  = round(capital, 2)
+            if new_total_notional > 0:
+                trade.pnl_percent = (trade.pnl_usd / new_total_notional) * 100
+            if capital > 0:
+                trade.pnl_pct_on_capital = (trade.pnl_usd / capital) * 100
             db.save_trade(trade)
             n += 1
         if n:
-            logger.info("Back-filled capital metrics on %d closed trade(s)", n)
+            logger.info(
+                "Back-filled notional/margin/capital metrics on %d closed trade(s)", n
+            )
     except Exception as e:
-        logger.warning("Capital metric back-fill skipped: %s", e)
+        logger.warning("Trade metric back-fill skipped: %s", e)
 
 
 def _get_balance_for_telegram() -> Dict[str, Any]:
