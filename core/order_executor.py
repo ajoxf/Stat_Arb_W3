@@ -913,8 +913,11 @@ class OrderExecutor:
                 logger.error("Failed to amend futures order: %s", e)
 
     # Map of OKX cancelSource codes → human-readable explanations.
-    # Source: OKX docs and observed behaviour. The 20/21/13 codes are the
-    # ones we hit in practice; everything else routes to "exchange/system".
+    # OKX doesn't publish a complete table; codes 13/17/20/21 are documented
+    # and observed in practice. Code 31 is undocumented but consistently
+    # appears under high cancel-and-replace cadence — almost certainly the
+    # exchange's order-flow throttle. Whenever OKX supplies its own
+    # cancel_source_reason string, prefer that over our guesses.
     _OKX_CANCEL_REASONS = {
         "0":  "user initiated",
         "1":  "system cancelled",
@@ -923,18 +926,25 @@ class OrderExecutor:
         "17": "IOC unfilled portion",
         "20": "POST_ONLY would have crossed the book — quoted price was too aggressive",
         "21": "self-trade prevented",
-        "31": "trigger-order limit",
+        "31": "order-flow throttle (rapid cancel/replace exceeded exchange limit)",
     }
 
     @classmethod
     def _explain_cancel(cls, status: Dict[str, Any]) -> str:
-        """Translate an OKX cancelled-order status into a human-readable reason."""
+        """Translate an OKX cancelled-order status into a human-readable reason.
+        Always prefer OKX's own cancel_source_reason text when supplied — our
+        code-to-text map is a fallback, not the source of truth, and OKX has
+        proven willing to add new cancelSource codes without docs updates.
+        """
         code = str(status.get("cancel_source") or "")
         text = (status.get("cancel_source_reason") or "").strip()
-        if code and code in cls._OKX_CANCEL_REASONS:
-            return f"{cls._OKX_CANCEL_REASONS[code]} (cancelSource={code})"
+        our_label = cls._OKX_CANCEL_REASONS.get(code)
+        if text and our_label and text.lower() != our_label.lower():
+            return f"{text} [{our_label}] (cancelSource={code})"
         if text:
             return f"{text} (cancelSource={code or 'n/a'})"
+        if our_label:
+            return f"{our_label} (cancelSource={code})"
         if code:
             return f"exchange cancelled (cancelSource={code})"
         return "exchange cancelled (no reason supplied)"
