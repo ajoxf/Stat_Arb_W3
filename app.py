@@ -451,10 +451,20 @@ def save_config():
         if not data:
             return jsonify({'success': False, 'error': 'No data received'}), 400
 
-        # Preserve the real telegram token if the form sent back the masked '***' placeholder
-        if data.get('telegram_bot_token') == '***':
-            existing = db.get_config()
-            data['telegram_bot_token'] = existing.telegram_bot_token
+        # Telegram settings live in a separate panel — the main Settings form
+        # doesn't include them in its payload. Without this merge, from_dict()
+        # below would reset every missing telegram_* field to its dataclass
+        # default (enabled→False, chat_id→""), silently killing the bot every
+        # time the user saves any unrelated setting. Also honor the '***'
+        # sentinel sent by the Telegram panel to mean "keep the saved token".
+        existing = db.get_config()
+        telegram_fields = (
+            'telegram_enabled', 'telegram_bot_token', 'telegram_chat_id',
+            'telegram_notify_trades', 'telegram_notify_signals', 'telegram_notify_errors',
+        )
+        for field in telegram_fields:
+            if field not in data or data.get(field) == '***':
+                data[field] = getattr(existing, field)
 
         # Validate leverage bounds before saving
         for lev_key in ('spot_leverage', 'futures_leverage'):
@@ -2275,7 +2285,12 @@ def save_telegram_config():
 
     try:
         config.telegram_enabled = bool(data.get('telegram_enabled', False))
-        config.telegram_bot_token = str(data.get('telegram_bot_token', '')).strip()
+        # '***' sentinel from the panel means "leave the saved token alone" —
+        # the input field is rendered blank by design so the user doesn't have
+        # to re-paste the token on every visit. Treat blank the same way.
+        token_in = str(data.get('telegram_bot_token', '')).strip()
+        if token_in and token_in != '***':
+            config.telegram_bot_token = token_in
         config.telegram_chat_id = str(data.get('telegram_chat_id', '')).strip()
         config.telegram_notify_trades = bool(data.get('telegram_notify_trades', True))
         config.telegram_notify_signals = bool(data.get('telegram_notify_signals', False))
