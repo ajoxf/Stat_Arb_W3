@@ -329,6 +329,26 @@ class SignalGenerator:
         passed = profitability_ratio >= self.config.min_std_multiple
         return passed, profitability_ratio
 
+    def _compute_round_trip_cost_bps(self) -> dict:
+        """Return full round-trip cost breakdown (fees + slippage) for display."""
+        spot_maker  = getattr(self.config, 'spot_maker_fee_bps',    self.config.maker_fee_bps)
+        spot_taker  = getattr(self.config, 'spot_taker_fee_bps',    self.config.taker_fee_bps)
+        fut_maker   = getattr(self.config, 'futures_maker_fee_bps',  self.config.maker_fee_bps)
+        fut_taker   = getattr(self.config, 'futures_taker_fee_bps',  self.config.taker_fee_bps)
+        entry_mode  = getattr(self.config, 'entry_execution_mode', self.config.order_execution_mode)
+        exit_mode   = getattr(self.config, 'exit_execution_mode',  self.config.order_execution_mode)
+        entry_cost  = (spot_maker + fut_maker) if entry_mode == "LIMIT" else (spot_taker + fut_taker)
+        exit_cost   = (spot_maker + fut_maker) if exit_mode  == "LIMIT" else (spot_taker + fut_taker)
+        slippage    = getattr(self.config, 'slippage_bps', 0.0) * 4
+        return {
+            'entry_bps':   round(entry_cost, 1),
+            'exit_bps':    round(exit_cost, 1),
+            'slippage_bps': round(slippage, 1),
+            'total_bps':   round(entry_cost + exit_cost + slippage, 1),
+            'entry_mode':  entry_mode,
+            'exit_mode':   exit_mode,
+        }
+
     def _track_sd_touch(self, zscore: float, spot_price: float, futures_price: float) -> Optional[SDTouchEvent]:
         """Track when Z-score crosses SD levels."""
         current_sd_level = 0.0
@@ -570,6 +590,7 @@ class SignalGenerator:
                 getattr(self.config, 'spot_taker_fee_bps', self.config.taker_fee_bps) +
                 getattr(self.config, 'futures_taker_fee_bps', self.config.taker_fee_bps)
             ),
+            'round_trip_cost_bps': self._compute_round_trip_cost_bps(),
             'regime': regime if data_ready else "COLLECTING",
             'data_points': len(self.spread_history),
             'lookback': self.lookback,
