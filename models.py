@@ -395,6 +395,7 @@ class OrderResult:
     filled_price: float = 0.0
     commission: float = 0.0
     error: str = ""
+    already_flat: bool = False  # OKX sCode 51169: no position to close in this direction
 
     def to_dict(self) -> Dict[str, Any]:
         return {

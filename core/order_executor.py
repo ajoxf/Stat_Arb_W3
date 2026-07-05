@@ -521,6 +521,17 @@ class OrderExecutor:
             spread_order.futures_leg.status = LegStatus.OPEN
             logger.info("Placed futures LIMIT order: %s @ %.2f",
                        spread_order.futures_leg.side, spread_order.futures_leg.target_price)
+        elif getattr(futures_result, 'already_flat', False) and not spread_order.is_entry:
+            # OKX 51169: futures position already closed on exchange during EXIT.
+            # Mark futures as filled so the loop only waits for spot to complete.
+            logger.warning(
+                "Futures position already flat on exchange (51169) during EXIT — "
+                "marking futures leg done and closing spot leg only"
+            )
+            spread_order.futures_leg.status = LegStatus.FILLED
+            spread_order.futures_leg.filled_qty = spread_order.futures_leg.quantity
+            spread_order.futures_leg.filled_price = 0.0
+            # Do NOT return — let the loop continue waiting for spot to fill
         else:
             spread_order.futures_leg.status = LegStatus.FAILED
             logger.error("Failed to place futures limit order: %s", futures_result.error)

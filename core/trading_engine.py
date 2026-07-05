@@ -111,6 +111,10 @@ class TradingEngine:
         self._orphan_mismatch_count: int = 0  # consecutive detections of orphan futures
         self._orphan_auto_close_threshold: int = 3  # close after ~60s (3 × 20s intervals)
 
+        # Exit retry throttle — prevents rapid-fire exit attempts when spot fails
+        self._last_exit_attempt: Optional[datetime] = None
+        self._exit_retry_interval_sec: int = 10
+
         # Order execution tracking for pattern detection
         self._spot_order_attempts = 0
         self._spot_order_failures = 0
@@ -749,6 +753,17 @@ class TradingEngine:
         # position open so the engine retries on the next tick rather than
         # silently leaving an unclosed position on the exchange.
         if not self.state.paper_trading:
+            # Throttle: don't hammer the exchange if the last exit just failed
+            if self._last_exit_attempt is not None:
+                elapsed = (datetime.utcnow() - self._last_exit_attempt).total_seconds()
+                if elapsed < self._exit_retry_interval_sec:
+                    logger.debug(
+                        "Exit retry throttled — %.1fs since last attempt (min %ds)",
+                        elapsed, self._exit_retry_interval_sec,
+                    )
+                    return
+
+            self._last_exit_attempt = datetime.utcnow()
             self._executing_trade = True
             try:
                 exit_ok = await self._execute_exit_orders(trade, signal)
@@ -764,6 +779,8 @@ class TradingEngine:
                     trade.position_type,
                 )
                 return  # Do NOT reset state; engine retries on next signal
+
+            self._last_exit_attempt = None  # Clear on success
 
         trade.is_open = False
 
@@ -903,9 +920,26 @@ class TradingEngine:
             if engine_has_position and not exchange_has_position:
                 result['mismatch'] = True
                 result['mismatch_reason'] = "Engine shows position but exchange has none (manually closed?)"
-                logger.warning("Position mismatch: Engine=%s but exchange has no positions",
-                             self.state.current_position)
-                self._orphan_mismatch_count = 0  # not an orphan scenario
+                logger.warning("Position mismatch: Engine=%s but exchange has no positions [orphan_count=%d/%d]",
+                             self.state.current_position,
+                             self._orphan_mismatch_count + 1, self._orphan_auto_close_threshold)
+                self._orphan_mismatch_count += 1
+                if self._orphan_mismatch_count >= self._orphan_auto_close_threshold:
+                    logger.warning(
+                        "Engine shows %s position but exchange is flat for %d checks — force-clearing engine state",
+                        self.state.current_position, self._orphan_mismatch_count,
+                    )
+                    if self.open_trade:
+                        self.open_trade.is_open = False
+                        self.open_trade.exit_reason = "MISMATCH_AUTO_CLEAR"
+                    self.state.current_position = "NONE"
+                    self.open_trade = None
+                    self._last_exit_attempt = None
+                    self._orphan_mismatch_count = 0
+                    get_notifier().notify_error(
+                        "Engine position auto-cleared after exchange showed flat for "
+                        f"{self._orphan_auto_close_threshold} consecutive checks"
+                    )
 
             elif not engine_has_position and exchange_has_position:
                 result['mismatch'] = True

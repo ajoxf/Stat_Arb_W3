@@ -465,7 +465,11 @@ class OKXAdapter(ExchangeAdapter):
                         error = f"{error}: {sub_error}"
                 logger.error("Order failed: %s | Request: %s | Response: %s",
                             error, order_data, result)
-                return OrderResult(success=False, error=error)
+                already_flat = any(
+                    str(d.get("sCode", "")) == "51169"
+                    for d in data_errors if isinstance(d, dict)
+                )
+                return OrderResult(success=False, error=error, already_flat=already_flat)
 
         except Exception as e:
             logger.exception("Error placing OKX order")
