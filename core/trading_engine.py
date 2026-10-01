@@ -774,7 +774,8 @@ class TradingEngine:
             return True  # Don't block trading on verification error
 
     async def execute_spread(self, direction: str, quantity: float,
-                             is_entry: bool, source: str = "manual") -> Dict[str, Any]:
+                             is_entry: bool, source: str = "manual",
+                             exit_mode: Optional[str] = None) -> Dict[str, Any]:
         """The ONE spread order path — used by BOTH the manual endpoints and
         the AlgoTrader. ``direction`` is LONG_SPREAD (buy spot / sell perp) or
         SHORT_SPREAD (sell spot / buy perp); for an EXIT it is the direction
@@ -827,6 +828,12 @@ class TradingEngine:
                     "fill_spread": round(k * spot_px - fut_px, 4)}
 
         self._executing_trade = True
+        # Optional per-call exit-mode override (the dashboard's Market/Limit
+        # close buttons). Swapped under the execution lock, restored after.
+        saved_exit_mode = None
+        if not is_entry and exit_mode in ("MARKET", "LIMIT"):
+            saved_exit_mode = self.config.exit_execution_mode
+            self.config.exit_execution_mode = exit_mode
         try:
             trade = Trade(asset=self.config.asset, position_type=ptype,
                           quantity=quantity, is_open=is_entry)
@@ -863,6 +870,8 @@ class TradingEngine:
             logger.exception("execute_spread failed")
             return {"success": False, "error": str(e)}
         finally:
+            if saved_exit_mode is not None:
+                self.config.exit_execution_mode = saved_exit_mode
             self._executing_trade = False
 
     def _record_execution(self, label: str, source: str, qty: float) -> None:

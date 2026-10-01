@@ -252,7 +252,8 @@ def _spread_execute_unlocked(direction: str, qty: float, source: str,
 def _spread_close(direction: str, qty: float, source: str = "manual",
                   reason: Optional[str] = None, z: Optional[float] = None,
                   peak_pnl: Optional[float] = None,
-                  trough_pnl: Optional[float] = None) -> Dict[str, Any]:
+                  trough_pnl: Optional[float] = None,
+                  exit_mode: Optional[str] = None) -> Dict[str, Any]:
     """The shared spread CLOSE path. An EXIT is never blocked for the algo;
     a manual close is refused only while the algo is ON."""
     if source != "algo":
@@ -265,20 +266,22 @@ def _spread_close(direction: str, qty: float, source: str = "manual",
             if algo_trader.running:
                 return {"success": False, "error": _manual_blocked()}
             return _spread_close_unlocked(direction, qty, source, reason, z,
-                                          peak_pnl, trough_pnl)
+                                          peak_pnl, trough_pnl, exit_mode)
         finally:
             _manual_busy.release()
     return _spread_close_unlocked(direction, qty, source, reason, z,
-                                  peak_pnl, trough_pnl)
+                                  peak_pnl, trough_pnl, exit_mode)
 
 
 def _spread_close_unlocked(direction: str, qty: float, source: str,
                            reason: Optional[str], z: Optional[float],
                            peak_pnl: Optional[float],
-                           trough_pnl: Optional[float]) -> Dict[str, Any]:
+                           trough_pnl: Optional[float],
+                           exit_mode: Optional[str] = None) -> Dict[str, Any]:
     try:
         res = _run_engine_coro(engine.execute_spread(direction, qty, is_entry=False,
-                                                     source=source))
+                                                     source=source,
+                                                     exit_mode=exit_mode))
     except Exception as e:
         logger.exception("spread close failed")
         return {"success": False, "error": str(e)}
@@ -322,6 +325,148 @@ algo_trader = AlgoTrader(
     execute_fn=_spread_execute,
     close_fn=_spread_close,
 )
+
+
+class ManualTradeWatcher:
+    """The dashboard's armed Manual Spread Trade: an entry level (blank =
+    now), and optional Take-Profit / Stop-Loss SPREAD levels, watched
+    server-side on the EXECUTABLE sides (the algo must be OFF — the same
+    MANUAL/ALGO lock governs it). One armed trade at a time."""
+
+    def __init__(self):
+        import threading as _th
+        self._lock = _th.Lock()
+        self._armed: Optional[Dict[str, Any]] = None   # {direction, qty, entry, tp, sl}
+        self._managing: Optional[Dict[str, Any]] = None  # after fill: {direction, qty, tp, sl}
+        self._status = "idle"
+        self._thread = _th.Thread(target=self._loop, daemon=True,
+                                  name="ManualTradeWatcher")
+        self._thread.start()
+
+    def state(self) -> Dict[str, Any]:
+        with self._lock:
+            return {'armed': dict(self._armed) if self._armed else None,
+                    'managing': dict(self._managing) if self._managing else None,
+                    'status': self._status}
+
+    def arm(self, direction: str, qty: float, entry: Optional[float],
+            tp: Optional[float], sl: Optional[float]) -> Dict[str, Any]:
+        if direction not in ('LONG_SPREAD', 'SHORT_SPREAD'):
+            return {'success': False, 'error': f'bad direction: {direction}'}
+        why = _manual_blocked()
+        if why:
+            return {'success': False, 'error': why}
+        if qty <= 0:
+            return {'success': False, 'error': 'qty must be > 0'}
+        # TP must be on the profitable side of entry, SL on the losing side.
+        if entry is not None:
+            if tp is not None and ((direction == 'LONG_SPREAD') != (tp > entry)):
+                return {'success': False,
+                        'error': 'Take Profit is on the wrong side of entry for this direction'}
+            if sl is not None and ((direction == 'LONG_SPREAD') != (sl < entry)):
+                return {'success': False,
+                        'error': 'Stop Loss is on the wrong side of entry for this direction'}
+        with self._lock:
+            if self._armed or self._managing:
+                return {'success': False, 'error': 'A manual trade is already armed or managed — cancel it first'}
+            if _open_position_view():
+                return {'success': False, 'error': 'A position is already open — one position at a time'}
+            self._armed = {'direction': direction, 'qty': qty, 'entry': entry,
+                           'tp': tp, 'sl': sl,
+                           'armed_at': datetime.now(timezone.utc).timestamp()}
+            self._status = 'armed — waiting for entry' if entry is not None else 'executing now'
+        return {'success': True, 'state': self.state()}
+
+    def cancel(self, why: str = 'cancelled') -> bool:
+        with self._lock:
+            had = bool(self._armed or self._managing)
+            self._armed = None
+            self._managing = None
+            self._status = f'idle ({why})' if had else 'idle'
+        return had
+
+    def _loop(self) -> None:
+        import time as _time
+        while True:
+            try:
+                self._tick()
+            except Exception:
+                logger.exception('ManualTradeWatcher tick failed')
+            _time.sleep(0.5)
+
+    def _tick(self) -> None:
+        with self._lock:
+            armed = dict(self._armed) if self._armed else None
+            managing = dict(self._managing) if self._managing else None
+        if not armed and not managing:
+            return
+        if algo_trader.running:
+            # The lock in words: an armed manual trade never fights the algo.
+            self.cancel('algo was started')
+            return
+        sig = signal_engine.get_signal()
+        if armed:
+            # Entry price: the side this direction would actually trade at.
+            px = (sig.get('buy_spread') if armed['direction'] == 'LONG_SPREAD'
+                  else sig.get('sell_spread'))
+            if px is None:
+                return
+            trigger = armed['entry']
+            # LONG arms below the market (buy when it comes down to entry);
+            # SHORT arms above. blank entry = fire now.
+            hit = (trigger is None
+                   or (armed['direction'] == 'LONG_SPREAD' and px <= trigger)
+                   or (armed['direction'] == 'SHORT_SPREAD' and px >= trigger))
+            if not hit:
+                with self._lock:
+                    self._status = (f"armed — {armed['direction'].replace('_SPREAD', '')} "
+                                    f"at {trigger:.2f} (now {px:.2f})")
+                return
+            res = _spread_execute(armed['direction'], armed['qty'], source='manual',
+                                  z=sig.get('zscore'), spread=px)
+            with self._lock:
+                self._armed = None
+                if res.get('success'):
+                    self._managing = ({'direction': armed['direction'],
+                                       'qty': armed['qty'], 'tp': armed['tp'],
+                                       'sl': armed['sl'],
+                                       'entry_fill': res.get('fill_spread')}
+                                      if (armed['tp'] is not None or armed['sl'] is not None)
+                                      else None)
+                    self._status = ('filled — watching TP/SL' if self._managing
+                                    else 'filled')
+                else:
+                    self._status = f"entry failed: {res.get('error')}"
+            return
+        # Managing TP / SL on the executable closing side.
+        close_px = (sig.get('sell_spread') if managing['direction'] == 'LONG_SPREAD'
+                    else sig.get('buy_spread'))
+        if close_px is None:
+            return
+        long_ = managing['direction'] == 'LONG_SPREAD'
+        reason = None
+        if managing.get('tp') is not None and ((long_ and close_px >= managing['tp'])
+                                               or (not long_ and close_px <= managing['tp'])):
+            reason = 'manual_tp'
+        elif managing.get('sl') is not None and ((long_ and close_px <= managing['sl'])
+                                                 or (not long_ and close_px >= managing['sl'])):
+            reason = 'manual_sl'
+        if reason is None:
+            with self._lock:
+                self._status = (f"watching — close now {close_px:.2f} "
+                                f"(TP {managing.get('tp')} / SL {managing.get('sl')})")
+            return
+        res = _spread_close(managing['direction'], managing['qty'], source='manual',
+                            reason=reason, z=sig.get('zscore'))
+        with self._lock:
+            if res.get('success'):
+                self._managing = None
+                self._status = f"closed ({reason}) net {res.get('net_pnl')}"
+            else:
+                self._status = f"{reason} close failed: {res.get('error')} — retrying"
+
+
+manual_watcher = ManualTradeWatcher()
 
 # Reconciliation force-clear + critical halt reach the algo too.
 engine.on_position_cleared = lambda why: algo_trader.clear_position(why)
@@ -769,6 +914,16 @@ def api_signal():
     p = _algo_params()
     sig['trade_direction'] = str(p.get('trade_direction', 'both'))
     sig['open_position'] = _open_position_view()
+    # Feed age: now − the newest leg tick the engine holds.
+    try:
+        book = engine.get_book() or {}
+        ages = [b.get('ts') for b in (book.get('leg_a'), book.get('leg_b'))
+                if b and b.get('ts')]
+        sig['feed_age_ms'] = (round((datetime.now(timezone.utc).timestamp()
+                                     - max(ages)) * 1000) if ages else None)
+    except Exception:
+        sig['feed_age_ms'] = None
+    sig['manual_trade'] = manual_watcher.state()
     return jsonify(sig)
 
 
@@ -827,7 +982,11 @@ def api_execute():
 
 @app.route('/api/close', methods=['POST'])
 def api_close():
-    """MANUAL close of the open position (refused while the algo is ON)."""
+    """MANUAL close of the open position (refused while the algo is ON).
+    Optional {mode: "market"|"limit"} overrides the exit execution mode
+    for this one close (the dashboard's Market / Limit buttons)."""
+    data = request.json or {}
+    mode = str(data.get('mode', '') or '').upper()
     op = _open_position_view()
     if not op:
         return jsonify({'success': False, 'error': 'No open position'}), 400
@@ -836,9 +995,11 @@ def api_close():
     z = sig.get('z_sell') if direction == 'LONG_SPREAD' else sig.get('z_buy')
     res = _spread_close(direction, float(op['qty']), source='manual',
                         reason='manual',
-                        z=z if z is not None else sig.get('zscore'))
+                        z=z if z is not None else sig.get('zscore'),
+                        exit_mode=mode if mode in ('MARKET', 'LIMIT') else None)
     if res.get('success'):
         algo_trader.clear_position('closed manually')
+        manual_watcher.cancel('position closed manually')
     return jsonify(res)
 
 
@@ -1153,6 +1314,109 @@ def api_margin():
     except Exception as e:
         out['error'] = str(e)
     return jsonify(out)
+
+
+@app.route('/api/manual-trade/arm', methods=['POST'])
+def api_manual_trade_arm():
+    d = request.json or {}
+    def _f(k):
+        v = d.get(k)
+        try:
+            return float(v) if v not in (None, '') else None
+        except (TypeError, ValueError):
+            return None
+    qty = _f('qty')
+    if qty is None:
+        sig = signal_engine.get_signal()
+        qty = (engine.config.position_size_usd / float(sig['leg_a'])
+               if sig.get('leg_a') else 0)
+    return jsonify(manual_watcher.arm(str(d.get('direction', '')).upper(),
+                                      qty or 0, _f('entry'), _f('tp'), _f('sl')))
+
+
+@app.route('/api/manual-trade/cancel', methods=['POST'])
+def api_manual_trade_cancel():
+    had = manual_watcher.cancel('cancelled from the dashboard')
+    return jsonify({'success': True, 'had_armed': had})
+
+
+@app.route('/api/active-order', methods=['GET'])
+def api_active_order():
+    """The in-flight spread order's legs (for the Active Orders card)."""
+    so = engine.order_executor.active_order if engine.order_executor else None
+    if so is None or not engine.state.is_running:
+        return jsonify({'active': False})
+    try:
+        def leg(l):
+            return {'symbol': l.symbol, 'side': l.side,
+                    'status': l.status.name if hasattr(l.status, 'name') else str(l.status),
+                    'target_price': getattr(l, 'target_price', None),
+                    'filled_price': l.filled_price or None,
+                    'filled_qty': l.filled_qty or None, 'qty': l.quantity}
+        done = so.is_complete or so.is_failed
+        return jsonify({'active': not done, 'is_entry': so.is_entry,
+                        'position_type': so.position_type,
+                        'spot_leg': leg(so.spot_leg), 'futures_leg': leg(so.futures_leg)})
+    except Exception as e:
+        return jsonify({'active': False, 'error': str(e)})
+
+
+@app.route('/api/volume', methods=['GET'])
+def api_volume():
+    """$ turnover + clips per UTC day / week / month off the journal
+    (every OPEN and CLOSE fill counts both legs)."""
+    rows = db.journal_rows(limit=2000)
+    now = datetime.now(timezone.utc)
+    day0 = now.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+    week0 = day0 - now.weekday() * 86400
+    month0 = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).timestamp()
+    out = {'day_usd': 0.0, 'week_usd': 0.0, 'month_usd': 0.0,
+           'clips_today': 0, 'clips_month': 0, 'days': []}
+    per_day = {}
+    for r in rows:
+        qty = float(r.get('qty') or 0)
+        la, lb = r.get('leg_a_fill'), r.get('leg_b_fill')
+        turn = qty * ((abs(la) if la else 0) + (abs(lb) if lb else 0))
+        ts = float(r['ts'])
+        if ts >= month0:
+            out['month_usd'] += turn
+            out['clips_month'] += 1
+        if ts >= week0:
+            out['week_usd'] += turn
+        if ts >= day0:
+            out['day_usd'] += turn
+            out['clips_today'] += 1
+        if ts >= day0 - 13 * 86400:
+            d = int((ts - day0) // 86400)        # 0 = today, negative = past days
+            per_day[d] = per_day.get(d, 0.0) + turn
+    out['days'] = [round(per_day.get(-i, 0.0), 2) for i in range(13, -1, -1)]
+    for k in ('day_usd', 'week_usd', 'month_usd'):
+        out[k] = round(out[k], 2)
+    out['asof'] = now.strftime('%H:%M UTC')
+    return jsonify(out)
+
+
+@app.route('/api/journal.csv', methods=['GET'])
+def api_journal_csv():
+    import csv as _csv
+    import io as _io
+    from flask import Response
+    rows = db.journal_rows(limit=5000)
+    buf = _io.StringIO()
+    if rows:
+        w = _csv.DictWriter(buf, fieldnames=list(rows[0].keys()))
+        w.writeheader()
+        w.writerows(rows)
+    return Response(buf.getvalue(), mimetype='text/csv',
+                    headers={'Content-Disposition': 'attachment; filename="spread_journal.csv"'})
+
+
+@app.route('/api/journal/clear', methods=['POST'])
+def api_journal_clear():
+    with db._get_connection() as conn:
+        n = conn.cursor().execute("DELETE FROM spread_journal").rowcount
+    algo_trader.clear_position('journal cleared')
+    return jsonify({'success': True, 'deleted': n})
 
 
 @app.route('/desk')

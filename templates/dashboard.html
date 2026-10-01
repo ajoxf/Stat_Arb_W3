@@ -3,8 +3,15 @@
 {% block title %}Dashboard — Nexus{% endblock %}
 
 {% block content %}
+<!-- Latency Metrics Strip -->
+<div class="d-flex align-items-center gap-3 mb-3 px-1" style="font-size:0.72rem;color:#888;">
+    <span><i class="bi bi-clock me-1"></i>Feed age: <span id="tick-age-ms" class="fw-bold text-body">—</span></span>
+    <span><i class="bi bi-arrow-down-up me-1"></i>Entry latency: <span id="entry-latency-ms" class="fw-bold text-body">—</span></span>
+    <span><i class="bi bi-arrow-down-up me-1"></i>Exit latency: <span id="exit-latency-ms" class="fw-bold text-body">—</span></span>
+</div>
+
 <div class="row g-3">
-    <!-- ── Left column: prices, signal & position, charts ─────────────────── -->
+    <!-- ── Left column ─────────────────────────────────────────────────────── -->
     <div class="col-lg-5">
         <!-- Leg price cards -->
         <div class="row g-2 mb-3">
@@ -52,15 +59,90 @@
             </div>
         </div>
 
+        <!-- Position Sizing — per-leg notional, qty, balance -->
+        <div class="card mb-3">
+            <div class="card-header py-1">
+                <small><i class="bi bi-calculator me-2"></i>Position Sizing</small>
+            </div>
+            <div class="card-body p-2">
+                <div class="row g-2" style="font-size: 0.75rem;">
+                    <div class="col-6">
+                        <div class="p-2" style="background: var(--bs-tertiary-bg); border-radius: 4px;">
+                            <div class="text-secondary mb-1" style="font-size: 0.7rem;"><strong>Leg A</strong>
+                                <span class="ms-1">{{ config.spot_symbol }}</span></div>
+                            <div class="d-flex justify-content-between">
+                                <span class="text-secondary">Notional:</span>
+                                <span id="leg-a-notional" class="fw-bold">&mdash;</span>
+                            </div>
+                            <div class="d-flex justify-content-between">
+                                <span class="text-secondary">Margin ({{ config.spot_leverage }}×):</span>
+                                <span id="leg-a-margin">&mdash;</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-6">
+                        <div class="p-2" style="background: var(--bs-tertiary-bg); border-radius: 4px;">
+                            <div class="text-secondary mb-1" style="font-size: 0.7rem;"><strong>Leg B</strong>
+                                <span class="ms-1">{{ config.futures_symbol }}</span></div>
+                            <div class="d-flex justify-content-between">
+                                <span class="text-secondary">Notional:</span>
+                                <span id="leg-b-notional" class="fw-bold">&mdash;</span>
+                            </div>
+                            <div class="d-flex justify-content-between">
+                                <span class="text-secondary">Margin ({{ config.futures_leverage }}×):</span>
+                                <span id="leg-b-margin">&mdash;</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="d-flex justify-content-between mt-2" style="font-size: 0.7rem;"
+                     title="BTC quantity sent to each leg — the same qty on both makes the pair's P&L equal the spread move.">
+                    <span class="text-secondary">Qty (A / B):</span>
+                    <span id="sizing-qty" class="font-monospace">&mdash;</span>
+                </div>
+                <div class="d-flex justify-content-between" style="font-size: 0.7rem;"
+                     title="Difference between the two legs' notional exposure — anything beyond the basis itself means unhedged directional risk.">
+                    <span class="text-secondary">Balance:</span>
+                    <span id="sizing-balance" class="font-monospace">&mdash;</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Live hedge ratio (β = mid B ÷ mid A, recomputed each tick) -->
+        <div class="card mb-3" id="live-beta-card">
+            <div class="card-body py-2 px-3" style="font-size: 0.8rem;">
+                <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+                    <div title="mid(Leg B) ÷ mid(Leg A) — the β that would make the pair value-neutral right now">
+                        <i class="bi bi-arrow-left-right me-1 text-secondary"></i>
+                        <span class="text-secondary">Live β:</span>
+                        <span id="live-beta-value" class="fw-bold ms-1 text-info">&mdash;</span>
+                    </div>
+                    <div>
+                        <span class="text-secondary">configured:</span>
+                        <span id="live-beta-configured" class="ms-1">&mdash;</span>
+                    </div>
+                    <div title="Percent difference between configured β and live β. Green ≤ 0.5% • amber ≤ 2% • red > 2%.">
+                        <span class="text-secondary me-1">drift:</span>
+                        <span id="live-beta-drift" class="badge bg-secondary">&mdash;</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- Signal & Position -->
         <div class="card mb-3">
             <div class="card-header py-2 d-flex justify-content-between align-items-center">
                 <span><i class="bi bi-lightning me-2"></i>Signal &amp; Position</span>
-                <button class="btn btn-sm btn-danger py-0" id="close-btn" onclick="closePosition()"
-                        style="font-size:0.75rem; display:none;"
-                        title="Close the open position NOW through the shared order path.">
-                    <i class="bi bi-x-octagon"></i> Close Position
-                </button>
+                <span id="close-btn-group" style="display: none;">
+                    <button class="btn btn-sm btn-danger py-0" onclick="closePosition('MARKET')" style="font-size:0.75rem;"
+                            title="Close NOW at market — crosses the bid/ask. Use when it's urgent.">
+                        <i class="bi bi-lightning-charge"></i> Market
+                    </button>
+                    <button class="btn btn-sm btn-outline-success py-0 ms-1" onclick="closePosition('LIMIT')" style="font-size:0.75rem;"
+                            title="Close with limit orders at the touch — saves crossing the bid/ask, may take longer. Use when not urgent.">
+                        <i class="bi bi-cash-coin"></i> Limit
+                    </button>
+                </span>
             </div>
             <div class="card-body py-2">
                 <div class="row align-items-center">
@@ -70,7 +152,7 @@
                             <div class="text-secondary mb-1" style="font-size:0.68rem; letter-spacing:0.04em;">
                                 <strong>SELL SPREAD</strong> <span>Bid A − Ask B</span></div>
                             <div class="font-monospace fw-bold text-danger" id="sell-spread-value" style="font-size:1.7rem; line-height:1.1;">&mdash;</div>
-                            <div class="mt-2 pt-1" style="border-top:1px solid #ddd;">
+                            <div class="mt-2 pt-1" style="border-top:1px solid var(--bs-border-color);">
                                 <div class="text-secondary" style="font-size:0.6rem; letter-spacing:0.04em;">Z-SCORE</div>
                                 <div class="font-monospace fw-bold" id="sell-spread-z" style="font-size:1.4rem; line-height:1.1;">&mdash;</div>
                                 <div class="text-secondary font-monospace" id="sell-spread-entry" style="font-size:0.65rem;"></div>
@@ -84,7 +166,7 @@
                             <div class="text-secondary mb-1" style="font-size:0.68rem; letter-spacing:0.04em;">
                                 <strong>BUY SPREAD</strong> <span>Ask A − Bid B</span></div>
                             <div class="font-monospace fw-bold text-success" id="buy-spread-value" style="font-size:1.7rem; line-height:1.1;">&mdash;</div>
-                            <div class="mt-2 pt-1" style="border-top:1px solid #ddd;">
+                            <div class="mt-2 pt-1" style="border-top:1px solid var(--bs-border-color);">
                                 <div class="text-secondary" style="font-size:0.6rem; letter-spacing:0.04em;">Z-SCORE</div>
                                 <div class="font-monospace fw-bold" id="buy-spread-z" style="font-size:1.4rem; line-height:1.1;">&mdash;</div>
                                 <div class="text-secondary font-monospace" id="buy-spread-entry" style="font-size:0.65rem;"></div>
@@ -100,7 +182,7 @@
                 </div>
 
                 <!-- Open position detail -->
-                <div id="position-details" class="mt-2 pt-2" style="display:none; border-top:1px solid #ddd; font-size:0.78rem;">
+                <div id="position-details" class="mt-2 pt-2" style="display:none; border-top:1px solid var(--bs-border-color); font-size:0.78rem;">
                     <div class="row mb-1">
                         <div class="col-4"><span class="text-secondary">Entry spread:</span> <span id="pd-entry" class="font-monospace">—</span></div>
                         <div class="col-4"><span class="text-secondary">Δ spread:</span> <span id="pd-delta" class="font-monospace">—</span></div>
@@ -116,23 +198,6 @@
                         <div class="col-4"><span class="text-secondary">Qty:</span> <span id="pd-qty" class="font-monospace">—</span></div>
                         <div class="col-4"><span class="text-secondary">Notional:</span> <span id="pd-notional" class="font-monospace">—</span></div>
                     </div>
-                </div>
-
-                <!-- Manual trading (locked out while the algo is ON) -->
-                <div id="manual-trade-row" class="mt-2 pt-2 d-flex gap-2 justify-content-center" style="border-top:1px solid #ddd;">
-                    <button class="btn btn-sm btn-outline-danger" id="manual-sell-btn"
-                            onclick="manualTrade('SHORT_SPREAD')"
-                            title="MANUAL: sell the spread (sell Spot at bid, buy Perp at ask). Refused while the algo is ON.">
-                        <i class="bi bi-arrow-down-right"></i> Sell Spread
-                    </button>
-                    <button class="btn btn-sm btn-outline-success" id="manual-buy-btn"
-                            onclick="manualTrade('LONG_SPREAD')"
-                            title="MANUAL: buy the spread (buy Spot at ask, sell Perp at bid). Refused while the algo is ON.">
-                        <i class="bi bi-arrow-up-right"></i> Buy Spread
-                    </button>
-                    <span id="manual-lock-note" class="text-secondary align-self-center" style="font-size:0.7rem; display:none;">
-                        <i class="bi bi-lock"></i> Algo is ON — manual orders locked
-                    </span>
                 </div>
             </div>
         </div>
@@ -171,31 +236,8 @@
         </div>
     </div>
 
-    <!-- ── Middle column: algo status, statistics, filters ────────────────── -->
+    <!-- ── Middle column ───────────────────────────────────────────────────── -->
     <div class="col-lg-4">
-        <!-- Algo status: THE live "what is it doing / why not" line -->
-        <div class="card mb-3">
-            <div class="card-header py-1 d-flex justify-content-between align-items-center">
-                <small><i class="bi bi-robot me-2"></i>Algo Status</small>
-                <span id="algo-cooldown" class="badge bg-warning text-dark" style="font-size:0.62rem; display:none;"></span>
-            </div>
-            <div class="card-body py-2">
-                <div id="algo-status-line" class="font-monospace" style="font-size:0.85rem;">—</div>
-                <div id="algo-exit-health" class="text-danger mt-1" style="font-size:0.72rem; display:none;"></div>
-            </div>
-        </div>
-
-        <!-- Last Signal Blocked -->
-        <div class="card mb-3" id="blocked-card" style="display:none; border-left: 3px solid #ffc107;">
-            <div class="card-header py-1"><small><i class="bi bi-sign-stop me-2"></i>Last Signal Blocked</small></div>
-            <div class="card-body py-2" style="font-size:0.78rem;">
-                <div><span class="badge" id="blocked-side">—</span>
-                     <span class="font-monospace" id="blocked-z"></span>
-                     <span class="text-secondary" id="blocked-time" style="font-size:0.68rem;"></span></div>
-                <div class="text-secondary mt-1" id="blocked-reason"></div>
-            </div>
-        </div>
-
         <!-- Statistics & Regime -->
         <div class="card mb-3">
             <div class="card-header py-1"><small><i class="bi bi-calculator me-2"></i>Statistics &amp; Regime</small></div>
@@ -226,75 +268,436 @@
             </div>
         </div>
 
-        <!-- Filters & Edge (the pre-trade economics the live gate uses) -->
+        <!-- Filters -->
         <div class="card mb-3">
-            <div class="card-header py-1"><small><i class="bi bi-funnel me-2"></i>Filters &amp; Edge</small></div>
-            <div class="card-body py-2" style="font-size:0.78rem;">
-                <div class="d-flex justify-content-between mb-1">
-                    <span class="text-secondary">Round-trip cost:</span>
-                    <span class="font-monospace"><span id="ed-cost">—</span> <span class="text-secondary" id="ed-cost-bps"></span></span>
+            <div class="card-header py-1 d-flex justify-content-between align-items-center">
+                <small><i class="bi bi-funnel me-2"></i>Filters</small>
+            </div>
+            <div class="card-body py-2" style="font-size: 0.8rem;">
+                <div class="row g-1 mb-2">
+                    <div class="col-4 text-center">
+                        <span id="std-status" class="badge bg-secondary" style="font-size: 0.65rem;">-</span>
+                        <div style="font-size: 0.6rem;" class="text-secondary">Edge</div>
+                    </div>
+                    <div class="col-4 text-center">
+                        <span id="regime-filter-status" class="badge bg-secondary" style="font-size: 0.65rem;">-</span>
+                        <div style="font-size: 0.6rem;" class="text-secondary">Regime</div>
+                    </div>
+                    <div class="col-4 text-center">
+                        <span id="data-ready-status" class="badge bg-secondary" style="font-size: 0.65rem;">-</span>
+                        <div style="font-size: 0.6rem;" class="text-secondary">Ready</div>
+                    </div>
                 </div>
-                <div class="d-flex justify-content-between mb-1">
-                    <span class="text-secondary">Expected capture @ entry z:</span>
-                    <span class="font-monospace" id="ed-capture">—</span>
-                </div>
-                <div class="d-flex justify-content-between mb-1">
-                    <span class="text-secondary">Edge multiple <span id="ed-min" style="font-size:0.65rem;"></span>:</span>
-                    <span class="font-monospace fw-bold" id="ed-mult">—</span>
-                </div>
-                <div class="d-flex justify-content-between mb-1">
-                    <span class="text-secondary">Win probability (OU):</span>
-                    <span class="font-monospace" id="ed-pwin">—</span>
-                </div>
-                <hr class="my-1">
-                <div class="d-flex justify-content-between mb-1">
-                    <span class="text-secondary">Margin at risk:</span>
-                    <span class="font-monospace" id="ed-margin">—</span>
-                </div>
-                <div class="d-flex justify-content-between mb-1">
-                    <span class="text-secondary">Profit target (BE + %margin):</span>
-                    <span class="font-monospace text-success" id="ed-target">—</span>
-                </div>
-                <div class="d-flex justify-content-between">
-                    <span class="text-secondary">Execution:</span>
-                    <span class="font-monospace" id="ed-mode">—</span>
+                <div class="p-2" style="background: var(--bs-tertiary-bg); border-radius: 4px; font-size: 0.75rem;">
+                    <div class="d-flex justify-content-between"
+                         title="Expected capture of the next trade ÷ its round-trip cost. The edge filter only enters when this is ≥ the required multiple.">
+                        <span class="text-secondary">Capture / Cost:</span>
+                        <span id="std-ratio-value" class="fw-bold">-</span>
+                        <span class="text-secondary">/ req:</span>
+                        <span id="std-ratio-required">-</span>
+                    </div>
+                    <div class="d-flex justify-content-between mt-1">
+                        <span class="text-secondary">Fee:</span>
+                        <span id="fee-type-used">-</span>
+                    </div>
+                    <div class="d-flex justify-content-between mt-1">
+                        <span class="text-secondary">Round-trip:</span>
+                        <span id="round-trip-cost" title="Entry (spot+perp) + exit (spot+perp) fees + slippage × 4 legs">-</span>
+                    </div>
+                    <div id="std-explanation" class="text-secondary mt-1" style="font-size: 0.65rem;">
+                        Spread must cover trading costs
+                    </div>
                 </div>
             </div>
         </div>
 
-        <!-- Z-excursion counters -->
+        <!-- Last Signal Blocked — always visible so the layout stays stable;
+             populated with idle hints when there's nothing to block. -->
+        <div id="blocked-signal-card" class="card mb-3">
+            <div class="card-header py-1">
+                <small><i class="bi bi-slash-circle me-2 text-secondary"></i>Last Signal Blocked</small>
+            </div>
+            <div class="card-body py-2" style="font-size: 0.75rem;">
+                <div class="d-flex justify-content-between mb-1">
+                    <span class="text-secondary">Signal:</span>
+                    <span id="blocked-signal-type" class="fw-bold text-secondary">&mdash;</span>
+                </div>
+                <div class="d-flex justify-content-between mb-1">
+                    <span class="text-secondary">Z-Score:</span>
+                    <span id="blocked-signal-zscore">&mdash;</span>
+                </div>
+                <div class="d-flex justify-content-between mb-1">
+                    <span class="text-secondary">Time:</span>
+                    <span id="blocked-signal-time" style="font-size: 0.65rem;">&mdash;</span>
+                </div>
+                <div class="mt-2 p-2" style="background: rgba(108, 117, 125, 0.1); border-radius: 4px;">
+                    <span class="text-secondary" id="blocked-signal-reason">Waiting for first signal&hellip;</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Active Orders -->
         <div class="card mb-3">
             <div class="card-header py-1 d-flex justify-content-between align-items-center">
-                <small><i class="bi bi-arrows-expand me-2"></i>Z Excursions</small>
-                <button class="btn btn-sm btn-outline-secondary py-0" style="font-size:0.65rem;" onclick="resetExcursions()">Reset</button>
+                <small><i class="bi bi-hourglass-split me-2"></i>Active Orders</small>
+                <span id="execution-mode-badge" class="badge bg-success" style="font-size: 0.65rem;"
+                      title="Entry / Exit execution mode">— / —</span>
             </div>
-            <div class="card-body py-2" style="font-size:0.78rem;">
-                <div class="row text-center">
-                    <div class="col-3"><div class="text-secondary" style="font-size:0.65rem;">±2σ</div><div class="font-monospace" id="ex-2">—</div></div>
-                    <div class="col-3"><div class="text-secondary" style="font-size:0.65rem;">±3σ</div><div class="font-monospace" id="ex-3">—</div></div>
-                    <div class="col-3"><div class="text-secondary" style="font-size:0.65rem;">Reversions</div><div class="font-monospace" id="ex-rev">—</div></div>
-                    <div class="col-3"><div class="text-secondary" style="font-size:0.65rem;">Max |z|</div><div class="font-monospace" id="ex-max">—</div></div>
+            <div class="card-body p-2">
+                <div id="no-active-orders" class="text-center text-secondary py-1">
+                    <small>No active orders</small>
+                </div>
+                <div id="active-orders-content" style="display: none; font-size: 0.75rem;">
+                    <div class="row g-1">
+                        <div class="col-6">
+                            <div class="p-1" style="background: var(--bs-tertiary-bg); border-radius: 4px;">
+                                <div class="d-flex justify-content-between">
+                                    <span class="fw-bold">Leg A</span>
+                                    <span id="spot-leg-status" class="badge bg-secondary" style="font-size: 0.6rem;">-</span>
+                                </div>
+                                <div id="spot-leg-side" class="text-secondary">-</div>
+                                <div id="spot-leg-price">-</div>
+                            </div>
+                        </div>
+                        <div class="col-6">
+                            <div class="p-1" style="background: var(--bs-tertiary-bg); border-radius: 4px;">
+                                <div class="d-flex justify-content-between">
+                                    <span class="fw-bold">Leg B</span>
+                                    <span id="futures-leg-status" class="badge bg-secondary" style="font-size: 0.6rem;">-</span>
+                                </div>
+                                <div id="futures-leg-side" class="text-secondary">-</div>
+                                <div id="futures-leg-price">-</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- AI Insights (observations + manual-apply recs) -->
+        <div class="card mb-3" id="ai-insights-card">
+            <div class="card-header py-1 d-flex justify-content-between align-items-center">
+                <small><i class="bi bi-lightbulb-fill me-1" style="color:#ffc107;"></i>AI Insights</small>
+                <span id="insights-count" class="badge bg-secondary" style="font-size:0.65rem;">0 pending</span>
+            </div>
+            <div class="card-body p-0">
+                <div id="insights-list" style="max-height:150px;overflow-y:auto;font-size:0.72rem;padding:6px 10px;">
+                    <div class="text-secondary text-center py-2" style="font-size:0.7rem;">No insights yet — fires after first closed trade</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Auto-Tune Log (auto-applied changes) -->
+        <div class="card mb-3" id="learning-log-card">
+            <div class="card-header py-1 d-flex justify-content-between align-items-center">
+                <small><i class="bi bi-cpu me-1"></i>Auto-Tune Log</small>
+                <span id="auto-tune-badge" class="badge bg-secondary" style="font-size:0.62rem;">Auto-Tune —</span>
+            </div>
+            <div class="card-body p-0">
+                <div id="learning-log-list" style="max-height:140px;overflow-y:auto;font-size:0.72rem;padding:6px 10px;">
+                    <div class="text-secondary text-center py-2">No changes yet</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Recent Trades -->
+        <div class="card">
+            <div class="card-header py-1 d-flex justify-content-between align-items-center">
+                <small><i class="bi bi-journal-text me-2"></i>Recent Trades</small>
+                <div>
+                    <a href="/api/journal.csv" class="btn btn-sm btn-outline-success py-0 me-1" style="font-size: 0.65rem;" title="Download CSV">
+                        <i class="bi bi-download"></i>
+                    </a>
+                    <button class="btn btn-sm btn-outline-danger py-0 me-1" onclick="clearJournal()" title="Clear" style="font-size: 0.65rem;">
+                        <i class="bi bi-trash"></i>
+                    </button>
+                    <a href="/analysis" class="btn btn-sm btn-outline-secondary py-0" style="font-size: 0.65rem;">All</a>
+                </div>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive" style="max-height: 200px; overflow-y: auto;">
+                    <table class="table table-sm table-striped table-hover mb-0" style="font-size: 0.75rem;">
+                        <thead class="sticky-top" style="background: var(--bs-secondary-bg);">
+                            <tr><th>Time</th><th>Type</th><th>Z</th><th>Leg A</th><th>Leg B</th><th>P&amp;L</th></tr>
+                        </thead>
+                        <tbody id="trades-table">
+                            <tr><td colspan="6" class="text-center text-secondary">No trades</td></tr>
+                        </tbody>
+                    </table>
                 </div>
             </div>
         </div>
     </div>
 
-    <!-- ── Right column: journal ──────────────────────────────────────────── -->
+    <!-- ── Right column: Account & Config ──────────────────────────────────── -->
     <div class="col-lg-3">
+        <!-- Margin -->
+        <div class="card mb-3" id="okx-margin-card">
+            <div class="card-header py-1"><small><i class="bi bi-bank me-2"></i>Margin</small></div>
+            <div class="card-body py-2" style="font-size: 0.8rem;">
+                <div class="row g-1 mb-2">
+                    <div class="col-6">
+                        <div class="text-center p-1" style="background: var(--bs-tertiary-bg); border-radius: 4px;">
+                            <div id="account-equity" class="fw-bold">—</div>
+                            <div style="font-size: 0.65rem;" class="text-secondary">Total equity</div>
+                        </div>
+                    </div>
+                    <div class="col-6">
+                        <div class="text-center p-1" style="background: var(--bs-tertiary-bg); border-radius: 4px;">
+                            <div id="account-available" class="fw-bold">—</div>
+                            <div style="font-size: 0.65rem;" class="text-secondary">Available margin</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="d-flex justify-content-between mb-1">
+                    <span class="text-secondary">Margin used:</span>
+                    <span><span id="margin-used">—</span> <span id="margin-util" class="badge bg-secondary ms-1">—</span></span>
+                </div>
+                <hr class="my-2">
+                <div class="text-secondary mb-1" style="font-size:0.72rem;">
+                    PAIR MARGIN · <span id="pm-qty">—</span> BTC per clip
+                </div>
+                <div class="d-flex justify-content-between mb-1">
+                    <span class="text-secondary">Required (both legs):</span>
+                    <span id="pm-basket" class="fw-bold">—</span>
+                </div>
+                <div class="d-flex justify-content-between mb-1" style="font-size:0.72rem;">
+                    <span class="text-secondary">Notional per trade:</span>
+                    <span id="pm-notional">—</span>
+                </div>
+                <div class="d-flex justify-content-between" style="font-size:0.72rem;">
+                    <span class="text-secondary">Trades the available margin covers:</span>
+                    <span id="pm-headroom">—</span>
+                </div>
+                <div id="pm-error" class="text-warning mt-1" style="font-size:0.65rem; display:none;"></div>
+            </div>
+        </div>
+
+        <!-- Config -->
+        <div class="card mb-3">
+            <div class="card-header py-1"><small><i class="bi bi-gear me-2"></i>Config</small></div>
+            <div class="card-body py-2" style="font-size: 0.8rem;">
+                <div class="d-flex justify-content-between mb-1">
+                    <span class="text-secondary">Mode:</span>
+                    <span class="badge mode-ctl mode-ctl-unknown" data-mode-badge style="font-size: 0.7rem;">MODE ?</span>
+                </div>
+                <div class="d-flex justify-content-between mb-1">
+                    <span class="text-secondary">Pair:</span>
+                    <span class="badge bg-primary" style="font-size: 0.7rem;">{{ config.asset }}</span>
+                </div>
+                <div class="d-flex justify-content-between mb-1"
+                     title="Per-leg notional. Both legs together are ~2× this.">
+                    <span class="text-secondary">Size:</span>
+                    <span>${{ config.position_size_usd }}</span>
+                </div>
+                <div class="d-flex justify-content-between mb-1">
+                    <span class="text-secondary">Entry:</span>
+                    <span>&plusmn;<span id="cfg-entry">—</span></span>
+                </div>
+                <div class="d-flex justify-content-between mb-1">
+                    <span class="text-secondary">Exit:</span>
+                    <span>&plusmn;<span id="cfg-exit">—</span></span>
+                </div>
+                <div class="d-flex justify-content-between">
+                    <span class="text-secondary">Stop:</span>
+                    <span>&plusmn;<span id="cfg-stop">—</span></span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Traded Volume — $ turnover + clips per UTC day / week / month -->
+        <div class="card mb-3" id="volume-card">
+            <div class="card-body py-2">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <small class="text-secondary"><i class="bi bi-bar-chart-line me-1"></i>Traded Volume</small>
+                    <span class="badge bg-secondary" id="volume-clips-today"
+                          title="Spread fills today (entries + exits)">— fills</span>
+                </div>
+                <div class="row text-center g-1">
+                    <div class="col-4">
+                        <div class="fw-bold" id="vol-day" title="$ turnover since UTC midnight">$0</div>
+                        <div class="text-secondary" style="font-size:0.62rem;">Today</div>
+                    </div>
+                    <div class="col-4">
+                        <div class="fw-bold" id="vol-week" title="$ turnover since Monday (UTC)">$0</div>
+                        <div class="text-secondary" style="font-size:0.62rem;">This week</div>
+                    </div>
+                    <div class="col-4">
+                        <div class="fw-bold" id="vol-month" title="$ turnover since the 1st (UTC)">$0</div>
+                        <div class="text-secondary" style="font-size:0.62rem;">This month</div>
+                    </div>
+                </div>
+                <div id="vol-spark" class="d-flex align-items-end justify-content-between mt-2"
+                     style="height:26px; gap:2px;" title="Turnover per day, last 14 days (UTC)"></div>
+                <div class="text-secondary text-end mt-1" style="font-size:0.58rem;">
+                    <span id="vol-month-clips">—</span> fills this month · <span id="vol-asof">—</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Manual Spread Trade -->
         <div class="card mb-3">
             <div class="card-header py-1 d-flex justify-content-between align-items-center">
-                <small><i class="bi bi-journal-text me-2"></i>Trade Journal</small>
-                <span class="text-secondary" style="font-size:0.65rem;">spread fills</span>
+                <small><i class="bi bi-bullseye me-2"></i>Manual Spread Trade</small>
+                <span class="badge bg-secondary" id="manual-trade-status-badge" style="font-size:0.6rem;">IDLE</span>
             </div>
-            <div class="card-body p-0" style="max-height: 70vh; overflow-y: auto;">
-                <table class="table table-sm mb-0" style="font-size:0.72rem;">
-                    <thead><tr>
-                        <th>Time</th><th>Event</th><th>Dir</th><th>Src</th><th class="text-end">Net $</th>
-                    </tr></thead>
-                    <tbody id="journal-body">
-                        <tr><td colspan="5" class="text-center text-secondary py-3">No trades yet</td></tr>
-                    </tbody>
-                </table>
+            <div class="card-body py-2" style="font-size: 0.8rem;">
+                <div class="d-flex justify-content-between mb-2">
+                    <span class="text-secondary">Current Spread:</span>
+                    <span class="fw-bold" id="manual-current-spread">&mdash;</span>
+                </div>
+                <div class="row g-1 mb-2">
+                    <div class="col-7">
+                        <label class="form-label mb-0" style="font-size:0.65rem;">Direction</label>
+                        <select class="form-select form-select-sm py-0" id="manual-trade-direction" style="font-size:0.72rem;" onchange="updateManualHints()">
+                            <option value="SHORT_SPREAD">Short Spread</option>
+                            <option value="LONG_SPREAD">Long Spread</option>
+                        </select>
+                    </div>
+                    <div class="col-5">
+                        <label class="form-label mb-0" style="font-size:0.65rem;">Qty (BTC)</label>
+                        <input type="number" class="form-control form-control-sm py-0" id="manual-qty" step="0.0001" min="0" placeholder="auto" style="font-size:0.75rem;">
+                    </div>
+                </div>
+                <!-- Entry / Take Profit / Stop Loss, all SPREAD levels. -->
+                <div class="row g-1 mb-1">
+                    <div class="col-4">
+                        <label class="form-label mb-0" style="font-size:0.65rem;">Entry <span class="text-secondary">(blank=now)</span></label>
+                        <input type="number" class="form-control form-control-sm py-0" id="manual-entry-spread" step="0.01"
+                               oninput="updateManualHints()" style="font-size:0.75rem;">
+                    </div>
+                    <div class="col-4">
+                        <label class="form-label mb-0 text-success" style="font-size:0.65rem;">Take Profit</label>
+                        <input type="number" class="form-control form-control-sm py-0" id="manual-exit-spread" step="0.01"
+                               oninput="updateManualHints()" style="font-size:0.75rem;">
+                    </div>
+                    <div class="col-4">
+                        <label class="form-label mb-0 text-danger" style="font-size:0.65rem;">Stop Loss</label>
+                        <input type="number" class="form-control form-control-sm py-0" id="manual-stop-spread" step="0.01"
+                               oninput="updateManualHints()" style="font-size:0.75rem;">
+                    </div>
+                </div>
+                <div class="mb-2" id="manual-level-hint" style="font-size:0.62rem;"></div>
+                <div class="d-grid gap-1">
+                    <button class="btn btn-primary btn-sm py-1" id="manual-trade-activate" onclick="activateManualTrade()" style="font-size:0.75rem;">
+                        <i class="bi bi-play-fill me-1"></i>Activate Trade
+                    </button>
+                    <button class="btn btn-danger btn-sm py-1 d-none" id="manual-trade-cancel" onclick="cancelManualTrade()" style="font-size:0.75rem;">
+                        <i class="bi bi-stop-fill me-1"></i>Cancel Armed
+                    </button>
+                </div>
+                <div class="text-secondary mt-2" id="manual-trade-info" style="font-size:0.65rem;"></div>
+                <div class="text-secondary mt-2" style="font-size:0.62rem;">
+                    <i class="bi bi-exclamation-triangle text-warning me-1"></i>
+                    <strong>Manual and algo never trade together:</strong>
+                    manual orders are refused while the algo is ON, and the
+                    algo cannot start while a manual position is open.
+                </div>
+            </div>
+        </div>
+
+        <!-- Reset Controls -->
+        <div class="card">
+            <div class="card-header py-1"><small><i class="bi bi-arrow-counterclockwise me-2"></i>Reset</small></div>
+            <div class="card-body py-2">
+                <div class="d-grid gap-1">
+                    <button class="btn btn-outline-secondary btn-sm py-1" onclick="resetJournal()" style="font-size: 0.75rem;" title="Clear the trade journal, keep the spread window">
+                        <i class="bi bi-journal-x me-1"></i>Reset Trades
+                    </button>
+                    <button class="btn btn-outline-warning btn-sm py-1" onclick="resetSignalWindow()" style="font-size: 0.75rem;" title="Discard the rolling spread window (fresh warm-up)">
+                        <i class="bi bi-graph-down me-1"></i>Reset Spread Window
+                    </button>
+                    <button class="btn btn-outline-danger btn-sm py-1" onclick="resetExcursionsBtn()" style="font-size: 0.75rem;">
+                        <i class="bi bi-activity me-1"></i>Reset Excursions
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Fills & Slippage (full width): every executed order, fired → filled. -->
+<div class="row mt-3">
+    <div class="col-12">
+        <div class="card" id="fills-card">
+            <div class="card-header py-1 d-flex justify-content-between align-items-center">
+                <small><i class="bi bi-stopwatch me-2"></i>Fills &amp; Slippage</small>
+                <button class="btn btn-sm btn-outline-secondary py-0" onclick="refreshFills()" style="font-size: 0.65rem;">
+                    <i class="bi bi-arrow-clockwise"></i> Refresh
+                </button>
+            </div>
+            <div class="card-body py-2" style="font-size: 0.75rem;">
+                <div class="d-flex flex-wrap gap-4 mb-2" id="fills-summary">
+                    <div title="Average of (fill − touch at firing) × qty per leg. Positive = worse than the touch.">
+                        <div class="text-secondary" style="font-size:0.65rem;">AVG SLIPPAGE / LEG</div>
+                        <div class="fw-bold font-monospace" style="font-size:1rem;" id="fills-avg-usd">—</div>
+                    </div>
+                    <div title="What the edge filter currently assumes (Settings → Slippage bps/leg).">
+                        <div class="text-secondary" style="font-size:0.65rem;">SETTING (BPS / LEG)</div>
+                        <div class="fw-bold font-monospace" style="font-size:1rem;" id="fills-setting">—</div>
+                    </div>
+                    <div title="Order sent → its fill seen, averaged over legs.">
+                        <div class="text-secondary" style="font-size:0.65rem;">AVG TIME TO FILL</div>
+                        <div class="fw-bold font-monospace" style="font-size:1rem;" id="fills-avg-ms">—</div>
+                    </div>
+                    <div title="First leg filled → second leg filled: the time the spread is one-sided.">
+                        <div class="text-secondary" style="font-size:0.65rem;">AVG / MAX LEG GAP</div>
+                        <div class="fw-bold font-monospace" style="font-size:1rem;" id="fills-gap">—</div>
+                    </div>
+                    <div>
+                        <div class="text-secondary" style="font-size:0.65rem;">ORDERS MEASURED</div>
+                        <div class="fw-bold font-monospace" style="font-size:1rem;" id="fills-count">—</div>
+                    </div>
+                </div>
+                <div class="table-responsive" style="max-height: 260px; overflow-y: auto;">
+                    <table class="table table-sm table-striped mb-0" style="font-size: 0.72rem;">
+                        <thead class="sticky-top" style="background: var(--bs-secondary-bg);">
+                            <tr>
+                                <th>Date</th><th>Source</th><th>Trade</th><th>Symbol</th><th>Side</th><th>Qty</th>
+                                <th title="When the order was sent">Fired</th>
+                                <th title="When the fill was first seen">Filled</th>
+                                <th class="text-end" title="Fired → filled">Took</th>
+                                <th class="text-end" title="Touch at firing">Touch</th>
+                                <th class="text-end">Fill</th>
+                                <th class="text-end" title="Fill − touch, positive = worse">Slip (pts)</th>
+                                <th class="text-end" title="Slip × qty">Slip ($)</th>
+                                <th>How</th>
+                            </tr>
+                        </thead>
+                        <tbody id="fills-table">
+                            <tr><td colspan="14" class="text-center text-secondary py-3">No executed orders yet</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Exchange Order Log (full width) -->
+<div class="row mt-3 mb-3">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header py-1 d-flex justify-content-between align-items-center">
+                <small><i class="bi bi-receipt me-2"></i>Exchange Order Log <span class="badge bg-secondary ms-1">OKX</span></small>
+                <button class="btn btn-sm btn-outline-secondary py-0" onclick="refreshExchangeOrders()" style="font-size: 0.65rem;">
+                    <i class="bi bi-arrow-clockwise"></i> Refresh
+                </button>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive" style="max-height: 280px; overflow-y: auto;">
+                    <table class="table table-sm table-striped table-hover mb-0" style="font-size: 0.72rem;">
+                        <thead class="sticky-top" style="background: var(--bs-secondary-bg);">
+                            <tr>
+                                <th>Time</th><th>Symbol</th><th>Type</th><th>Side</th><th>Pos</th><th>Ord</th>
+                                <th>Qty</th><th>Filled</th><th>Avg Price</th><th>Fee</th><th>Status</th><th>Order ID</th>
+                            </tr>
+                        </thead>
+                        <tbody id="exchange-orders-table">
+                            <tr><td colspan="12" class="text-center text-secondary py-3">No orders</td></tr>
+                        </tbody>
+                    </table>
+                </div>
             </div>
         </div>
     </div>
@@ -304,24 +707,32 @@
 {% block scripts %}
 <script src="/static/candles_chart.js"></script>
 <script>
-// ─── polling: /api/signal (1s) + /api/signal/series (3s) + /api/journal (10s)
-let ENTRY_Z = 2.5, STOP_Z = 4.0;
+// ─── polling: /api/signal (1s) + charts (3s) + slow cards (5–30s) ───────────
+let ENTRY_Z = 2.5, STOP_Z = 4.0, EXIT_Z = 0.0;
 
 function fmt(x, d = 2) {
     return (x === null || x === undefined || Number.isNaN(x)) ? '—' : Number(x).toFixed(d);
 }
-
 function fmtUsd(x, d = 2) {
-    return (x === null || x === undefined) ? '—' : '$' + Number(x).toFixed(d);
+    if (x === null || x === undefined) return '—';
+    const n = Number(x);
+    return (n < 0 ? '−$' : '$') + Math.abs(n).toFixed(d);
 }
+function fmtUsd0(x) { return fmtUsd(x, 0); }
+function clock(t) { return t ? new Date(t * 1000).toLocaleTimeString() : '—'; }
 
 async function pollSignal() {
     let data;
     try {
         data = await fetch('/api/signal', {cache: 'no-store'}).then(r => r.json());
     } catch (e) { return; }
-    ENTRY_Z = data.entry_zscore || ENTRY_Z;
-    STOP_Z = data.stop_zscore || STOP_Z;
+    ENTRY_Z = data.entry_zscore ?? ENTRY_Z;
+    STOP_Z = data.stop_zscore ?? STOP_Z;
+    EXIT_Z = data.exit_zscore ?? EXIT_Z;
+
+    // Latency strip
+    document.getElementById('tick-age-ms').textContent =
+        data.feed_age_ms != null ? data.feed_age_ms + 'ms' : '—';
 
     // Legs
     document.getElementById('leg-a-last').textContent = fmt(data.leg_a);
@@ -331,13 +742,37 @@ async function pollSignal() {
     document.getElementById('leg-b-bid').textContent = fmt(data.bid_b);
     document.getElementById('leg-b-ask').textContent = fmt(data.ask_b);
 
+    // Position sizing + live β
+    const ed = data.edge || {};
+    if (ed.qty && data.leg_a && data.leg_b) {
+        const notA = ed.qty * data.leg_a, notB = ed.qty * data.leg_b;
+        document.getElementById('leg-a-notional').textContent = fmtUsd0(notA);
+        document.getElementById('leg-b-notional').textContent = fmtUsd0(notB);
+        document.getElementById('leg-a-margin').textContent = fmtUsd0(notA / {{ config.spot_leverage or 1 }});
+        document.getElementById('leg-b-margin').textContent = fmtUsd0(notB / {{ config.futures_leverage or 1 }});
+        document.getElementById('sizing-qty').textContent =
+            Number(ed.qty).toFixed(6) + ' / ' + Number(ed.qty).toFixed(6);
+        const bal = Math.abs(notA - notB) / ((notA + notB) / 2) * 100;
+        document.getElementById('sizing-balance').textContent =
+            fmtUsd(Math.abs(notA - notB)) + ' (' + bal.toFixed(2) + '%)';
+    }
+    if (data.leg_a && data.leg_b) {
+        const beta = data.leg_b / data.leg_a;
+        document.getElementById('live-beta-value').textContent = beta.toFixed(5);
+        document.getElementById('live-beta-configured').textContent = '1.00000';
+        const drift = Math.abs(beta - 1) * 100;
+        const el = document.getElementById('live-beta-drift');
+        el.textContent = drift.toFixed(2) + '%';
+        el.className = 'badge ' + (drift <= 0.5 ? 'bg-success' : drift <= 2 ? 'bg-warning text-dark' : 'bg-danger');
+    }
+
     // Sell / Buy spread tiles — each on its own executable z.
     renderSide('sell', data.sell_spread, data.z_sell,
                data.z_sell != null && data.z_sell >= ENTRY_Z, '+');
     renderSide('buy', data.buy_spread, data.z_buy,
                data.z_buy != null && data.z_buy <= -ENTRY_Z, '−');
 
-    // Statistics
+    // Statistics & Regime
     document.getElementById('st-mean').textContent = fmt(data.mean);
     document.getElementById('st-std').textContent = fmt(data.std, 3);
     document.getElementById('st-z').textContent = fmt(data.zscore);
@@ -360,37 +795,51 @@ async function pollSignal() {
     document.getElementById('st-regime-detail').textContent =
         rd.efficiency_ratio != null ? ('ER ' + rd.efficiency_ratio + ' · ZC ' + rd.zero_crossings + ' · VR ' + rd.variance_ratio) : '';
 
-    // Edge panel
-    const ed = data.edge || {};
-    document.getElementById('ed-cost').textContent = fmtUsd(ed.round_trip_cost_usd);
-    document.getElementById('ed-cost-bps').textContent = ed.round_trip_cost_bps != null ? '(' + ed.round_trip_cost_bps + ' bps)' : '';
-    document.getElementById('ed-capture').textContent = fmtUsd(ed.expected_capture_usd);
-    document.getElementById('ed-min').textContent = ed.min_edge_multiple ? '(need ≥ ' + ed.min_edge_multiple + '×)' : '';
-    const multEl = document.getElementById('ed-mult');
-    multEl.textContent = ed.edge_multiple != null ? ed.edge_multiple + '×' : '—';
-    multEl.className = 'font-monospace fw-bold ' + (ed.edge_ok ? 'text-success' : 'text-danger');
-    const pf = (data.algo || {}).pf_metrics || {};
-    document.getElementById('ed-pwin').textContent =
-        pf.win_probability != null ? (pf.win_probability * 100).toFixed(0) + '%' : '—';
-    document.getElementById('ed-margin').textContent = fmtUsd(ed.margin_usd, 0);
-    document.getElementById('ed-target').textContent =
-        ed.profit_target_usd != null ? 'BE + ' + fmtUsd(ed.profit_target_usd) : '—';
-    document.getElementById('ed-mode').textContent =
-        (ed.entry_mode || '—') + ' in / ' + (ed.exit_mode || '—') + ' out';
+    // Filters card
+    setBadge('std-status', ed.edge_ok === true ? 'OK' : ed.edge_ok === false ? 'BLOCKED' : '-',
+             ed.edge_ok === true ? 'bg-success' : ed.edge_ok === false ? 'bg-danger' : 'bg-secondary');
+    setBadge('regime-filter-status', regime === '—' ? '-' : regime,
+             regime === 'TRENDING' ? 'bg-danger' : regime === 'RANGE' ? 'bg-success' : 'bg-secondary');
+    setBadge('data-ready-status', data.ready ? 'READY' : 'WARM-UP',
+             data.ready ? 'bg-success' : 'bg-warning text-dark');
+    document.getElementById('std-ratio-value').textContent =
+        ed.edge_multiple != null ? ed.edge_multiple.toFixed(2) + 'x' : '-';
+    document.getElementById('std-ratio-required').textContent =
+        ed.min_edge_multiple != null ? ed.min_edge_multiple + 'x' : '-';
+    document.getElementById('fee-type-used').textContent =
+        (ed.entry_mode === 'LIMIT' ? 'Maker' : 'Taker') + ' in / ' +
+        (ed.exit_mode === 'LIMIT' ? 'Maker' : 'Taker') + ' out';
+    document.getElementById('round-trip-cost').textContent =
+        ed.round_trip_cost_usd != null
+            ? fmtUsd(ed.round_trip_cost_usd) + ' (' + (ed.round_trip_cost_bps ?? '—') + ' bps)' : '-';
+    const expl = document.getElementById('std-explanation');
+    if (ed.edge_multiple != null && ed.min_edge_multiple != null) {
+        const cov = (ed.edge_multiple * 100 / ed.min_edge_multiple).toFixed(0);
+        expl.innerHTML = ed.edge_ok
+            ? '<span class="text-success">&#10003; capture covers cost (' + cov + '% of required)</span>'
+            : '<span class="text-danger">&#10007; capture below required (' + cov + '%)</span>';
+    } else { expl.textContent = 'Spread must cover trading costs'; }
 
-    // Algo status + cooldown + exit health
+    // Execution-mode badge on Active Orders
+    document.getElementById('execution-mode-badge').textContent =
+        (ed.entry_mode || '—') + ' / ' + (ed.exit_mode || '—');
+
+    // Config card thresholds
+    document.getElementById('cfg-entry').textContent = fmt(ENTRY_Z, 1);
+    document.getElementById('cfg-exit').textContent = fmt(EXIT_Z, 1);
+    document.getElementById('cfg-stop').textContent = fmt(STOP_Z, 1);
+
     const al = data.algo || {};
-    document.getElementById('algo-status-line').textContent = al.status || '—';
-    const cd = document.getElementById('algo-cooldown');
-    if (al.cooldown_s > 0) { cd.textContent = 'cooldown ' + al.cooldown_s.toFixed(0) + 's'; cd.style.display = ''; }
-    else cd.style.display = 'none';
-    const eh = document.getElementById('algo-exit-health');
-    if (al.exit_halted) { eh.textContent = '⚠ EXIT HALTED after ' + al.exit_failures + ' failures — close manually'; eh.style.display = ''; }
-    else if (al.exit_failures > 0) { eh.textContent = 'exit failures: ' + al.exit_failures + (al.exit_retry_s > 0 ? ' · retry in ' + al.exit_retry_s.toFixed(0) + 's' : ''); eh.style.display = ''; }
-    else eh.style.display = 'none';
-
-    renderBlocked(al.last_blocked_signal);
+    renderBlocked(al.last_blocked_signal, al, data);
     renderPosition(data, al);
+    renderManual(data);
+}
+
+function setBadge(id, text, cls) {
+    const el = document.getElementById(id);
+    el.textContent = text;
+    el.className = 'badge ' + cls;
+    el.style.fontSize = '0.65rem';
 }
 
 function renderSide(side, spread, z, firing, sign) {
@@ -402,37 +851,41 @@ function renderSide(side, spread, z, firing, sign) {
     document.getElementById(side + '-spread-tile').style.borderColor = firing ? '#ffc107' : 'transparent';
 }
 
+// Always-visible blocked card: idle hints when there is nothing to block.
 let _lastBlockedKey = null;
-function renderBlocked(b) {
-    const card = document.getElementById('blocked-card');
-    if (!b) { card.style.display = 'none'; _lastBlockedKey = null; return; }
+function renderBlocked(b, al, data) {
+    const typeEl = document.getElementById('blocked-signal-type');
+    const zEl = document.getElementById('blocked-signal-zscore');
+    const tEl = document.getElementById('blocked-signal-time');
+    const rEl = document.getElementById('blocked-signal-reason');
+    if (!b) {
+        typeEl.textContent = '—'; typeEl.className = 'fw-bold text-secondary';
+        zEl.textContent = '—'; tEl.textContent = '—';
+        rEl.textContent = al.running
+            ? (al.status || 'watching…')
+            : (data.ready ? 'Algo is OFF — no signals are acted on.' : 'Collecting data…');
+        _lastBlockedKey = null;
+        return;
+    }
     const key = b.timestamp + '|' + b.reason;
     if (key === _lastBlockedKey) return;
     _lastBlockedKey = key;
-    card.style.display = '';
-    const sideEl = document.getElementById('blocked-side');
-    sideEl.textContent = b.would_be_signal || '—';
-    sideEl.className = 'badge ' + (b.would_be_signal === 'LONG' ? 'bg-success' : 'bg-danger');
-    document.getElementById('blocked-z').textContent = b.zscore != null ? 'z ' + fmt(b.zscore) : '';
-    document.getElementById('blocked-time').textContent = b.timestamp ? new Date(b.timestamp).toLocaleTimeString() : '';
-    document.getElementById('blocked-reason').textContent = b.reason || '';
+    typeEl.textContent = b.would_be_signal || '—';
+    typeEl.className = 'fw-bold ' + (b.would_be_signal === 'LONG' ? 'text-success' : 'text-danger');
+    zEl.textContent = b.zscore != null ? fmt(b.zscore) : '—';
+    tEl.textContent = b.timestamp ? new Date(b.timestamp).toLocaleTimeString() : '—';
+    rEl.textContent = b.reason || '—';
 }
 
+let _lastOpenEntry = null;
 function renderPosition(data, al) {
     const op = data.open_position;
     const badge = document.getElementById('position-badge');
     const owner = document.getElementById('position-owner');
     const pnl = document.getElementById('position-pnl');
     const details = document.getElementById('position-details');
-    const closeBtn = document.getElementById('close-btn');
-    const manualRow = document.getElementById('manual-trade-row');
+    const closeGrp = document.getElementById('close-btn-group');
     const algoOn = al.running;
-
-    // Manual buttons: locked while the algo is ON; hidden while in position.
-    document.getElementById('manual-sell-btn').style.display = (algoOn || op) ? 'none' : '';
-    document.getElementById('manual-buy-btn').style.display = (algoOn || op) ? 'none' : '';
-    document.getElementById('manual-lock-note').style.display = algoOn ? '' : 'none';
-    manualRow.style.display = (op && !algoOn) ? 'none' : '';
 
     _lastOpenEntry = op ? al.entry_spread : null;   // entry line on the candle chart
     if (!op) {
@@ -441,16 +894,15 @@ function renderPosition(data, al) {
         owner.textContent = '';
         pnl.textContent = '';
         details.style.display = 'none';
-        closeBtn.style.display = 'none';
+        closeGrp.style.display = 'none';
         return;
     }
     const dir = (op.direction || '').replace('_SPREAD', '');
     badge.textContent = dir;
     badge.className = 'badge ' + (dir === 'LONG' ? 'bg-success' : 'bg-danger');
     owner.textContent = op.owner;
-    closeBtn.style.display = algoOn ? 'none' : '';
+    closeGrp.style.display = algoOn ? 'none' : '';
 
-    // Live numbers come from the algo snapshot (it marks the P&L every tick).
     const net = al.net_pnl;
     pnl.textContent = net != null ? fmtUsd(net) : '';
     pnl.className = 'font-monospace fw-bold mt-1 ' + ((net || 0) >= 0 ? 'text-success' : 'text-danger');
@@ -458,42 +910,78 @@ function renderPosition(data, al) {
     details.style.display = '';
     document.getElementById('pd-entry').textContent = fmt(al.entry_spread);
     document.getElementById('pd-delta').textContent = fmt(al.delta_spread);
-    document.getElementById('pd-held').textContent = al.held_sec != null ? (al.held_sec < 120 ? al.held_sec.toFixed(0) + 's' : (al.held_sec / 60).toFixed(1) + 'm') : '—';
+    document.getElementById('pd-held').textContent = al.held_sec != null
+        ? (al.held_sec < 120 ? al.held_sec.toFixed(0) + 's' : (al.held_sec / 60).toFixed(1) + 'm') : '—';
     const lv = al.spread_levels || {};
     document.getElementById('pd-be').textContent = fmt(lv.break_even);
     document.getElementById('pd-tp').textContent = fmt(lv.take_profit);
     document.getElementById('pd-sl').textContent = fmt(lv.stop);
     document.getElementById('pd-peak').textContent = al.peak_pnl != null ? fmtUsd(al.peak_pnl) : '—';
     const apos = al.position || {};
-    document.getElementById('pd-qty').textContent = apos.qty != null ? Number(apos.qty).toFixed(6) : Number(op.qty || 0).toFixed(6);
-    document.getElementById('pd-notional').textContent = al.notional != null ? fmtUsd(al.notional, 0) : '—';
+    document.getElementById('pd-qty').textContent = apos.qty != null
+        ? Number(apos.qty).toFixed(6) : Number(op.qty || 0).toFixed(6);
+    document.getElementById('pd-notional').textContent = al.notional != null ? fmtUsd0(al.notional) : '—';
 }
 
-// ─── manual trading ──────────────────────────────────────────────────────────
-async function manualTrade(direction) {
-    const label = direction === 'LONG_SPREAD' ? 'BUY the spread (buy Spot / sell Perp)'
-                                              : 'SELL the spread (sell Spot / buy Perp)';
-    if (!confirm('MANUAL ORDER\n\n' + label + '\n\nProceed?')) return;
-    try {
-        const r = await fetch('/api/execute', {
-            method: 'POST', headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({direction})
-        }).then(x => x.json());
-        showToast(r.success ? 'Order filled: ' + (r.message || 'ok')
-                            : 'Refused: ' + (r.error || 'unknown'), r.success ? 'success' : 'danger');
-    } catch (e) { showToast('Order failed: ' + e, 'danger'); }
+// ─── Manual Spread Trade (armed entry + TP/SL watched server-side) ──────────
+function renderManual(data) {
+    const mt = data.manual_trade || {};
+    const badge = document.getElementById('manual-trade-status-badge');
+    const armed = !!mt.armed, managing = !!mt.managing;
+    badge.textContent = armed ? 'ARMED' : managing ? 'MANAGING' : 'IDLE';
+    badge.className = 'badge ' + (armed ? 'bg-warning text-dark' : managing ? 'bg-info text-dark' : 'bg-secondary');
+    document.getElementById('manual-trade-info').textContent = mt.status || '';
+    document.getElementById('manual-trade-activate').classList.toggle('d-none', armed || managing);
+    document.getElementById('manual-trade-cancel').classList.toggle('d-none', !(armed || managing));
+    const dirSel = document.getElementById('manual-trade-direction').value;
+    const px = dirSel === 'LONG_SPREAD' ? data.buy_spread : data.sell_spread;
+    document.getElementById('manual-current-spread').textContent = fmt(px);
+}
+
+function updateManualHints() {
+    const dir = document.getElementById('manual-trade-direction').value;
+    const long_ = dir === 'LONG_SPREAD';
+    const hint = document.getElementById('manual-level-hint');
+    hint.innerHTML = long_
+        ? 'LONG: entry fires when the <b>Buy spread</b> comes DOWN to Entry · TP above entry · SL below entry'
+        : 'SHORT: entry fires when the <b>Sell spread</b> comes UP to Entry · TP below entry · SL above entry';
+}
+
+async function activateManualTrade() {
+    const body = {
+        direction: document.getElementById('manual-trade-direction').value,
+        qty: document.getElementById('manual-qty').value || null,
+        entry: document.getElementById('manual-entry-spread').value || null,
+        tp: document.getElementById('manual-exit-spread').value || null,
+        sl: document.getElementById('manual-stop-spread').value || null,
+    };
+    const label = (body.direction === 'LONG_SPREAD' ? 'LONG' : 'SHORT') +
+        (body.entry ? ' armed at ' + body.entry : ' NOW') +
+        (body.tp ? ' · TP ' + body.tp : '') + (body.sl ? ' · SL ' + body.sl : '');
+    if (!confirm('MANUAL SPREAD TRADE\n\n' + label + '\n\nTagged MANUAL — the algo cannot start while it is open. Proceed?')) return;
+    const r = await fetch('/api/manual-trade/arm', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body)}).then(x => x.json());
+    showToast(r.success ? 'Manual trade ' + (body.entry ? 'armed' : 'executing') : 'Refused: ' + (r.error || ''),
+              r.success ? 'success' : 'danger');
     pollSignal();
 }
 
-async function closePosition() {
-    if (!confirm('Close the open position NOW?')) return;
+async function cancelManualTrade() {
+    await fetch('/api/manual-trade/cancel', {method: 'POST'});
+    showToast('Manual trade cancelled (an already-open position stays open — use Market/Limit close)', 'secondary');
+    pollSignal();
+}
+
+async function closePosition(mode) {
+    if (!confirm('Close the open position now (' + mode + ')?')) return;
     try {
         const r = await fetch('/api/close', {method: 'POST', headers: {'Content-Type': 'application/json'},
-                                             body: JSON.stringify({})}).then(x => x.json());
+                                             body: JSON.stringify({mode})}).then(x => x.json());
         showToast(r.success ? 'Closed. Net: ' + (r.net_pnl != null ? '$' + r.net_pnl.toFixed(2) : 'n/a')
                             : 'Refused: ' + (r.error || 'unknown'), r.success ? 'success' : 'danger');
     } catch (e) { showToast('Close failed: ' + e, 'danger'); }
-    pollSignal(); pollJournal();
+    pollSignal(); pollTrades();
 }
 
 // ─── charts ──────────────────────────────────────────────────────────────────
@@ -539,7 +1027,6 @@ const candleChart = window.SpreadCandlesChart
     ? new Chart(document.getElementById('candleBandChart'),
                 SpreadCandlesChart.config({fontSize: 9, xTicks: 6}))
     : null;
-let _lastOpenEntry = null;
 
 async function pollCandles() {
     if (!candleChart) return;
@@ -552,10 +1039,10 @@ async function pollCandles() {
     } catch (e) { return; }
     const pts = d.points || [];
     const e = Number(d.entry_zscore || 2.5);
-    const fmt = t => new Date(t * 1000).toLocaleString([], {day: '2-digit', month: 'short',
+    const fmtT = t => new Date(t * 1000).toLocaleString([], {day: '2-digit', month: 'short',
         hour: '2-digit', minute: '2-digit', hour12: false});
     SpreadCandlesChart.set(candleChart, pts, e,
-        (_lastOpenEntry != null && isFinite(_lastOpenEntry)) ? _lastOpenEntry : null, fmt);
+        (_lastOpenEntry != null && isFinite(_lastOpenEntry)) ? _lastOpenEntry : null, fmtT);
     const src = document.getElementById('cb-src');
     const onCandles = d.band_source === 'candles';
     src.textContent = onCandles ? 'ALGO USES CANDLES · ' + d.algo_timeframe : 'ALGO USES TICKS';
@@ -563,57 +1050,224 @@ async function pollCandles() {
     const b = d.bands || {}, st = (d.status || {})[d.timeframe] || {}, lp = pts[pts.length - 1];
     document.getElementById('cb-note').textContent =
         d.label + ' · BB(' + d.length + ', EMA) ±' + e + 'σ · ' +
-        (b.ready ? 'EMA ' + fmt2(b.mean) + ' · σ ' + fmt2(b.std)
+        (b.ready ? 'EMA ' + fmt(b.mean) + ' · σ ' + fmt(b.std)
                  : 'need ' + d.length + ' candles (' + (b.count || 0) + ')') +
-        (lp ? ' · now ' + fmt2(lp.close) + ' @ ' + fmt(lp.t) : '') +
+        (lp ? ' · now ' + fmt(lp.close) + ' @ ' + fmtT(lp.t) : '') +
         ' · history ' + (st.state || 'pending');
 }
-function fmt2(v) { return v == null ? '—' : Number(v).toFixed(2); }
 document.getElementById('cb-tf').onchange = pollCandles;
 document.getElementById('cb-last').onchange = pollCandles;
 
-// ─── excursions + journal ────────────────────────────────────────────────────
-async function pollExcursions() {
+// ─── Active orders ───────────────────────────────────────────────────────────
+async function pollActiveOrders() {
+    let d;
+    try { d = await fetch('/api/active-order', {cache: 'no-store'}).then(r => r.json()); }
+    catch (e) { return; }
+    const none = document.getElementById('no-active-orders');
+    const content = document.getElementById('active-orders-content');
+    if (!d.active) { none.style.display = ''; content.style.display = 'none'; return; }
+    none.style.display = 'none'; content.style.display = '';
+    const fill = (prefix, leg) => {
+        if (!leg) return;
+        const st = document.getElementById(prefix + '-leg-status');
+        st.textContent = leg.status || '-';
+        st.className = 'badge ' + (leg.status === 'FILLED' ? 'bg-success'
+            : leg.status === 'OPEN' ? 'bg-warning text-dark' : 'bg-secondary');
+        document.getElementById(prefix + '-leg-side').textContent =
+            (leg.side || '-') + ' ' + (leg.qty != null ? Number(leg.qty).toFixed(6) : '');
+        document.getElementById(prefix + '-leg-price').textContent =
+            'tgt ' + fmt(leg.target_price) + (leg.filled_price ? ' · fill ' + fmt(leg.filled_price) : '');
+    };
+    fill('spot', d.spot_leg); fill('futures', d.futures_leg);
+}
+
+// ─── AI insights + auto-tune log ─────────────────────────────────────────────
+async function pollInsights() {
     try {
-        const e = await fetch('/api/excursions', {cache: 'no-store'}).then(r => r.json());
-        document.getElementById('ex-2').textContent = e.touch_2_total ?? '—';
-        document.getElementById('ex-3').textContent = e.touch_3_total ?? '—';
-        document.getElementById('ex-rev').textContent = e.reversions ?? '—';
-        document.getElementById('ex-max').textContent = Math.max(Math.abs(e.max_z || 0), Math.abs(e.min_z || 0)).toFixed(1);
+        const d = await fetch('/api/ai-insights', {cache: 'no-store'}).then(r => r.json());
+        const list = d.insights || d.pending || [];
+        document.getElementById('insights-count').textContent = list.length + ' pending';
+        const el = document.getElementById('insights-list');
+        el.innerHTML = list.length ? list.slice(0, 10).map(i =>
+            '<div class="mb-1 pb-1" style="border-bottom:1px dashed var(--bs-border-color);">' +
+            '<span class="badge bg-secondary me-1" style="font-size:.6em">' + (i.insight_type || i.type || '') + '</span>' +
+            (i.param ? '<b>' + i.param + '</b>: ' + (i.current_value ?? '') + ' → ' + (i.suggested_value ?? '') + '<br>' : '') +
+            '<span class="text-secondary">' + String(i.rationale || '').slice(0, 180) + '</span></div>'
+        ).join('') : '<div class="text-secondary text-center py-2" style="font-size:0.7rem;">No insights yet — fires after first closed trade</div>';
+    } catch (e) {}
+    try {
+        const d = await fetch('/api/learning-log', {cache: 'no-store'}).then(r => r.json());
+        const rows = d.log || d.entries || [];
+        const el = document.getElementById('learning-log-list');
+        el.innerHTML = rows.length ? rows.slice(0, 10).map(r =>
+            '<div class="mb-1"><span class="text-secondary">' + (r.timestamp || '').slice(0, 16) + '</span> ' +
+            '<b>' + (r.param || '') + '</b> ' + (r.old_value ?? '') + ' → ' + (r.new_value ?? '') + '</div>'
+        ).join('') : '<div class="text-secondary text-center py-2">No changes yet</div>';
     } catch (e) {}
 }
 
-async function resetExcursions() {
-    await fetch('/api/excursions/reset', {method: 'POST'});
-    pollExcursions();
-}
-
-async function pollJournal() {
-    let j;
-    try { j = await fetch('/api/journal?limit=40', {cache: 'no-store'}).then(r => r.json()); }
+// ─── Recent trades / margin / volume / fills / exchange orders ──────────────
+async function pollTrades() {
+    let d;
+    try { d = await fetch('/api/desk/trades', {cache: 'no-store'}).then(r => r.json()); }
     catch (e) { return; }
-    const rows = j.rows || [];
-    const body = document.getElementById('journal-body');
-    if (!rows.length) return;
-    body.innerHTML = rows.map(r => {
-        const t = new Date(r.ts * 1000).toLocaleTimeString();
-        const dir = (r.direction || '').replace('_SPREAD', '');
-        const net = r.net_pnl;
-        const netTxt = r.event === 'CLOSE' ? (net != null ? net.toFixed(2) : '—') : '';
-        const netCls = (net || 0) >= 0 ? 'text-success' : 'text-danger';
-        const evCls = r.event === 'OPEN' ? 'text-primary' : 'text-dark';
-        const reason = r.reason ? ' title="' + r.reason + '"' : '';
-        return `<tr${reason}><td>${t}</td><td class="${evCls}">${r.event}</td>` +
-               `<td>${dir}</td><td>${r.source || ''}</td>` +
-               `<td class="text-end font-monospace ${netCls}">${netTxt}</td></tr>`;
+    const trips = d.trips || [];
+    const body = document.getElementById('trades-table');
+    if (!trips.length) {
+        body.innerHTML = '<tr><td colspan="6" class="text-center text-secondary">No trades</td></tr>';
+        return;
+    }
+    body.innerHTML = trips.slice(0, 20).map(t => {
+        const np = Number(t.net_pnl || 0);
+        const dir = (t.direction || '').replace('_SPREAD', '');
+        return '<tr><td>' + new Date(t.ts * 1000).toLocaleTimeString() + '</td>' +
+            '<td><span class="badge ' + (dir === 'LONG' ? 'bg-success' : 'bg-danger') + '" style="font-size:.65em">' + dir + '</span>' +
+            ' <span class="badge ' + (t.exit_source === 'algo' ? 'bg-primary' : 'bg-secondary') + '" style="font-size:.6em">' + (t.exit_source === 'algo' ? 'algo' : 'man') + '</span></td>' +
+            '<td class="font-monospace">' + fmt(t.entry_zscore) + '→' + fmt(t.exit_zscore) + '</td>' +
+            '<td class="font-monospace">' + fmt(t.entry_leg_a, 0) + '</td>' +
+            '<td class="font-monospace">' + fmt(t.entry_leg_b, 0) + '</td>' +
+            '<td class="font-monospace fw-bold ' + (np >= 0 ? 'text-success' : 'text-danger') + '">' + fmtUsd(np) + '</td></tr>';
     }).join('');
 }
 
-pollSignal(); pollSeries(); pollExcursions(); pollJournal(); pollCandles();
+async function pollMargin() {
+    let m;
+    try { m = await fetch('/api/margin', {cache: 'no-store'}).then(r => r.json()); }
+    catch (e) { return; }
+    document.getElementById('account-equity').textContent = m.cash != null ? fmtUsd0(m.cash) : '—';
+    document.getElementById('account-available').textContent = m.available != null ? fmtUsd0(m.available) : '—';
+    document.getElementById('margin-used').textContent = m.used != null ? fmtUsd0(m.used) : '—';
+    document.getElementById('margin-util').textContent =
+        m.utilisation_pct != null ? m.utilisation_pct.toFixed(1) + '%' : '—';
+    const p = m.pair || {};
+    document.getElementById('pm-qty').textContent = p.qty != null ? Number(p.qty).toFixed(6) : '—';
+    document.getElementById('pm-basket').textContent = p.per_trade_usd != null ? fmtUsd0(p.per_trade_usd) : '—';
+    document.getElementById('pm-notional').textContent = p.notional_usd != null ? fmtUsd0(p.notional_usd) : '—';
+    document.getElementById('pm-headroom').textContent = p.headroom_trades ?? '—';
+    const err = document.getElementById('pm-error');
+    err.style.display = m.error ? '' : 'none';
+    err.textContent = m.error || '';
+}
+
+async function pollVolume() {
+    let v;
+    try { v = await fetch('/api/volume', {cache: 'no-store'}).then(r => r.json()); }
+    catch (e) { return; }
+    document.getElementById('vol-day').textContent = fmtUsd0(v.day_usd);
+    document.getElementById('vol-week').textContent = fmtUsd0(v.week_usd);
+    document.getElementById('vol-month').textContent = fmtUsd0(v.month_usd);
+    document.getElementById('volume-clips-today').textContent = (v.clips_today ?? '—') + ' fills';
+    document.getElementById('vol-month-clips').textContent = v.clips_month ?? '—';
+    document.getElementById('vol-asof').textContent = v.asof || '—';
+    const spark = document.getElementById('vol-spark');
+    const days = v.days || [];
+    const mx = Math.max(1, ...days);
+    spark.innerHTML = days.map(x =>
+        '<div style="flex:1;background:var(--bs-primary);opacity:.65;border-radius:1px;height:' +
+        Math.max(2, x / mx * 26) + 'px" title="$' + x.toFixed(0) + '"></div>').join('');
+}
+
+async function refreshFills() {
+    let d;
+    try { d = await fetch('/api/execution', {cache: 'no-store'}).then(r => r.json()); }
+    catch (e) { return; }
+    const s = d.stats || {};
+    const ms = v => v == null ? '—' : (v >= 1000 ? (v / 1000).toFixed(2) + 's' : v + 'ms');
+    document.getElementById('fills-avg-usd').textContent =
+        s.avg_slippage_usd_per_leg != null ? fmtUsd(s.avg_slippage_usd_per_leg) : '—';
+    document.getElementById('fills-setting').textContent = d.configured_slippage_bps ?? '—';
+    document.getElementById('fills-avg-ms').textContent = ms(s.avg_fill_ms);
+    document.getElementById('fills-gap').textContent = ms(s.avg_leg_gap_ms) + ' / ' + ms(s.max_leg_gap_ms);
+    document.getElementById('fills-count').textContent = s.orders ?? '—';
+    const rows = [];
+    (d.events || []).forEach(e => (e.legs || []).forEach(l => rows.push([e, l])));
+    document.getElementById('fills-table').innerHTML = rows.length ? rows.slice(0, 200).map(x => {
+        const e = x[0], l = x[1], sp = l.slippage;
+        const c = sp > 0 ? 'text-danger' : sp < 0 ? 'text-success' : '';
+        return '<tr><td>' + (e.date || '') + '</td>' +
+            '<td><span class="badge ' + (e.source === 'algo' ? 'bg-primary' : 'bg-secondary') + '" style="font-size:.65em">' + (e.source || 'manual').toUpperCase() + '</span></td>' +
+            '<td>' + (e.label === 'Close' ? 'Exit' : 'Entry') + ' <span class="text-secondary">' + (e.mode || '') + '</span></td>' +
+            '<td>' + (l.symbol || '—') + '</td>' +
+            '<td class="' + (String(l.side).toLowerCase() === 'buy' ? 'text-success' : 'text-danger') + '"><b>' + String(l.side || '').toUpperCase() + '</b></td>' +
+            '<td>' + (l.qty != null ? Number(l.qty).toFixed(6) : '—') + '</td>' +
+            '<td>' + clock(l.sent_at) + '</td><td>' + clock(l.filled_at) + '</td>' +
+            '<td class="text-end">' + ms(l.fill_ms) + '</td>' +
+            '<td class="text-end font-monospace">' + fmt(l.ref_price) + '</td>' +
+            '<td class="text-end font-monospace">' + fmt(l.fill_price) + '</td>' +
+            '<td class="text-end font-monospace ' + c + '">' + (sp == null ? '—' : (sp > 0 ? '+' : '') + sp.toFixed(2)) + '</td>' +
+            '<td class="text-end font-monospace ' + c + '">' + (l.slippage_usd == null ? '—' : fmtUsd(l.slippage_usd)) + '</td>' +
+            '<td class="text-secondary">' + [String(l.order_type || '').toUpperCase(), l.status || ''].filter(Boolean).join(' · ') + '</td></tr>';
+    }).join('') : '<tr><td colspan="14" class="text-center text-secondary py-3">No executed orders yet</td></tr>';
+}
+
+async function refreshExchangeOrders() {
+    let d;
+    try { d = await fetch('/api/exchange-orders?limit=60', {cache: 'no-store'}).then(r => r.json()); }
+    catch (e) { return; }
+    const rows = d.orders || [];
+    document.getElementById('exchange-orders-table').innerHTML = rows.length ? rows.map(o => {
+        const side = String(o.side || '').toUpperCase();
+        const t = o.created_at ? new Date(Number(o.created_at)).toLocaleTimeString() : (o.time || '—');
+        return '<tr><td>' + t + '</td><td>' + (o.symbol || '—') + '</td><td>' + (o.inst_type || '—') + '</td>' +
+            '<td class="' + (side.indexOf('B') === 0 ? 'text-success' : 'text-danger') + '"><b>' + side + '</b></td>' +
+            '<td>' + (o.pos_side || '—') + '</td><td>' + (o.order_type || '—') + '</td>' +
+            '<td>' + (o.quantity ?? '—') + '</td><td>' + (o.fill_qty || '—') + '</td>' +
+            '<td class="font-monospace">' + fmt(o.fill_price || null) + '</td>' +
+            '<td>' + (o.fee == null ? '—' : Number(o.fee).toFixed(4)) + '</td>' +
+            '<td>' + (o.state || o.status || '—') + '</td>' +
+            '<td class="text-secondary">' + String(o.order_id || '').slice(-10) + '</td></tr>';
+    }).join('') : '<tr><td colspan="12" class="text-center text-secondary py-3">No orders</td></tr>';
+}
+
+// Entry/exit latency strip from the execution log.
+async function pollLatency() {
+    try {
+        const d = await fetch('/api/execution', {cache: 'no-store'}).then(r => r.json());
+        const avg = (label) => {
+            const vals = [];
+            (d.events || []).forEach(e => {
+                if (e.label !== label) return;
+                (e.legs || []).forEach(l => { if (l.fill_ms != null) vals.push(l.fill_ms); });
+            });
+            return vals.length ? Math.round(vals.reduce((a, b) => a + b) / vals.length) + 'ms' : '—';
+        };
+        document.getElementById('entry-latency-ms').textContent = avg('Open');
+        document.getElementById('exit-latency-ms').textContent = avg('Close');
+    } catch (e) {}
+}
+
+// ─── resets ──────────────────────────────────────────────────────────────────
+async function clearJournal() {
+    if (!confirm('Clear the trade journal? (Positions on the exchange are untouched.)')) return;
+    const r = await fetch('/api/journal/clear', {method: 'POST'}).then(x => x.json());
+    showToast('Journal cleared (' + (r.deleted ?? 0) + ' rows)', 'secondary');
+    pollTrades();
+}
+const resetJournal = clearJournal;
+async function resetSignalWindow() {
+    if (!confirm('Discard the rolling spread window? The warm-up starts over.')) return;
+    await fetch('/api/signal/reset', {method: 'POST'});
+    showToast('Signal window reset — collecting fresh', 'secondary');
+}
+async function resetExcursionsBtn() {
+    if (!confirm('Reset the z-excursion counters?')) return;
+    await fetch('/api/excursions/reset', {method: 'POST'});
+    showToast('Excursion counters reset', 'secondary');
+}
+
+updateManualHints();
+pollSignal(); pollSeries(); pollCandles(); pollActiveOrders();
+pollInsights(); pollTrades(); pollMargin(); pollVolume();
+refreshFills(); refreshExchangeOrders(); pollLatency();
 setInterval(pollSignal, 1000);
 setInterval(pollSeries, 3000);
 setInterval(pollCandles, 3000);
-setInterval(pollExcursions, 5000);
-setInterval(pollJournal, 10000);
+setInterval(pollActiveOrders, 2000);
+setInterval(pollTrades, 5000);
+setInterval(pollInsights, 15000);
+setInterval(pollMargin, 15000);
+setInterval(pollVolume, 30000);
+setInterval(pollLatency, 10000);
+setInterval(refreshFills, 15000);
 </script>
 {% endblock %}
