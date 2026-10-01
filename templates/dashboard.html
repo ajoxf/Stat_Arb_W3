@@ -18,7 +18,7 @@
             <div class="col-6">
                 <div class="card h-100">
                     <div class="card-header py-1 d-flex justify-content-between align-items-center">
-                        <small><i class="bi bi-currency-exchange me-1"></i>Leg A — Spot</small>
+                        <small><i class="bi bi-currency-exchange me-1"></i>Leg A — {{ 'Perp' if '-SWAP' in config.spot_symbol else 'Spot' }}</small>
                         <span class="badge bg-primary" style="font-size: 0.65rem;">{{ config.spot_symbol }}</span>
                     </div>
                     <div class="card-body py-2 text-center">
@@ -39,7 +39,7 @@
             <div class="col-6">
                 <div class="card h-100">
                     <div class="card-header py-1 d-flex justify-content-between align-items-center">
-                        <small><i class="bi bi-bar-chart me-1"></i>Leg B — Perp</small>
+                        <small><i class="bi bi-bar-chart me-1"></i>Leg B — {{ 'Perp' if '-SWAP' in config.futures_symbol else 'Spot' }}</small>
                         <span class="badge bg-warning text-dark" style="font-size: 0.65rem;">{{ config.futures_symbol }}</span>
                     </div>
                     <div class="card-body py-2 text-center">
@@ -75,7 +75,7 @@
                                 <span id="leg-a-notional" class="fw-bold">&mdash;</span>
                             </div>
                             <div class="d-flex justify-content-between">
-                                <span class="text-secondary">Margin ({{ config.spot_leverage }}×):</span>
+                                <span class="text-secondary">Margin ({{ config.futures_leverage if '-SWAP' in config.spot_symbol else config.spot_leverage }}×):</span>
                                 <span id="leg-a-margin">&mdash;</span>
                             </div>
                         </div>
@@ -89,7 +89,7 @@
                                 <span id="leg-b-notional" class="fw-bold">&mdash;</span>
                             </div>
                             <div class="d-flex justify-content-between">
-                                <span class="text-secondary">Margin ({{ config.futures_leverage }}×):</span>
+                                <span class="text-secondary">Margin ({{ config.futures_leverage if '-SWAP' in config.futures_symbol else config.spot_leverage }}×):</span>
                                 <span id="leg-b-margin">&mdash;</span>
                             </div>
                         </div>
@@ -745,22 +745,25 @@ async function pollSignal() {
     // Position sizing + live β
     const ed = data.edge || {};
     if (ed.qty && data.leg_a && data.leg_b) {
-        const notA = ed.qty * data.leg_a, notB = ed.qty * data.leg_b;
+        const qtyA = ed.qty_a != null ? ed.qty_a : ed.qty;
+        const notA = qtyA * data.leg_a, notB = ed.qty * data.leg_b;
         document.getElementById('leg-a-notional').textContent = fmtUsd0(notA);
         document.getElementById('leg-b-notional').textContent = fmtUsd0(notB);
-        document.getElementById('leg-a-margin').textContent = fmtUsd0(notA / {{ config.spot_leverage or 1 }});
-        document.getElementById('leg-b-margin').textContent = fmtUsd0(notB / {{ config.futures_leverage or 1 }});
+        document.getElementById('leg-a-margin').textContent = fmtUsd0(notA / {{ (config.futures_leverage if '-SWAP' in config.spot_symbol else config.spot_leverage) or 1 }});
+        document.getElementById('leg-b-margin').textContent = fmtUsd0(notB / {{ (config.futures_leverage if '-SWAP' in config.futures_symbol else config.spot_leverage) or 1 }});
         document.getElementById('sizing-qty').textContent =
-            Number(ed.qty).toFixed(6) + ' / ' + Number(ed.qty).toFixed(6);
+            Number(qtyA).toFixed(6) + ' / ' + Number(ed.qty).toFixed(6);
         const bal = Math.abs(notA - notB) / ((notA + notB) / 2) * 100;
         document.getElementById('sizing-balance').textContent =
             fmtUsd(Math.abs(notA - notB)) + ' (' + bal.toFixed(2) + '%)';
     }
     if (data.leg_a && data.leg_b) {
+        // Live β = mid(B) ÷ mid(A); drift is measured vs the CONFIGURED k.
         const beta = data.leg_b / data.leg_a;
+        const kConf = Number(data.hedge_ratio || 1);
         document.getElementById('live-beta-value').textContent = beta.toFixed(5);
-        document.getElementById('live-beta-configured').textContent = '1.00000';
-        const drift = Math.abs(beta - 1) * 100;
+        document.getElementById('live-beta-configured').textContent = kConf.toFixed(5);
+        const drift = Math.abs(beta - kConf) / kConf * 100;
         const el = document.getElementById('live-beta-drift');
         el.textContent = drift.toFixed(2) + '%';
         el.className = 'badge ' + (drift <= 0.5 ? 'bg-success' : drift <= 2 ? 'bg-warning text-dark' : 'bg-danger');

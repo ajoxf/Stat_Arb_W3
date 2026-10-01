@@ -179,40 +179,58 @@ class AlgoTrader:
             self._stop_evt.wait(interval)
 
     # ── sizing & costs (OKX) ─────────────────────────────────────────────────
+    # The clip is sized in LEG B units: qty = position_size_usd ÷ P_B, and
+    # leg A trades hedge_ratio × qty of its own units, so one clip's P&L is
+    # Δspread × qty for spread = k × A − B. With k ≈ P_B / P_A the two legs
+    # carry equal notional. Fees are per LEG TYPE (a -SWAP leg pays futures
+    # maker/taker, a spot leg spot maker/taker) × order type per side.
     def _qty(self, p: Dict, sig: Dict) -> float:
-        """Position size in BTC: position_size_usd ÷ spot price."""
+        """Clip size in leg-B units: position_size_usd ÷ leg B price."""
         size_usd = float(p.get("position_size_usd", 0) or 0)
-        la = sig.get("leg_a")
-        if size_usd <= 0 or not la:
+        lb = sig.get("leg_b")
+        if size_usd <= 0 or not lb:
             return 0.0
-        return size_usd / float(la)
+        return size_usd / float(lb)
+
+    @staticmethod
+    def _leg_fees(p: Dict, leg: str) -> Tuple[float, float]:
+        """(maker_bps, taker_bps) for one leg, resolved by its TYPE. The
+        params provider supplies leg_a_maker_bps etc. from the symbols;
+        legacy spot_*/futures_* names are the fallback (A=spot, B=perp)."""
+        if leg == "a":
+            maker = p.get("leg_a_maker_bps", p.get("spot_maker_fee_bps", 8.0))
+            taker = p.get("leg_a_taker_bps", p.get("spot_taker_fee_bps", 10.0))
+        else:
+            maker = p.get("leg_b_maker_bps", p.get("futures_maker_fee_bps", 2.0))
+            taker = p.get("leg_b_taker_bps", p.get("futures_taker_fee_bps", 5.0))
+        return float(maker or 0), float(taker or 0)
 
     def _round_trip_cost(self, p: Dict, qty: Optional[float] = None,
                          ref_a: Optional[float] = None,
                          ref_b: Optional[float] = None) -> float:
         """Estimated round-trip TRANSACTION cost in $: exchange fees per leg
-        (maker or taker by execution mode, entry + exit) + slippage on all
-        four leg turnovers. Defaults to the open position's size/entry
-        prices; pass qty/ref prices for a pre-entry (prospective) estimate."""
+        (maker or taker by execution mode, per the leg's instrument type,
+        entry + exit) + slippage on all four leg turnovers. Defaults to the
+        open position's size/entry prices; pass qty/ref prices for a
+        pre-entry (prospective) estimate. ``qty`` is leg-B units."""
         pos = self._pos or {}
         qty = float(qty if qty is not None else pos.get("qty", 0) or 0)
         ra = ref_a if ref_a is not None else pos.get("entry_leg_a")
         rb = ref_b if ref_b is not None else pos.get("entry_leg_b")
         if qty <= 0 or not ra or not rb:
             return 0.0
-        not_a = qty * float(ra)                     # spot-leg notional
-        not_b = qty * float(rb)                     # perp-leg notional
-        spot_maker = float(p.get("spot_maker_fee_bps", 8.0) or 0)
-        spot_taker = float(p.get("spot_taker_fee_bps", 10.0) or 0)
-        fut_maker = float(p.get("futures_maker_fee_bps", 2.0) or 0)
-        fut_taker = float(p.get("futures_taker_fee_bps", 5.0) or 0)
+        k = float(p.get("hedge_ratio", 1.0) or 1.0)
+        not_a = qty * k * float(ra)                 # leg-A notional
+        not_b = qty * float(rb)                     # leg-B notional
+        a_maker, a_taker = self._leg_fees(p, "a")
+        b_maker, b_taker = self._leg_fees(p, "b")
         entry_limit = str(p.get("entry_execution_mode", "LIMIT")).upper() == "LIMIT"
         exit_limit = str(p.get("exit_execution_mode", "LIMIT")).upper() == "LIMIT"
         fees = 0.0
-        fees += not_a * (spot_maker if entry_limit else spot_taker) / 1e4
-        fees += not_b * (fut_maker if entry_limit else fut_taker) / 1e4
-        fees += not_a * (spot_maker if exit_limit else spot_taker) / 1e4
-        fees += not_b * (fut_maker if exit_limit else fut_taker) / 1e4
+        fees += not_a * (a_maker if entry_limit else a_taker) / 1e4
+        fees += not_b * (b_maker if entry_limit else b_taker) / 1e4
+        fees += not_a * (a_maker if exit_limit else a_taker) / 1e4
+        fees += not_b * (b_maker if exit_limit else b_taker) / 1e4
         slip_bps = float(p.get("slippage_bps", 0) or 0)
         fees += 2.0 * (not_a + not_b) * slip_bps / 1e4   # 4 leg turnovers
         return fees
@@ -220,17 +238,22 @@ class AlgoTrader:
     def _margin_usd(self, p: Dict, qty: Optional[float] = None,
                     ref_a: Optional[float] = None,
                     ref_b: Optional[float] = None) -> float:
-        """Capital at risk ($): spot notional ÷ spot leverage + perp notional ÷
-        perp leverage — the margin actually posted for the pair."""
+        """Capital at risk ($): each leg's notional ÷ its own leverage — the
+        margin actually posted for the pair. Leverage comes per leg type
+        (leg_a_leverage / leg_b_leverage from the params provider, with the
+        legacy spot/futures names as fallback)."""
         pos = self._pos or {}
         qty = float(qty if qty is not None else pos.get("qty", 0) or 0)
         ra = ref_a if ref_a is not None else pos.get("entry_leg_a")
         rb = ref_b if ref_b is not None else pos.get("entry_leg_b")
         if qty <= 0 or not ra or not rb:
             return 0.0
-        lev_a = max(1.0, float(p.get("spot_leverage", 1) or 1))
-        lev_b = max(1.0, float(p.get("futures_leverage", 1) or 1))
-        return qty * float(ra) / lev_a + qty * float(rb) / lev_b
+        k = float(p.get("hedge_ratio", 1.0) or 1.0)
+        lev_a = max(1.0, float(p.get("leg_a_leverage",
+                                     p.get("spot_leverage", 1)) or 1))
+        lev_b = max(1.0, float(p.get("leg_b_leverage",
+                                     p.get("futures_leverage", 1)) or 1))
+        return qty * k * float(ra) / lev_a + qty * float(rb) / lev_b
 
     # ── P&L ──────────────────────────────────────────────────────────────────
     def _live_net_pnl(self, cur_spread: Optional[float], p: Dict,
@@ -378,9 +401,13 @@ class AlgoTrader:
         def _bps(x):
             return round(x / notional * 10000.0, 2) if notional > 0 else None
 
+        k = float(p.get("hedge_ratio", 1.0) or 1.0)
         return {
             "qty": round(qty, 6),
+            "qty_a": round(qty * k, 6),
+            "hedge_ratio": k,
             "notional_usd": round(notional, 2),
+            "notional_a_usd": round(qty * k * abs(float(la)), 2),
             "margin_usd": round(margin, 2),
             "round_trip_cost_usd": round(cost, 2),
             "round_trip_cost_bps": _bps(cost),

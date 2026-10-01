@@ -99,6 +99,19 @@ def _algo_params() -> Dict[str, Any]:
     p["slippage_bps"] = getattr(cfg, "slippage_bps", 1.5)
     p["entry_execution_mode"] = getattr(cfg, "entry_execution_mode", "LIMIT")
     p["exit_execution_mode"] = getattr(cfg, "exit_execution_mode", "LIMIT")
+    # Per-leg fee schedule and leverage, resolved by each leg's INSTRUMENT
+    # TYPE (derived from its symbol): a -SWAP leg pays the futures maker /
+    # taker rates whichever side of the pair it sits on; a spot leg the spot
+    # rates. BTC-perp vs ETH-perp therefore prices both legs at futures fees.
+    a_swap = "-SWAP" in (cfg.spot_symbol or "")
+    b_swap = "-SWAP" in (cfg.futures_symbol or "")
+    p["leg_a_is_swap"], p["leg_b_is_swap"] = a_swap, b_swap
+    p["leg_a_maker_bps"] = p["futures_maker_fee_bps"] if a_swap else p["spot_maker_fee_bps"]
+    p["leg_a_taker_bps"] = p["futures_taker_fee_bps"] if a_swap else p["spot_taker_fee_bps"]
+    p["leg_b_maker_bps"] = p["futures_maker_fee_bps"] if b_swap else p["spot_maker_fee_bps"]
+    p["leg_b_taker_bps"] = p["futures_taker_fee_bps"] if b_swap else p["spot_taker_fee_bps"]
+    p["leg_a_leverage"] = p["futures_leverage"] if a_swap else p["spot_leverage"]
+    p["leg_b_leverage"] = p["futures_leverage"] if b_swap else p["spot_leverage"]
     # Day P&L + loss streak from the journal (daily loss limit / streak pause).
     try:
         day_start = datetime.now(timezone.utc).replace(
@@ -227,8 +240,9 @@ def _spread_execute(direction: str, qty: float, source: str = "manual",
 def _spread_execute_unlocked(direction: str, qty: float, source: str,
                              z: Optional[float], spread: Optional[float]) -> Dict[str, Any]:
     try:
-        res = _run_engine_coro(engine.execute_spread(direction, qty, is_entry=True,
-                                                     source=source))
+        res = _run_engine_coro(engine.execute_spread(
+            direction, qty, is_entry=True, source=source,
+            hedge_ratio=float(_algo_params().get('hedge_ratio', 1.0) or 1.0)))
     except Exception as e:
         logger.exception("spread execute failed")
         return {"success": False, "error": str(e)}
@@ -279,9 +293,9 @@ def _spread_close_unlocked(direction: str, qty: float, source: str,
                            trough_pnl: Optional[float],
                            exit_mode: Optional[str] = None) -> Dict[str, Any]:
     try:
-        res = _run_engine_coro(engine.execute_spread(direction, qty, is_entry=False,
-                                                     source=source,
-                                                     exit_mode=exit_mode))
+        res = _run_engine_coro(engine.execute_spread(
+            direction, qty, is_entry=False, source=source, exit_mode=exit_mode,
+            hedge_ratio=float(_algo_params().get('hedge_ratio', 1.0) or 1.0)))
     except Exception as e:
         logger.exception("spread close failed")
         return {"success": False, "error": str(e)}
@@ -913,6 +927,7 @@ def api_signal():
         sig['edge'] = {}
     p = _algo_params()
     sig['trade_direction'] = str(p.get('trade_direction', 'both'))
+    sig['hedge_ratio'] = float(p.get('hedge_ratio', 1.0) or 1.0)
     sig['open_position'] = _open_position_view()
     # Feed age: now − the newest leg tick the engine holds.
     try:
@@ -967,10 +982,10 @@ def api_execute():
     sig = signal_engine.get_signal()
     qty = data.get('qty')
     if qty is None:
-        la = sig.get('leg_a')
-        if not la:
+        lb = sig.get('leg_b')
+        if not lb:
             return jsonify({'success': False, 'error': 'no price to size from'}), 400
-        qty = engine.config.position_size_usd / float(la)
+        qty = engine.config.position_size_usd / float(lb)
     z = sig.get('z_sell') if direction == 'SHORT_SPREAD' else sig.get('z_buy')
     spread = (sig.get('sell_spread') if direction == 'SHORT_SPREAD'
               else sig.get('buy_spread')) or sig.get('spread')
@@ -1093,8 +1108,8 @@ def api_ladder():
         anchor = None
 
     qty = 0.0
-    if sig.get('leg_a'):
-        qty = engine.config.position_size_usd / float(sig['leg_a'])
+    if sig.get('leg_b'):
+        qty = engine.config.position_size_usd / float(sig['leg_b'])
 
     # Both legs' depth (list of {price, volume, type}) from OKX.
     depth_a = depth_b = None
@@ -1121,7 +1136,7 @@ def api_ladder():
     else:
         error = 'no exchange connection — sizes unavailable'
 
-    rows = build_ladder(depth_a, depth_b, k, qty, qty,
+    rows = build_ladder(depth_a, depth_b, k, qty * k, qty,
                         sig.get('sell_spread'), sig.get('buy_spread'),
                         increment, count=count, anchor=anchor)
 
@@ -1316,6 +1331,23 @@ def api_margin():
     return jsonify(out)
 
 
+@app.route('/api/hedge-ratio/derive', methods=['POST'])
+def api_hedge_derive():
+    """Auto-derive the hedge ratio from LIVE prices: k = mid(B) ÷ mid(A),
+    the β that puts the two legs on one price scale (equal notional per
+    clip). Saves it to the algo params; the signal window resets itself
+    because a window never mixes two hedge ratios."""
+    sig = signal_engine.get_signal()
+    la, lb = sig.get('leg_a'), sig.get('leg_b')
+    if not la or not lb:
+        return jsonify({'success': False, 'error': 'no live prices to derive from'}), 400
+    k = round(float(lb) / float(la), 6)
+    db.save_algo_params({'hedge_ratio': k})
+    return jsonify({'success': True, 'hedge_ratio': k,
+                    'leg_a': la, 'leg_b': lb,
+                    'note': 'signal window will reset (one window, one k)'})
+
+
 @app.route('/api/manual-trade/arm', methods=['POST'])
 def api_manual_trade_arm():
     d = request.json or {}
@@ -1328,8 +1360,8 @@ def api_manual_trade_arm():
     qty = _f('qty')
     if qty is None:
         sig = signal_engine.get_signal()
-        qty = (engine.config.position_size_usd / float(sig['leg_a'])
-               if sig.get('leg_a') else 0)
+        qty = (engine.config.position_size_usd / float(sig['leg_b'])
+               if sig.get('leg_b') else 0)
     return jsonify(manual_watcher.arm(str(d.get('direction', '')).upper(),
                                       qty or 0, _f('entry'), _f('tp'), _f('sl')))
 

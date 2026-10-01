@@ -142,18 +142,31 @@ class OrderExecutor:
         """Update configuration."""
         self.config = config
 
+    @staticmethod
+    def _leg_pos_side(symbol: str, going_long: bool) -> Optional[str]:
+        """OKX long_short_mode pos_side for a leg, or None for a spot leg."""
+        if "-SWAP" not in symbol:
+            return None
+        return "long" if going_long else "short"
+
     async def execute_entry(
         self,
         position_type: str,  # LONG or SHORT
         spot_tick: MarketTick,
         futures_tick: MarketTick,
         quantity: float,
+        quantity_a: Optional[float] = None,
     ) -> Optional[SpreadOrder]:
         """
         Execute entry trade for a spread position.
 
-        LONG spread: Buy spot, Sell futures
-        SHORT spread: Sell spot, Buy futures
+        LONG spread: Buy leg A, Sell leg B
+        SHORT spread: Sell leg A, Buy leg B
+
+        ``quantity`` is leg B's size; ``quantity_a`` leg A's (defaults to the
+        same — a non-1:1 pair passes hedge-ratio-scaled leg A size). Either
+        leg may be SPOT or a -SWAP perp: pos_side is set per leg from its own
+        symbol.
 
         Returns SpreadOrder with execution results.
         """
@@ -161,30 +174,27 @@ class OrderExecutor:
             logger.warning("Already executing an order")
             return None
 
-        # Determine leg sides and futures pos_side for OKX long_short_mode
-        # LONG spread: Buy spot, Sell futures (short position)
-        # SHORT spread: Sell spot, Buy futures (long position)
+        # LONG spread: Buy A, Sell B.  SHORT spread: Sell A, Buy B.
         if position_type == "LONG":
-            spot_side = "BUY"
-            futures_side = "SELL"
-            futures_pos_side = "short"  # Selling futures = opening short
+            spot_side, futures_side = "BUY", "SELL"
         else:
-            spot_side = "SELL"
-            futures_side = "BUY"
-            futures_pos_side = "long"  # Buying futures = opening long
+            spot_side, futures_side = "SELL", "BUY"
 
         # Create spread order
         spread_order = SpreadOrder(
             spot_leg=LegOrder(
                 symbol=self.config.spot_symbol,
                 side=spot_side,
-                quantity=quantity,
+                quantity=quantity_a if quantity_a is not None else quantity,
+                pos_side=self._leg_pos_side(self.config.spot_symbol,
+                                            going_long=(spot_side == "BUY")),
             ),
             futures_leg=LegOrder(
                 symbol=self.config.futures_symbol,
                 side=futures_side,
                 quantity=quantity,
-                pos_side=futures_pos_side,  # For OKX long_short_mode
+                pos_side=self._leg_pos_side(self.config.futures_symbol,
+                                            going_long=(futures_side == "BUY")),
             ),
             is_entry=True,
             position_type=position_type,
@@ -205,40 +215,43 @@ class OrderExecutor:
         spot_tick: MarketTick,
         futures_tick: MarketTick,
         quantity: float,
+        quantity_a: Optional[float] = None,
     ) -> Optional[SpreadOrder]:
         """
         Execute exit trade to close a spread position.
 
-        Close LONG spread: Sell spot, Buy futures
-        Close SHORT spread: Buy spot, Sell futures
+        Close LONG spread: Sell leg A, Buy leg B
+        Close SHORT spread: Buy leg A, Sell leg B
+
+        pos_side is the SAME as at entry (closing the same position): a LONG
+        spread opened leg A long / leg B short, so its exit sells pos_side
+        "long" on A and buys pos_side "short" on B.
         """
         if self._executing:
             logger.warning("Already executing an order")
             return None
 
-        # Opposite of entry, but SAME pos_side (closing the same position)
-        # Close LONG spread: Sell spot, Buy futures (to close short = pos_side stays "short")
-        # Close SHORT spread: Buy spot, Sell futures (to close long = pos_side stays "long")
         if position_type == "LONG":
-            spot_side = "SELL"
-            futures_side = "BUY"
-            futures_pos_side = "short"  # Closing the short position
+            spot_side, futures_side = "SELL", "BUY"
+            a_was_long, b_was_long = True, False   # entry was Buy A / Sell B
         else:
-            spot_side = "BUY"
-            futures_side = "SELL"
-            futures_pos_side = "long"  # Closing the long position
+            spot_side, futures_side = "BUY", "SELL"
+            a_was_long, b_was_long = False, True   # entry was Sell A / Buy B
 
         spread_order = SpreadOrder(
             spot_leg=LegOrder(
                 symbol=self.config.spot_symbol,
                 side=spot_side,
-                quantity=quantity,
+                quantity=quantity_a if quantity_a is not None else quantity,
+                pos_side=self._leg_pos_side(self.config.spot_symbol,
+                                            going_long=a_was_long),
             ),
             futures_leg=LegOrder(
                 symbol=self.config.futures_symbol,
                 side=futures_side,
                 quantity=quantity,
-                pos_side=futures_pos_side,  # CRITICAL: same as entry pos_side!
+                pos_side=self._leg_pos_side(self.config.futures_symbol,
+                                            going_long=b_was_long),
             ),
             is_entry=False,
             position_type=position_type,
@@ -288,11 +301,13 @@ class OrderExecutor:
                     spread_order.position_type,
                     "ENTRY" if spread_order.is_entry else "EXIT")
 
-        # Cross-margin SPOT MARKET BUY: OKX reads sz as USDT when ccy=USDT is set.
-        # Compute notional so the adapter can override sz with the correct USDT amount.
+        # Cross-margin SPOT MARKET BUY: OKX reads sz as USDT when ccy=USDT is
+        # set. Only a true SPOT leg takes this path — a -SWAP leg A sizes in
+        # contracts like any perp.
         spot_notional = (
             round(spread_order.spot_leg.quantity * spot_mid, 2)
             if spread_order.spot_leg.side == "BUY" and spot_mid > 0
+            and "-SWAP" not in spread_order.spot_leg.symbol
             else None
         )
 
@@ -812,9 +827,10 @@ class OrderExecutor:
                 # Last resort: close the spot leg at market
                 logger.error("Futures recovery failed - closing spot orphan at MARKET (taker fees apply)")
                 close_side = "SELL" if spread_order.spot_leg.side == "BUY" else "BUY"
-                # Cross-margin SPOT MARKET BUY needs notional_usdt (sz must be in USDT)
+                # Cross-margin SPOT MARKET BUY needs notional_usdt (sz must be
+                # in USDT) — only when leg A really is spot.
                 spot_notional = None
-                if close_side == "BUY":
+                if close_side == "BUY" and "-SWAP" not in spread_order.spot_leg.symbol:
                     try:
                         spot_tick = await self.spot_adapter.get_tick(spread_order.spot_leg.symbol)
                         if spot_tick:
@@ -827,6 +843,7 @@ class OrderExecutor:
                     order_type="MARKET",
                     quantity=spread_order.spot_leg.filled_qty,
                     notional_usdt=spot_notional,
+                    pos_side=spread_order.spot_leg.pos_side,
                 )
                 if result.success:
                     logger.info("Closed orphan spot leg at market: order_id=%s", result.order_id)

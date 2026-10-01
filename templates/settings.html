@@ -44,6 +44,18 @@
                         <label class="form-label">Stop Z (σ)</label>
                         <input type="number" step="0.1" class="form-control form-control-sm ap" id="stop_zscore">
                     </div>
+                    <div class="col-12">
+                        <label class="form-label">Hedge Ratio (k) <span class="badge bg-secondary">pairs</span></label>
+                        <div class="input-group input-group-sm">
+                            <input type="number" step="0.000001" class="form-control form-control-sm ap" id="hedge_ratio">
+                            <button class="btn btn-outline-secondary" type="button" onclick="deriveHedge()">Auto-derive</button>
+                        </div>
+                        <div class="form-text">spread = k × leg A − leg B, to put two differently-priced
+                        legs on one scale. <strong>1 = same asset</strong> (BTC spot vs BTC perp). For
+                        BTC-perp vs ETH-perp set k ≈ P<sub>BTC</sub> ÷ P<sub>ETH</sub> — Auto-derive
+                        reads live prices. Leg A trades k × qty, so one clip's P&amp;L = Δspread × qty.
+                        Changing k resets the signal window (one window, one k).</div>
+                    </div>
                     <div class="col-12"><hr class="my-1">
                         <small class="text-secondary fw-semibold">Mean &amp; bands</small>
                         <div class="form-text"><strong>Ticks</strong> = the rolling window above.
@@ -373,12 +385,14 @@
             <div class="card-body">
                 <div class="row g-2">
                     <div class="col-6">
-                        <label class="form-label">Spot symbol (Leg A)</label>
+                        <label class="form-label">Leg A symbol</label>
                         <input type="text" class="form-control form-control-sm tc" id="spot_symbol">
+                        <div class="form-text">SPOT (BTC-USDT) or a perp (BTC-USDT-SWAP) — the type, fees and sizing follow the symbol.</div>
                     </div>
                     <div class="col-6">
-                        <label class="form-label">Perp symbol (Leg B)</label>
+                        <label class="form-label">Leg B symbol</label>
                         <input type="text" class="form-control form-control-sm tc" id="futures_symbol">
+                        <div class="form-text">e.g. BTC-USDT-SWAP, or ETH-USDT-SWAP for a BTC/ETH perp pair (set the Hedge Ratio).</div>
                     </div>
                     <div class="col-6">
                         <label class="form-label">Position size ($ notional)</label>
@@ -557,6 +571,17 @@ demoSwitch.addEventListener('change', async function () {
         this.disabled = false;
     }
 });
+
+async function deriveHedge() {
+    const r = await fetch('/api/hedge-ratio/derive', {method: 'POST'}).then(x => x.json());
+    if (r.success) {
+        document.getElementById('hedge_ratio').value = r.hedge_ratio;
+        showToast('Hedge ratio derived: ' + r.hedge_ratio + ' (B ' + Number(r.leg_b).toFixed(2)
+                  + ' ÷ A ' + Number(r.leg_a).toFixed(2) + ') — saved; signal window resets', 'success');
+    } else {
+        showToast('Derive failed: ' + (r.error || ''), 'danger');
+    }
+}
 
 loadAlgoParams();
 loadTradingConfig();

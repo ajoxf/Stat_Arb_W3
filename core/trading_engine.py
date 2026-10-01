@@ -462,8 +462,10 @@ class TradingEngine:
             'LINK': 15.0,
         }
 
-        asset = self.config.asset
-        base = base_prices.get(asset, 100.0)
+        # The leg's own asset (symbol prefix) — a BTC/ETH pair must simulate
+        # each leg at ITS price, not both at the configured asset's.
+        sym_asset = (symbol or "").split("-")[0].upper()
+        base = base_prices.get(sym_asset, base_prices.get(self.config.asset, 100.0))
 
         # Add some randomness
         noise = random.gauss(0, base * 0.0001)
@@ -775,11 +777,17 @@ class TradingEngine:
 
     async def execute_spread(self, direction: str, quantity: float,
                              is_entry: bool, source: str = "manual",
-                             exit_mode: Optional[str] = None) -> Dict[str, Any]:
+                             exit_mode: Optional[str] = None,
+                             hedge_ratio: float = 1.0) -> Dict[str, Any]:
         """The ONE spread order path — used by BOTH the manual endpoints and
-        the AlgoTrader. ``direction`` is LONG_SPREAD (buy spot / sell perp) or
-        SHORT_SPREAD (sell spot / buy perp); for an EXIT it is the direction
-        of the position being CLOSED. Returns a result dict with the fills:
+        the AlgoTrader. ``direction`` is LONG_SPREAD (buy A / sell B) or
+        SHORT_SPREAD (sell A / buy B); for an EXIT it is the direction of the
+        position being CLOSED.
+
+        ``quantity`` is the clip size in LEG B units; leg A trades
+        ``hedge_ratio × quantity`` of its own units, so one clip's P&L equals
+        Δspread × quantity for spread = k × A − B. Either leg may be SPOT or
+        a -SWAP perp. Returns a result dict with the fills:
 
             {success, message/error, leg_a_fill, leg_b_fill, fill_spread,
              spot_order_id, futures_order_id, paper}
@@ -787,6 +795,8 @@ class TradingEngine:
         ptype = "LONG" if str(direction).upper().startswith("LONG") else "SHORT"
         if quantity <= 0:
             return {"success": False, "error": "quantity must be > 0"}
+        k = float(hedge_ratio or 1.0)
+        qty_a = quantity * k
         if self._executing_trade:
             return {"success": False, "error": "another order is still executing"}
         if not self.spot_tick or not self.futures_tick:
@@ -804,7 +814,6 @@ class TradingEngine:
             spot_px = spot_px or st.mid
             fut_px = fut_px or ft.mid
             self.state.current_position = (ptype if is_entry else "NONE")
-            k = 1.0
             now = datetime.utcnow().timestamp()
             self.execution_events.appendleft({
                 "ts": now, "date": datetime.utcnow().strftime("%d %b"),
@@ -813,7 +822,7 @@ class TradingEngine:
                 "legs": [
                     {"symbol": self.config.spot_symbol,
                      "side": ("buy" if (is_entry == (ptype == "LONG")) else "sell"),
-                     "qty": quantity, "ref_price": spot_px, "fill_price": spot_px,
+                     "qty": qty_a, "ref_price": spot_px, "fill_price": spot_px,
                      "slippage": 0.0, "slippage_usd": 0.0, "fill_ms": 0,
                      "sent_at": now, "filled_at": now, "order_type": "paper"},
                     {"symbol": self.config.futures_symbol,
@@ -838,14 +847,14 @@ class TradingEngine:
             trade = Trade(asset=self.config.asset, position_type=ptype,
                           quantity=quantity, is_open=is_entry)
             if is_entry:
-                ok = await self._execute_entry_orders(trade, ptype)
+                ok = await self._execute_entry_orders(trade, ptype, qty_a)
                 self._record_execution("Open", source, quantity)
                 if ok:
                     self.state.current_position = ptype
                     return {"success": True, "message": "entry filled",
                             "leg_a_fill": trade.entry_spot_price,
                             "leg_b_fill": trade.entry_futures_price,
-                            "fill_spread": (round(trade.entry_spot_price
+                            "fill_spread": (round(k * trade.entry_spot_price
                                                   - trade.entry_futures_price, 4)
                                             if trade.entry_spot_price and
                                             trade.entry_futures_price else None),
@@ -853,14 +862,14 @@ class TradingEngine:
                             "futures_order_id": trade.futures_order_id}
                 return {"success": False,
                         "error": self.state.error or "entry orders failed"}
-            ok = await self._execute_exit_orders(trade, ptype)
+            ok = await self._execute_exit_orders(trade, ptype, qty_a)
             self._record_execution("Close", source, quantity)
             if ok:
                 self.state.current_position = "NONE"
                 return {"success": True, "message": "exit filled",
                         "leg_a_fill": trade.exit_spot_price,
                         "leg_b_fill": trade.exit_futures_price,
-                        "fill_spread": (round(trade.exit_spot_price
+                        "fill_spread": (round(k * trade.exit_spot_price
                                               - trade.exit_futures_price, 4)
                                         if trade.exit_spot_price and
                                         trade.exit_futures_price else None)}
@@ -911,7 +920,8 @@ class TradingEngine:
         except Exception:
             logger.debug("could not record execution event", exc_info=True)
 
-    async def _execute_entry_orders(self, trade: Trade, position_type: str) -> bool:
+    async def _execute_entry_orders(self, trade: Trade, position_type: str,
+                                    quantity_a: Optional[float] = None) -> bool:
         """Execute entry orders on exchanges using the order executor."""
         if not self.order_executor:
             logger.error("Order executor not configured for live trading")
@@ -934,6 +944,7 @@ class TradingEngine:
                 spot_tick=self.spot_tick,
                 futures_tick=self.futures_tick,
                 quantity=trade.quantity,
+                quantity_a=quantity_a,
             )
 
             if spread_order and spread_order.is_complete:
@@ -1113,7 +1124,8 @@ class TradingEngine:
         except Exception as e:
             logger.error("Error in startup summary: %s", e)
 
-    async def _execute_exit_orders(self, trade: Trade, position_type: str) -> bool:
+    async def _execute_exit_orders(self, trade: Trade, position_type: str,
+                                   quantity_a: Optional[float] = None) -> bool:
         """Execute exit orders on exchanges using the order executor."""
         if not self.order_executor:
             logger.error("Order executor not configured for live trading")
@@ -1129,6 +1141,7 @@ class TradingEngine:
                 spot_tick=self.spot_tick,
                 futures_tick=self.futures_tick,
                 quantity=trade.quantity,
+                quantity_a=quantity_a,
             )
 
             if spread_order and spread_order.is_complete:
