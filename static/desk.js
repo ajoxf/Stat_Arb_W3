@@ -375,7 +375,7 @@
     var qtyBtc = (lad.qty || 0) * clips;
     var px = direction === 'LONG_SPREAD' ? lad.buy_spread : lad.sell_spread;
     var words = (direction === 'LONG_SPREAD' ? 'BUY' : 'SELL') + ' the spread · ' + clips +
-      ' clip(s) = ' + num(qtyBtc, 6) + ' BTC · at ~' + num(px, 2) +
+      ' clip(s) = ' + num(qtyBtc, 6) + ' leg-B units · at ~' + num(px, 2) +
       ' (' + (direction === 'LONG_SPREAD' ? 'Ask A − Bid B' : 'Bid A − Ask B') + ')';
     var go = prefs.confirmClicks !== false
       ? confirmBox('Manual order', words + '\n\nTagged MANUAL. The algo cannot start while it is open.',
@@ -772,7 +772,7 @@
         '<span>Margin used</span><span>' + usd(m.used, 2) + (m.utilisation_pct == null ? '' : ' (' + m.utilisation_pct.toFixed(1) + '%)') + '</span>';
       var p = m.pair || {};
       $('.mg-pair', body).innerHTML =
-        '<span>Qty per clip (BTC)</span><span>' + (p.qty == null ? DASH : num(p.qty, 6)) + '</span>' +
+        '<span>Qty per clip (leg B units)</span><span>' + (p.qty == null ? DASH : num(p.qty, 6)) + '</span>' +
         '<span>Notional per trade</span><span>' + usd(p.notional_usd, 0) + '</span>' +
         '<span>Margin per trade</span><span>' + usd(p.per_trade_usd, 0) + '</span>' +
         '<span>Leverage A / B</span><span>' + (p.spot_leverage || DASH) + '× / ' + (p.futures_leverage || DASH) + '×</span>' +
