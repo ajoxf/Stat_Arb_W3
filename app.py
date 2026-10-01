@@ -109,12 +109,39 @@ def _algo_params() -> Dict[str, Any]:
     return p
 
 
+def _candle_history(tf: str, bars: int):
+    """Back-fill source for SpreadCandles: both legs' OHLC from OKX,
+    {"a": [(ts, o, h, l, c)…], "b": […]} oldest first. Runs on the back-fill
+    thread, so the async adapter calls hop onto the engine loop."""
+    if loop is None or not engine.spot_adapter or not engine.futures_adapter:
+        return None
+
+    async def _fetch():
+        a = await engine.spot_adapter.get_candles(engine.config.spot_symbol, tf, bars)
+        b = await engine.futures_adapter.get_candles(engine.config.futures_symbol, tf, bars)
+        return {"a": a, "b": b}
+
+    future = asyncio.run_coroutine_threadsafe(_fetch(), loop)
+    return future.result(timeout=60)
+
+
+from core.spread_candles import SpreadCandles, TF_LABELS, normalise_tf
+
+spread_candles = SpreadCandles(
+    persist_path=os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                              "data", "spread_candles.json"),
+    history_provider=_candle_history,
+    key_provider=lambda: f"{engine.config.spot_symbol}|{engine.config.futures_symbol}",
+    k_provider=lambda: float(_algo_params().get("hedge_ratio", 1.0) or 1.0),
+)
+
 signal_engine = SignalEngine(
     params_provider=_algo_params,
     book_provider=lambda: engine.get_book(),
     persist_path=os.path.join(os.path.dirname(os.path.abspath(__file__)),
                               "data", "signal_window.json"),
     series_key_provider=lambda: f"{engine.config.spot_symbol}|{engine.config.futures_symbol}",
+    candles=spread_candles,
 )
 
 
@@ -200,7 +227,8 @@ def _spread_execute(direction: str, qty: float, source: str = "manual",
 def _spread_execute_unlocked(direction: str, qty: float, source: str,
                              z: Optional[float], spread: Optional[float]) -> Dict[str, Any]:
     try:
-        res = _run_engine_coro(engine.execute_spread(direction, qty, is_entry=True))
+        res = _run_engine_coro(engine.execute_spread(direction, qty, is_entry=True,
+                                                     source=source))
     except Exception as e:
         logger.exception("spread execute failed")
         return {"success": False, "error": str(e)}
@@ -249,7 +277,8 @@ def _spread_close_unlocked(direction: str, qty: float, source: str,
                            peak_pnl: Optional[float],
                            trough_pnl: Optional[float]) -> Dict[str, Any]:
     try:
-        res = _run_engine_coro(engine.execute_spread(direction, qty, is_entry=False))
+        res = _run_engine_coro(engine.execute_spread(direction, qty, is_entry=False,
+                                                     source=source))
     except Exception as e:
         logger.exception("spread close failed")
         return {"success": False, "error": str(e)}
@@ -407,6 +436,10 @@ def start_engine_loop():
     # Start the signal engine (samples the spread window from live ticks).
     signal_engine.start()
 
+    # Back-fill the spread candles from OKX history (background; the bands
+    # are then ready at start-up instead of after a warm-up).
+    spread_candles.backfill_async()
+
     # Set up WebSocket streaming if enabled
     use_websocket = os.getenv('USE_WEBSOCKET', 'true').lower() == 'true'
     if use_websocket:
@@ -467,6 +500,10 @@ def stop_engine_loop():
         pass
     try:
         signal_engine.stop()      # persists the window for a warm restart
+    except Exception:
+        pass
+    try:
+        spread_candles.save()
     except Exception:
         pass
 
@@ -694,6 +731,7 @@ def algo_state():
     st['mode'] = _okx_mode()
     st['qty_usd'] = engine.config.position_size_usd
     st['algo_block'] = _algo_blocked() if not algo_trader.running else None
+    st['manual_block'] = _manual_blocked()
     op = _open_position_view()
     st['open_position'] = op
     return jsonify(st)
@@ -728,6 +766,8 @@ def api_signal():
         sig['edge'] = algo_trader.edge_preview(sig)
     except Exception:
         sig['edge'] = {}
+    p = _algo_params()
+    sig['trade_direction'] = str(p.get('trade_direction', 'both'))
     sig['open_position'] = _open_position_view()
     return jsonify(sig)
 
@@ -830,6 +870,296 @@ def api_journal():
     except (TypeError, ValueError):
         limit = 100
     return jsonify({'rows': db.journal_rows(limit=limit)})
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Candles, ladder, desk and analysis data (the arrow-statarb surface)
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.route('/api/candles', methods=['GET'])
+def api_candles():
+    """The spread's candles + TradingView BB(N, EMA basis) for the chart.
+    ``tf`` picks a VIEW timeframe; the response says which bands the algo
+    actually trades (band_source / its timeframe)."""
+    p = _algo_params()
+    algo_tf = normalise_tf(p.get('band_timeframe', '15m'))
+    tf = normalise_tf(request.args.get('tf') or algo_tf)
+    n = max(2, int(float(p.get('band_length', 20) or 20)))
+    k = float(p.get('hedge_ratio', 1.0) or 1.0)
+    try:
+        last = max(10, min(600, int(request.args.get('last', 80))))
+    except (TypeError, ValueError):
+        last = 80
+    out = spread_candles.series(tf, n, k, last=last)
+    out['bands'] = spread_candles.bands(tf, n, k)
+    out['entry_zscore'] = float(p.get('entry_zscore', 2.5) or 2.5)
+    out['band_source'] = str(p.get('band_source', 'ticks'))
+    out['algo_timeframe'] = algo_tf
+    out['label'] = TF_LABELS.get(tf, tf)
+    out['status'] = {t: dict(s) for t, s in spread_candles.status.items()}
+    out['counts'] = spread_candles.counts()
+    return jsonify(out)
+
+
+@app.route('/api/candles/backfill', methods=['POST'])
+def api_candles_backfill():
+    started = spread_candles.backfill_async(force=True)
+    return jsonify({'success': True, 'started': started})
+
+
+@app.route('/api/ladder', methods=['GET'])
+def api_ladder():
+    """The spread ladder: price rows around the market with sizes DERIVED
+    from both legs' order books (five levels a side). A leg without a book
+    gives no size — never a size borrowed from the other leg."""
+    from core.spread_ladder import build as build_ladder
+    sig = signal_engine.get_signal()
+    p = _algo_params()
+    k = float(p.get('hedge_ratio', 1.0) or 1.0)
+    try:
+        count = max(7, min(61, int(request.args.get('count', 21))))
+    except (TypeError, ValueError):
+        count = 21
+    inc = request.args.get('increment')
+    try:
+        increment = float(inc) if inc else 1.0
+    except (TypeError, ValueError):
+        increment = 1.0
+    anchor = request.args.get('anchor')
+    try:
+        anchor = float(anchor) if anchor not in (None, '') else None
+    except (TypeError, ValueError):
+        anchor = None
+
+    qty = 0.0
+    if sig.get('leg_a'):
+        qty = engine.config.position_size_usd / float(sig['leg_a'])
+
+    # Both legs' depth (list of {price, volume, type}) from OKX.
+    depth_a = depth_b = None
+    error = ''
+    if loop and engine.spot_adapter and engine.futures_adapter:
+        async def _books():
+            a = await engine.spot_adapter.get_orderbook(engine.config.spot_symbol, 5)
+            b = await engine.futures_adapter.get_orderbook(engine.config.futures_symbol, 5)
+            return a, b
+        try:
+            ob_a, ob_b = asyncio.run_coroutine_threadsafe(_books(), loop).result(timeout=5)
+            def _norm(ob):
+                if not ob:
+                    return None
+                rows = []
+                for px, vol in (ob.get('bids') or []):
+                    rows.append({'price': px, 'volume': vol, 'type': 'bid'})
+                for px, vol in (ob.get('asks') or []):
+                    rows.append({'price': px, 'volume': vol, 'type': 'ask'})
+                return rows or None
+            depth_a, depth_b = _norm(ob_a), _norm(ob_b)
+        except Exception as e:
+            error = f'order books unavailable: {e}'
+    else:
+        error = 'no exchange connection — sizes unavailable'
+
+    rows = build_ladder(depth_a, depth_b, k, qty, qty,
+                        sig.get('sell_spread'), sig.get('buy_spread'),
+                        increment, count=count, anchor=anchor)
+
+    # The position's levels, marked on the ladder (from the algo snapshot).
+    st = algo_trader.get_state()
+    markers = st.get('spread_levels') or {}
+    op = _open_position_view()
+    return jsonify({
+        'rows': rows,
+        'increment': increment,
+        'sell_spread': sig.get('sell_spread'),
+        'buy_spread': sig.get('buy_spread'),
+        'legs': [engine.config.spot_symbol, engine.config.futures_symbol],
+        'qty': round(qty, 6),
+        'trade_direction': str(p.get('trade_direction', 'both')),
+        'position': ({'owner': op['owner'], 'direction': op['direction'],
+                      'qty': op['qty']} if op else None),
+        'markers': {'entry': markers.get('entry'),
+                    'break_even': markers.get('break_even'),
+                    'take_profit': markers.get('take_profit'),
+                    'stop': markers.get('stop')},
+        'error': error,
+    })
+
+
+@app.route('/api/desk/trades', methods=['GET'])
+def api_desk_trades():
+    """Completed round trips (CLOSE rows joined to their OPEN), newest first."""
+    rows = db.journal_rows(limit=400)
+    opens = {r['id']: r for r in rows if r['event'] == 'OPEN'}
+    trips = []
+    total = 0.0
+    for r in rows:
+        if r['event'] != 'CLOSE':
+            continue
+        o = opens.get(r.get('open_id')) or {}
+        np_ = r.get('net_pnl')
+        total += float(np_ or 0)
+        trips.append({
+            'ts': r['ts'],
+            'time': datetime.fromtimestamp(r['ts'], timezone.utc).strftime('%d %b %H:%M:%S'),
+            'direction': r['direction'], 'qty': r['qty'],
+            'entry_source': o.get('source') or 'manual',
+            'exit_source': r.get('source') or 'manual',
+            'entry_spread': o.get('spread'), 'exit_spread': r.get('spread'),
+            'entry_zscore': o.get('z'), 'exit_zscore': r.get('z'),
+            'entry_leg_a': o.get('leg_a_fill'), 'exit_leg_a': r.get('leg_a_fill'),
+            'entry_leg_b': o.get('leg_b_fill'), 'exit_leg_b': r.get('leg_b_fill'),
+            'held_sec': (r['ts'] - o['ts']) if o.get('ts') else None,
+            'exit_reason': r.get('reason'),
+            'net_pnl': np_, 'gross_pnl': r.get('gross_pnl'), 'fees': r.get('fees'),
+            'peak_pnl': r.get('peak_pnl'), 'trough_pnl': r.get('trough_pnl'),
+        })
+    cum = 0.0
+    for t in reversed(trips):
+        cum += float(t['net_pnl'] or 0)
+        t['cum_pnl'] = round(cum, 2)
+    op = _open_position_view()
+    return jsonify({'trips': trips, 'count': len(trips),
+                    'total_pnl': round(total, 2),
+                    'open': ({'direction': op['direction'], 'source': op['owner'],
+                              'qty': op['qty']} if op else None)})
+
+
+@app.route('/api/execution', methods=['GET'])
+def api_execution():
+    """Fills & slippage: per-leg ref vs fill prices and timing from the
+    shared order path, with summary stats."""
+    events = list(engine.execution_events)
+    fills, gaps, slips = [], [], []
+    orders = 0
+    for e in events:
+        legs = e.get('legs') or []
+        done = [l for l in legs if l.get('filled_at')]
+        orders += 1
+        for l in legs:
+            if l.get('fill_ms') is not None:
+                fills.append(l['fill_ms'])
+            if l.get('slippage_usd') is not None:
+                slips.append(l['slippage_usd'])
+        if len(done) == 2 and all(l.get('filled_at') for l in done):
+            gaps.append(abs(done[0]['filled_at'] - done[1]['filled_at']) * 1000)
+    stats = {
+        'orders': orders,
+        'avg_fill_ms': round(sum(fills) / len(fills)) if fills else None,
+        'avg_leg_gap_ms': round(sum(gaps) / len(gaps)) if gaps else None,
+        'max_leg_gap_ms': round(max(gaps)) if gaps else None,
+        'avg_slippage_usd_per_leg': (round(sum(slips) / len(slips), 4)
+                                     if slips else None),
+    }
+    return jsonify({'events': events, 'stats': stats,
+                    'configured_slippage_bps': getattr(engine.config, 'slippage_bps', None)})
+
+
+@app.route('/api/calibration', methods=['GET'])
+def api_calibration():
+    """Take/hold calibration from measured lifecycle peaks (CLOSE rows)."""
+    rows = [r for r in db.journal_rows(limit=400)
+            if r['event'] == 'CLOSE' and r.get('peak_pnl') is not None]
+    peaks = sorted(float(r['peak_pnl']) for r in rows)
+    out = {'n': len(peaks), 'peak_pctile': {}, 'suggested_take_usd': None}
+    if peaks:
+        def pct(p):
+            i = min(len(peaks) - 1, max(0, int(round(p / 100.0 * (len(peaks) - 1)))))
+            return round(peaks[i], 2)
+        out['peak_pctile'] = {'50': pct(50), '70': pct(70), '90': pct(90)}
+        out['suggested_take_usd'] = pct(65)
+    return jsonify(out)
+
+
+@app.route('/api/drawdown', methods=['GET'])
+def api_drawdown():
+    """Equity drawdown + per-trade adverse/favourable excursion (MAE/MFE)."""
+    rows = [r for r in db.journal_rows(limit=400) if r['event'] == 'CLOSE']
+    rows.sort(key=lambda r: r['ts'])
+    eq = peak = max_dd = 0.0
+    for r in rows:
+        eq += float(r.get('net_pnl') or 0)
+        peak = max(peak, eq)
+        max_dd = max(max_dd, peak - eq)
+    exc = [{'direction': (r['direction'] or '').replace('_SPREAD', ''),
+            'exit_reason': r.get('reason'),
+            'mae_usd': (round(abs(min(0.0, float(r['trough_pnl']))), 2)
+                        if r.get('trough_pnl') is not None else None),
+            'mfe_usd': (round(max(0.0, float(r['peak_pnl'])), 2)
+                        if r.get('peak_pnl') is not None else None),
+            'pnl_usd': (round(float(r['net_pnl']), 2)
+                        if r.get('net_pnl') is not None else None),
+            'util_pct': (round(float(r['net_pnl']) / float(r['peak_pnl']) * 100)
+                         if r.get('net_pnl') is not None and (r.get('peak_pnl') or 0) > 0
+                         else None)}
+           for r in reversed(rows)]
+    return jsonify({'drawdown': {'max_usd': round(max_dd, 2),
+                                 'max_pct': round(max_dd / peak * 100, 1) if peak > 0 else 0.0,
+                                 'current_usd': round(peak - eq, 2),
+                                 'peak_equity_usd': round(peak, 2)},
+                    'excursion': exc[:50]})
+
+
+@app.route('/api/spread-series', methods=['GET'])
+def api_spread_series():
+    """{zscores, spreads} arrays for the desk's line charts."""
+    try:
+        n = max(10, min(2000, int(request.args.get('n', 600))))
+        sec = request.args.get('sec')
+        sec = float(sec) if sec else None
+    except (TypeError, ValueError):
+        n, sec = 600, None
+    s = signal_engine.get_series(max_points=n, last_sec=sec)
+    pts = s.get('points') or []
+    return jsonify({'zscores': [p['z'] for p in pts],
+                    'spreads': [p['spread'] for p in pts],
+                    'mean': s.get('mean'),
+                    'entry_zscore': s.get('entry_zscore')})
+
+
+@app.route('/api/margin', methods=['GET'])
+def api_margin():
+    """OKX account margin + what one spread trade needs (the desk's Margin
+    window)."""
+    out = {'cash': None, 'available': None, 'used': None, 'utilisation_pct': None,
+           'pair': {}, 'error': ''}
+    try:
+        sig = signal_engine.get_signal()
+        ed = algo_trader.edge_preview(sig) or {}
+        per_trade = ed.get('margin_usd')
+        out['pair'] = {'qty': ed.get('qty'), 'notional_usd': ed.get('notional_usd'),
+                       'per_trade_usd': per_trade,
+                       'spot_leverage': getattr(engine.config, 'spot_leverage', 1),
+                       'futures_leverage': getattr(engine.config, 'futures_leverage', 1)}
+        adapter = engine.spot_adapter or engine.futures_adapter
+        if adapter and loop and hasattr(adapter, 'get_account_info'):
+            async def _acc():
+                return await adapter.get_account_info()
+            account = asyncio.run_coroutine_threadsafe(_acc(), loop).result(timeout=8)
+            if account:
+                out['cash'] = account.total_equity
+                out['available'] = account.available_margin
+                out['used'] = account.margin_used
+                if account.total_equity:
+                    out['utilisation_pct'] = round(
+                        (account.margin_used or 0) / account.total_equity * 100, 1)
+                if per_trade and account.available_margin:
+                    out['pair']['headroom_trades'] = int(account.available_margin
+                                                         // per_trade)
+        elif engine.state.paper_trading:
+            out['error'] = 'paper mode — no exchange account connected'
+        else:
+            out['error'] = 'no exchange connection'
+    except Exception as e:
+        out['error'] = str(e)
+    return jsonify(out)
+
+
+@app.route('/desk')
+def desk():
+    """The spread desk — ladder, windows, taskbar."""
+    import time as _time
+    return render_template('desk.html', ver=int(_time.time()))
 
 
 @app.route('/api/engine/status', methods=['GET'])

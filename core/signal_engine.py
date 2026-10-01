@@ -44,7 +44,13 @@ class SignalEngine:
         book_provider: Callable[[], Optional[Dict]],
         persist_path: Optional[Path] = None,
         series_key_provider: Optional[Callable[[], str]] = None,
+        candles=None,
     ):
+        # Optional SpreadCandles: TradingView-style candle bands (EMA basis).
+        # Fed with every sample; used for mean/σ when ``band_source`` is
+        # "candles" (and always published per timeframe, so a position keeps
+        # the bands it entered with when the setting changes).
+        self.candles = candles
         # Top-of-book source: {"leg_a": {bid, ask, ltp, ts}, "leg_b": {…}}.
         self._book_provider = book_provider
         self._book: Optional[Dict] = None        # latest book, for get_signal
@@ -108,6 +114,22 @@ class SignalEngine:
         except Exception:
             pass
         return p
+
+    def _band_params(self) -> Tuple[str, str, int]:
+        """(band_source, timeframe, length) — 'ticks' unless candles are set up."""
+        from core.spread_candles import normalise_tf
+        try:
+            raw = self._params() or {}
+        except Exception:
+            raw = {}
+        src = str(raw.get("band_source", "ticks") or "ticks").lower()
+        if src != "candles" or self.candles is None:
+            src = "ticks"
+        try:
+            n = max(2, int(float(raw.get("band_length", 20) or 20)))
+        except (TypeError, ValueError):
+            n = 20
+        return src, normalise_tf(raw.get("band_timeframe", "15m")), n
 
     # ── control ──────────────────────────────────────────────────────────────
     def start(self) -> bool:
@@ -276,6 +298,21 @@ class SignalEngine:
             self._samples.append((now, float(la), float(lb), spread))
             self._trim(now, window_sec)
             self._update_excursions_locked(now)
+        self._feed_candles(now, la, lb)
+
+    def _feed_candles(self, now: float, la: float, lb: float) -> None:
+        """Candles are built from each leg's LAST TRADE, as a TradingView
+        spread chart is; the book mid is only the fallback without an LTP."""
+        if self.candles is None:
+            return
+        book = self._book or {}
+        ta = (book.get("leg_a") or {}).get("ltp") or la
+        tb = (book.get("leg_b") or {}).get("ltp") or lb
+        try:
+            self.candles.update(now, float(ta), float(tb),
+                                k=float(self._p().get("hedge_ratio", 1.0) or 1.0))
+        except Exception as exc:                      # noqa: BLE001 — never stop sampling
+            logger.debug("SignalEngine: candle update failed: %s", exc)
 
     def push(self, leg_a: float, leg_b: float, ts: Optional[float] = None) -> None:
         """Inject a sample directly (used by tests)."""
@@ -524,6 +561,8 @@ class SignalEngine:
             "sample_status": self._sample_status,
             "ready": False, "last_error": self._last_error,
         }
+        _src, _tf, _n = self._band_params()
+        out.update(band_source=_src, band_timeframe=_tf, band_length=_n)
         if not samples:
             return out
 
@@ -536,6 +575,32 @@ class SignalEngine:
         enough = history_sec >= p["min_signal_minutes"] * 60.0
         mean, std = self._window_stats(spreads, enough, now,
                                        float(p.get("stats_update_interval_sec", 0) or 0))
+        # The tick window's own mean/σ are always published (a position opened
+        # in tick mode keeps them if the band source is switched to candles).
+        out["tick_mean"], out["tick_std"] = round(mean, 4), round(std, 6)
+        src, tf, n_len = self._band_params()
+        k_now = p.get("hedge_ratio", 1.0) or 1.0
+        bands_all: Dict[str, Dict] = {}
+        if self.candles is not None:
+            from core.spread_candles import TIMEFRAMES
+            for _tf2 in TIMEFRAMES:
+                try:
+                    b = self.candles.bands(_tf2, n_len, k_now)
+                except Exception:
+                    b = {"ready": False, "mean": None, "std": None, "count": 0}
+                bands_all[_tf2] = {"mean": b.get("mean"), "std": b.get("std"),
+                                   "ready": bool(b.get("ready")),
+                                   "count": b.get("count", 0),
+                                   "status": b.get("status")}
+        out["bands"] = bands_all
+        if src == "candles":
+            b = bands_all.get(tf) or {}
+            if b.get("ready"):
+                mean, std = float(b["mean"]), float(b["std"])
+            else:
+                std = 0.0                             # not tradeable until N candles exist
+            enough = bool(b.get("ready"))
+            out["candles_have"], out["candles_need"] = b.get("count", 0), n_len
         hl = self.half_life(spreads)
         usable = std > 1e-12
         z = (spread - mean) / std if usable else 0.0
@@ -596,6 +661,10 @@ class SignalEngine:
             mean, std = cache[0], cache[1]
         else:
             mean, std = self.compute_stats(spreads)
+        src, tf, n_len = self._band_params()
+        if src == "candles" and self.candles is not None:
+            b = self.candles.bands(tf, n_len, self._p().get("hedge_ratio", 1.0) or 1.0)
+            mean, std = (b["mean"], b["std"]) if b.get("ready") else (mean, 0.0)
         sd = std if std > 1e-12 else 0.0
 
         step = max(1, len(samples) // max_points)

@@ -137,6 +137,27 @@
             </div>
         </div>
 
+        <!-- Candle bands: TradingView BB with an EMA basis on the spread -->
+        <div class="card mb-3">
+            <div class="card-header py-1 d-flex align-items-center gap-2">
+                <small><i class="bi bi-bar-chart-line me-1"></i>Candle Bands <span class="text-secondary">(BB · EMA basis)</span></small>
+                <select id="cb-last" class="form-select form-select-sm py-0 ms-auto" style="width:auto;font-size:0.72rem;"
+                        title="How many candles the chart shows (the bands always use the full history)">
+                    <option value="40">40 candles</option><option value="80" selected>80 candles</option>
+                    <option value="150">150 candles</option><option value="300">300 candles</option>
+                </select>
+                <select id="cb-tf" class="form-select form-select-sm py-0" style="width:auto;font-size:0.72rem;">
+                    <option value="5m">5 min</option><option value="15m" selected>15 min</option>
+                    <option value="1h">1 hour</option><option value="4h">4 hours</option>
+                </select>
+                <span id="cb-src" class="badge bg-secondary" style="font-size:0.62rem;"></span>
+            </div>
+            <div class="card-body py-2">
+                <canvas id="candleBandChart" height="140"></canvas>
+                <div id="cb-note" class="text-secondary mt-1" style="font-size:0.66rem;"></div>
+            </div>
+        </div>
+
         <!-- Z-Score chart -->
         <div class="card mb-3">
             <div class="card-header py-1"><small><i class="bi bi-activity me-2"></i>Z-Score History</small></div>
@@ -281,6 +302,7 @@
 {% endblock %}
 
 {% block scripts %}
+<script src="/static/candles_chart.js"></script>
 <script>
 // ─── polling: /api/signal (1s) + /api/signal/series (3s) + /api/journal (10s)
 let ENTRY_Z = 2.5, STOP_Z = 4.0;
@@ -412,6 +434,7 @@ function renderPosition(data, al) {
     document.getElementById('manual-lock-note').style.display = algoOn ? '' : 'none';
     manualRow.style.display = (op && !algoOn) ? 'none' : '';
 
+    _lastOpenEntry = op ? al.entry_spread : null;   // entry line on the candle chart
     if (!op) {
         badge.textContent = 'FLAT';
         badge.className = 'badge bg-secondary';
@@ -511,6 +534,44 @@ async function pollSeries() {
     spreadChart.update();
 }
 
+// ─── candle bands (spread OHLC + TradingView BB, EMA basis) ─────────────────
+const candleChart = window.SpreadCandlesChart
+    ? new Chart(document.getElementById('candleBandChart'),
+                SpreadCandlesChart.config({fontSize: 9, xTicks: 6}))
+    : null;
+let _lastOpenEntry = null;
+
+async function pollCandles() {
+    if (!candleChart) return;
+    const tf = document.getElementById('cb-tf').value;
+    const last = document.getElementById('cb-last').value;
+    let d;
+    try {
+        d = await fetch('/api/candles?tf=' + tf + '&last=' + last, {cache: 'no-store'})
+            .then(r => r.json());
+    } catch (e) { return; }
+    const pts = d.points || [];
+    const e = Number(d.entry_zscore || 2.5);
+    const fmt = t => new Date(t * 1000).toLocaleString([], {day: '2-digit', month: 'short',
+        hour: '2-digit', minute: '2-digit', hour12: false});
+    SpreadCandlesChart.set(candleChart, pts, e,
+        (_lastOpenEntry != null && isFinite(_lastOpenEntry)) ? _lastOpenEntry : null, fmt);
+    const src = document.getElementById('cb-src');
+    const onCandles = d.band_source === 'candles';
+    src.textContent = onCandles ? 'ALGO USES CANDLES · ' + d.algo_timeframe : 'ALGO USES TICKS';
+    src.className = 'badge ' + (onCandles && d.timeframe === d.algo_timeframe ? 'bg-success' : 'bg-secondary');
+    const b = d.bands || {}, st = (d.status || {})[d.timeframe] || {}, lp = pts[pts.length - 1];
+    document.getElementById('cb-note').textContent =
+        d.label + ' · BB(' + d.length + ', EMA) ±' + e + 'σ · ' +
+        (b.ready ? 'EMA ' + fmt2(b.mean) + ' · σ ' + fmt2(b.std)
+                 : 'need ' + d.length + ' candles (' + (b.count || 0) + ')') +
+        (lp ? ' · now ' + fmt2(lp.close) + ' @ ' + fmt(lp.t) : '') +
+        ' · history ' + (st.state || 'pending');
+}
+function fmt2(v) { return v == null ? '—' : Number(v).toFixed(2); }
+document.getElementById('cb-tf').onchange = pollCandles;
+document.getElementById('cb-last').onchange = pollCandles;
+
 // ─── excursions + journal ────────────────────────────────────────────────────
 async function pollExcursions() {
     try {
@@ -548,9 +609,10 @@ async function pollJournal() {
     }).join('');
 }
 
-pollSignal(); pollSeries(); pollExcursions(); pollJournal();
+pollSignal(); pollSeries(); pollExcursions(); pollJournal(); pollCandles();
 setInterval(pollSignal, 1000);
 setInterval(pollSeries, 3000);
+setInterval(pollCandles, 3000);
 setInterval(pollExcursions, 5000);
 setInterval(pollJournal, 10000);
 </script>

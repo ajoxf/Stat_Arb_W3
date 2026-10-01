@@ -144,6 +144,24 @@ const AlgoCtl = (function () {
         const ok = document.getElementById('algoCtlConfirm');
         ok.className = 'btn btn-sm fw-semibold ' + opts.button;
         ok.textContent = opts.confirm;
+        if (!(window.bootstrap && bootstrap.Modal)) {
+            // A page without Bootstrap (the desk): the same dialog, shown plainly.
+            return new Promise(resolve => {
+                el.classList.add('algo-ctl-plain', 'show');
+                el.style.display = 'block';
+                const done = (answer) => {
+                    el.classList.remove('show');
+                    el.style.display = 'none';
+                    ok.removeEventListener('click', onOk);
+                    el.querySelectorAll('[data-bs-dismiss]').forEach(b => b.removeEventListener('click', onNo));
+                    resolve(answer);
+                };
+                const onOk = () => done(true);
+                const onNo = () => done(false);
+                ok.addEventListener('click', onOk);
+                el.querySelectorAll('[data-bs-dismiss]').forEach(b => b.addEventListener('click', onNo));
+            });
+        }
         return new Promise(resolve => {
             let answered = false;
             const modal = bootstrap.Modal.getOrCreateInstance(el);

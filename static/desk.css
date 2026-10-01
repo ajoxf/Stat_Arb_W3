@@ -1,0 +1,99 @@
+/* The desk: Arrow Trader's ladder.css does the frame, the bands and the
+ * taskbar. This file only adds what the stat-arb windows need, in the same
+ * palette (bid blue, ask red, light grey frame). */
+
+body.desk { margin: 0; background: var(--panel, #f0f0f0); font: 12px/1.35 Tahoma, Verdana, Segoe UI, sans-serif; color: var(--text, #1a1a1a); }
+.d-none { display: none !important; }
+
+/* ── windows ─────────────────────────────────────────────────────────────── */
+/* The page is exactly one screen tall: the desktop takes what the brand,
+ * banners and taskbar leave, and scrolls INSIDE itself. The taskbar is never
+ * pushed below the fold and nothing (a window, a toast) ever sits on it. */
+html, body.desk { height: 100%; overflow: hidden; }
+body.desk #desktop { position: relative; flex: 1 1 auto; min-height: 0; overflow: auto; }
+body.desk #taskbar { position: relative; z-index: 2030; flex: 0 0 auto; }
+body.desk .window { position: absolute; min-width: 220px; min-height: 90px; display: flex; flex-direction: column; overflow: hidden; }
+body.desk .window > .wbody { flex: 1; overflow: auto; background: #f7f7f7; padding: 6px 8px; }
+body.desk .window > .wbody.flush { padding: 0; }
+body.desk .window .grip { position: absolute; right: 0; bottom: 0; width: 14px; height: 14px; cursor: nwse-resize;
+  background: linear-gradient(135deg, transparent 50%, #9d9d9d 50%, #9d9d9d 60%, transparent 60%, transparent 70%, #9d9d9d 70%, #9d9d9d 80%, transparent 80%); }
+body.desk .titlebar { cursor: move; user-select: none; }
+body.desk .titlebar .winbtns { margin-left: auto; }
+body.desk iframe.embed { width: 100%; height: 100%; border: 0; background: #f0f0f0; display: block; }
+
+/* ── key/value rows and small tables ─────────────────────────────────────── */
+.kv { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; }
+.kv > span:nth-child(odd) { color: var(--frame-muted, #4c4c4c); }
+.kv > span:nth-child(even) { text-align: right; font-family: Consolas, Menlo, monospace; }
+.dtable { width: 100%; border-collapse: collapse; font-size: 11px; }
+.dtable th { position: sticky; top: 0; background: var(--frame, #cfcfcf); text-align: left; padding: 3px 5px; border-bottom: 1px solid var(--frame-line, #9d9d9d); font-weight: 600; }
+.dtable td { padding: 2px 5px; border-bottom: 1px solid #e2e2e2; white-space: nowrap; }
+.dtable td.num { text-align: right; font-family: Consolas, Menlo, monospace; }
+.dtable tr:nth-child(even) td { background: #fbfbfb; }
+.muted { color: var(--frame-muted, #5a5a5a); }
+.up { color: #1b7a35; } .down { color: var(--ask, #b83232); }
+.sec { margin: 8px 0 3px; font-weight: 700; font-size: 11px; color: var(--frame-muted, #4c4c4c); letter-spacing: .04em; text-transform: uppercase; }
+.owner { display: inline-block; padding: 1px 6px; font-size: 10px; font-weight: 700; border-radius: 2px; color: #fff; }
+.owner.algo { background: #1f7ac2; } .owner.manual { background: #6a4fa3; }
+.pill { display: inline-block; padding: 1px 6px; border-radius: 2px; font-size: 10px; font-weight: 700; background: #6a6a6a; color: #fff; }
+.pill.ok { background: #1b7a35; } .pill.warn { background: #8a6b1f; } .pill.bad { background: var(--ask, #b83232); }
+
+/* ── Signal & Position: the two executable prices ────────────────────────── */
+.sides { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.side { border: 2px solid transparent; background: #fff; padding: 6px; text-align: center; }
+.side.armed.sell { border-color: var(--ask, #b83232); } .side.armed.buy { border-color: var(--bid-strong, #1f7ac2); }
+.side.off { opacity: .5; }
+.side .lbl { font-size: 10px; font-weight: 700; letter-spacing: .05em; }
+.side .lbl small { font-weight: 400; color: var(--frame-muted, #5a5a5a); }
+.side .px { font: 700 24px/1.1 Consolas, Menlo, monospace; }
+.side.sell .px { color: var(--ask, #b83232); } .side.buy .px { color: var(--bid-strong, #1f7ac2); }
+.side .zl { font-size: 10px; color: var(--frame-muted, #5a5a5a); margin-top: 3px; border-top: 1px solid #e2e2e2; padding-top: 3px; }
+.side .z { font: 700 18px/1.1 Consolas, Menlo, monospace; }
+.side .z.hot.sell { color: var(--ask, #b83232); } .side .z.hot.buy { color: var(--bid-strong, #1f7ac2); }
+.side .en { font-size: 10px; color: var(--frame-muted, #5a5a5a); font-family: Consolas, Menlo, monospace; }
+.side .en.offline { color: #8a6b1f; font-weight: 700; }
+
+/* ── warm-up bar ─────────────────────────────────────────────────────────── */
+.bar { height: 12px; background: #e2e2e2; border: 1px solid #b8b8b8; position: relative; }
+.bar > i { position: absolute; left: 0; top: 0; bottom: 0; background: #8a6b1f; }
+.bar.ready > i { background: #1b7a35; }
+
+/* ── ladder: markers in the Work column, lock veil ───────────────────────── */
+td.work.mark { font-size: 10px; font-weight: 700; text-align: center; }
+td.work.mark.entry { background: #e6e0f5; color: #3d2a7a; }
+td.work.mark.be { background: #e9e9e9; color: #333; }
+td.work.mark.tp { background: #d7f0dc; color: #1b5e2b; }
+td.work.mark.sl { background: #f6d2d2; color: #7a1010; }
+td.bid.clickable, td.ask.clickable { cursor: pointer; outline: 2px solid #000; outline-offset: -2px; }
+.window.locked-manual .grid { opacity: .55; }
+.lock-note { background: #1f7ac2; color: #fff; padding: 4px 6px; font-weight: 700; font-size: 11px; margin-bottom: 4px; }
+.rail button:disabled, .rail input:disabled { opacity: .45; cursor: not-allowed; }
+
+/* ── the shared ALGO control, on a page without Bootstrap ────────────────── */
+.desk-algo { display: inline-flex; align-items: center; gap: 6px; }
+.desk-algo .algo-ctl { font: 700 11px Tahoma, sans-serif; padding: 3px 8px; cursor: pointer; }
+.desk-algo .badge, .desk-algo .mode-ctl { display: inline-block; padding: 3px 7px; font-weight: 700; font-size: 10px; border-radius: 2px; }
+#algoCtlModal { display: none !important; }
+#algoCtlModal.show { display: flex !important; }
+#algoCtlModal .modal-dialog { background: #fff; border: 1px solid #333; min-width: 380px; max-width: 520px; box-shadow: 0 6px 24px rgba(0,0,0,.35); }
+#algoCtlModal .modal-header { display: flex; align-items: center; padding: 8px 12px; }
+#algoCtlModal .modal-header.bg-danger { background: var(--ask, #b83232); color: #fff; }
+#algoCtlModal .modal-header.bg-success { background: #1b7a35; color: #fff; }
+#algoCtlModal .modal-header.bg-secondary { background: #6a6a6a; color: #fff; }
+#algoCtlModal .modal-title { margin: 0; font-size: 13px; }
+#algoCtlModal .btn-close { margin-left: auto; background: none; border: 0; color: inherit; font-size: 16px; cursor: pointer; }
+#algoCtlModal .btn-close::before { content: "×"; }
+#algoCtlModal .modal-body { padding: 10px 14px; font-size: 12px; }
+#algoCtlModal .modal-footer { display: flex; justify-content: flex-end; gap: 8px; padding: 8px 12px; border-top: 1px solid #ddd; }
+#algoCtlModal .btn { padding: 4px 12px; border: 1px solid #888; background: linear-gradient(#fdfdfd, #e3e3e3); cursor: pointer; }
+#algoCtlModal .btn-danger { background: var(--ask, #b83232); color: #fff; border-color: #7a1010; }
+#algoCtlModal .btn-success { background: #1b7a35; color: #fff; border-color: #0f4d20; }
+#algoCtlModal .btn-dark { background: #333; color: #fff; }
+#algoCtlModal .text-danger { color: var(--ask, #b83232); }
+#algoCtlModal .fw-semibold { font-weight: 600; }
+#algoCtlModal .mb-0 { margin-bottom: 0; } #algoCtlModal .mb-2 { margin-bottom: 6px; }
+
+/* the two legs, one per line, in the narrow rail */
+body.desk .rail .route-box { display: block; background: #fff; border: 1px solid #b8b8b8; padding: 2px 4px; }
+body.desk .rail .route-leg { display: block; font-size: 9px; color: var(--frame-muted, #5a5a5a); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+body.desk .rail .route-leg b { font: 700 9px Consolas, Menlo, monospace; color: #1a1a1a; }

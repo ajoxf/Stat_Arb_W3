@@ -44,6 +44,39 @@
                         <label class="form-label">Stop Z (σ)</label>
                         <input type="number" step="0.1" class="form-control form-control-sm ap" id="stop_zscore">
                     </div>
+                    <div class="col-12"><hr class="my-1">
+                        <small class="text-secondary fw-semibold">Mean &amp; bands</small>
+                        <div class="form-text"><strong>Ticks</strong> = the rolling window above.
+                        <strong>Candles</strong> = TradingView-style bands with an EMA basis on the
+                        spread's candles: basis = EMA(N) of closes, σ = stdev(N), bands = basis ±
+                        Entry Z × σ. Candles are saved to disk and back-filled from OKX, so a restart
+                        needs no warm-up. An open position keeps the bands it entered with.</div>
+                    </div>
+                    <div class="col-6">
+                        <label class="form-label fw-semibold">Band source</label>
+                        <select class="form-select form-select-sm ap" id="band_source">
+                            <option value="ticks">Ticks (rolling window)</option>
+                            <option value="candles">Candles (TradingView BB, EMA basis)</option>
+                        </select>
+                    </div>
+                    <div class="col-6">
+                        <label class="form-label">Candle timeframe</label>
+                        <select class="form-select form-select-sm ap" id="band_timeframe">
+                            <option value="5m">5 min</option><option value="15m">15 min</option>
+                            <option value="1h">1 hour</option><option value="4h">4 hours</option>
+                        </select>
+                    </div>
+                    <div class="col-6">
+                        <label class="form-label">Length N (candles)</label>
+                        <input type="number" step="1" min="2" class="form-control form-control-sm ap" id="band_length">
+                        <div class="form-text">BB length — 20 as on the chart. Entry Z is the band multiplier.</div>
+                    </div>
+                    <div class="col-6">
+                        <label class="form-label">Max hold (candles)</label>
+                        <input type="number" step="1" min="0" class="form-control form-control-sm ap" id="max_hold_candles">
+                        <div class="form-text">Candle mode's time-stop: close after this many candles of the entry timeframe. 0 = off.</div>
+                    </div>
+                    <div class="col-12"><hr class="my-1"></div>
                     <div class="col-6">
                         <label class="form-label fw-semibold">Trade direction</label>
                         <select class="form-select form-select-sm ap" id="trade_direction">

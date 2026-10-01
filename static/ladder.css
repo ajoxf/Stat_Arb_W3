@@ -1,0 +1,2196 @@
+/* The reference screen, in CSS.
+ *
+ * Colours, grid, borders and every load-bearing rule are defined HERE
+ * and served from this process — no CDN, no web font. A blocked CDN has
+ * taken a trading UI down before, and the dialog that reports "could
+ * not save" has to work when the network is what failed.
+ *
+ * The convention is the reference screen's and it is global:
+ *   BID  = blue    ASK = red    GREEN = traded / up
+ * A price must not change colour depending on which table it sits in.
+ */
+
+:root {
+  --chrome: #d4d0c8;          /* the button/input furniture grey */
+  --chrome-dark: #a9a9a9;
+  --panel: #f0f0f0;
+  --grid-line: #808080;
+  --text: #1a1a1a;
+  --muted: #5a5a5a;
+  /* The window FRAME: light grey with dark text. Title bar, quote
+   * strip, rail, column headers, footer and the taskbar are all this.
+   * The BANDS stay the softened ones — on a light frame the saturated
+   * pair shouts, and a band that shouts makes the size printed in it
+   * harder to read. */
+  /* Light grey, and softer than the reference screen's: this is looked
+   * at for eight hours at a time, and the mid grey that photographs
+   * well is tiring to sit in front of. */
+  --frame: #cfcfcf;
+  --frame-dark: #c4c4c4;
+  --frame-line: #9d9d9d;
+  --frame-text: #1c1c1c;
+  --frame-muted: #4c4c4c;
+  --price-cell: #f2f2f2;      /* the price column */
+  --price-line: #e4e4e4;
+
+  /* Softened, deliberately. The saturated pair was right for a dark
+   * frame and is loud on a light one — and a band that shouts makes
+   * the SIZE printed in it harder to read, which is the number being
+   * traded off. The hues are unchanged: bid is blue, ask is red, and
+   * that convention is global. */
+  /* The reference screen's hues, taken down a step. Bid is blue, ask
+   * is red — that convention is global — but neither shouts, and the
+   * size printed in the band stays readable, which is the number being
+   * traded off. */
+  /* Deep blue and a true red. The ask was a maroon — a brown-red that
+   * reads as "old" beside a blue that is plainly blue, and on a screen
+   * where the two sides must be told apart at a glance the pair has to
+   * be the same KIND of colour. */
+  /* TT's own pair, taken from the desk's screenshot of CL-BZ and the
+   * HO-CL crack. Deeper and more saturated than the softened set this
+   * replaces: on TT the bands are furniture the eye stops seeing, and
+   * the SIZE inside them is white, which is what makes a saturated
+   * band work where a pale one needs dark text.
+   *
+   * Both sides are lighter than that screenshot — the blues by four
+   * steps, the reds by one. How far they could go was set by the SIZE
+   * printed on them, which is the number being traded off: the reds
+   * still clear 4.5:1 against the white they carry, and the blues went
+   * past that, which is why the bid side carries dark ink instead. */
+  --bid: #4a9ede;             /* the solid blue bid band */
+  --bid-cell: #6fb6e8;        /* a quantity inside it — a step brighter */
+  --ask: #b83232;             /* the solid red ask band */
+  --ask-cell: #cf4a4a;
+  /* The size printed IN a band, and the two pale tints TT uses for an
+   * order of your own sitting at a price. */
+  --band-text: #ffffff;
+  /* ...and dark ink, for the one band pale enough to need it. */
+  --band-ink: #06304f;
+  --work-buy: #dceffb;
+  --work-sell: #f6c8c8;
+  /* One step deeper, for BUTTONS only. A band is data and gets out of
+   * the way; a button is an action and has white text on it, which
+   * needs the contrast. */
+  --bid-strong: #1f7ac2;
+  --ask-strong: #a02828;
+  --traded: #4a9c5d;          /* LTQ print, positive change */
+  --down: #c0504d;
+  --last-trade: #e6e0f5;      /* the tinted last-traded price cell */
+  --inside: #000000;          /* the inside-market rule */
+
+  --row-h: 17px;
+  --font: "Segoe UI", "DejaVu Sans", Tahoma, sans-serif;
+  --mono: "Consolas", "DejaVu Sans Mono", monospace;
+}
+
+* { box-sizing: border-box; }
+
+/* The page is a column: the desk, then the taskbar. The desk used to
+ * be `calc(100vh - 30px)` against a taskbar that is 33px tall once its
+ * padding and border are counted — and taller again the moment a
+ * button in it grows. Those three pixels were the bottom of every
+ * ladder, sitting behind a fixed bar: the spread row of the two legs'
+ * books, cut off, with nothing to scroll to reach it.
+ *
+ * No number here now. The taskbar takes the height it needs and the
+ * desk takes the rest. */
+body {
+  margin: 0;
+  padding: 0;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: #8d97a5;
+  color: var(--text);
+  font: 12px/1.35 var(--font);
+  overflow: hidden;
+}
+
+.hidden { display: none !important; }
+
+/* -- the name of the system ----------------------------------------- */
+
+/* One title-bar height, top left. Every pixel here is a pixel off the
+ * ladders, so it takes the height of the chrome it sits above and
+ * nothing more — and it never grows or scrolls: it is a name, not a
+ * panel. */
+#brand {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 1px 6px;
+  background: var(--frame-dark);
+  color: var(--frame-text);
+  border-bottom: 1px solid var(--frame-line);
+  user-select: none;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.brand-mark {
+  align-self: center;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+}
+.brand-name {
+  font: 700 12px/1.25 var(--font);
+  letter-spacing: 1.5px;
+}
+/* The first thing to go when the desk is narrow: the name and the mark
+ * are what identify the screen; this only explains it. */
+.brand-note {
+  font-size: 10px;
+  color: var(--frame-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+@media (max-width: 700px) { .brand-note { display: none; } }
+
+/* -- banners ------------------------------------------------------- */
+
+.banner {
+  padding: 6px 12px;
+  font-weight: 600;
+  background: #e8dcc0;
+  border-bottom: 1px solid #9c8850;
+}
+/* Both notices are one line. They are for reference: they name the
+ * thing and where to deal with it, and they close. */
+.banner-open {
+  float: right;
+  margin-left: 8px;
+  padding: 0 8px;
+  background: rgba(255, 255, 255, .3);
+  border: 1px solid rgba(255, 255, 255, .6);
+  color: inherit;
+  cursor: pointer;
+}
+.banner {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.banner-close {
+  float: right;
+  margin-left: 12px;
+  padding: 0 7px;
+  background: rgba(255, 255, 255, .25);
+  border: 1px solid rgba(255, 255, 255, .6);
+  color: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+.banner.critical {
+  background: var(--ask);
+  color: #fff;
+  border-bottom: 2px solid #000;
+}
+.banner .fix {
+  margin-left: 10px;
+  font-weight: 400;
+}
+
+/* -- the desktop of ladder windows --------------------------------- */
+
+#desktop {
+  /* The frame a moved window is positioned inside. Windows that have
+   * not been moved stay in the flex row; the moment one is dragged it
+   * leaves the flow and keeps the place it was put. */
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 2px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.window {
+  /* The frame the resize grip sits in the corner of. */
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  /* Never shrink. A ladder squeezed narrow by the panel beside it puts
+   * the price column somewhere the trader is not expecting it. */
+  flex: 0 0 auto;
+  /* Wide enough for the price column, the two bands and the leg table
+   * beneath them at a readable size. Drag the corner grip for more, in
+   * either direction — the ladder grid takes the width and the rows
+   * take the height. */
+  width: 390px;
+  min-width: 240px;
+  max-height: 100%;
+  resize: none;
+  background: var(--chrome);
+  border: 1px solid var(--chrome-dark);
+  box-shadow: 1px 1px 0 rgba(0, 0, 0, .3);
+}
+
+/* Resized windows: the size they were given, and the inside scrolls
+ * rather than pushing the window back open. */
+.window.sized { max-height: none; overflow: hidden; }
+.window.sized > .body,
+.window.sized > .pane,
+.window.sized > .grid,
+.window.sized > .fw-body,
+.window.sized > .settings-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+.window .grip {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 14px;
+  height: 14px;
+  cursor: nwse-resize;
+  z-index: 4;
+  background: linear-gradient(135deg, transparent 45%,
+                              var(--chrome-dark) 45%, var(--chrome-dark) 55%,
+                              transparent 55%, transparent 70%,
+                              var(--chrome-dark) 70%, var(--chrome-dark) 80%,
+                              transparent 80%);
+}
+
+/* A window that was just opened, said once so the eye finds it. */
+@keyframes reveal-flash {
+  from { box-shadow: 0 0 0 3px #9ec6e4; }
+  to { box-shadow: 1px 1px 0 rgba(0, 0, 0, .3); }
+}
+.window.revealed { animation: reveal-flash .9s ease-out; }
+
+/* Moved windows: out of the row, at the place they were dropped. */
+.window.floating {
+  position: absolute;
+  margin: 0;
+}
+.window.dragging {
+  /* No text selection and no hover work while a window is in flight. */
+  user-select: none;
+  cursor: move;
+  opacity: .96;
+}
+
+.titlebar {
+  cursor: move;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px;
+  background: var(--frame-dark);
+  color: var(--frame-text);
+  font-size: 11px;
+}
+.window.inactive .titlebar { background: #eaeaea; color: #6e6e6e; }
+.titlebar .swatch {
+  width: 9px; height: 9px;
+  background: var(--bid);
+  border: 1px solid #fff;
+}
+.titlebar .title {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 150px;
+}
+.titlebar .route {
+  opacity: .85;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 110px;
+}
+.titlebar .mode-badge { white-space: nowrap; }
+.titlebar .mode-badge {
+  margin-left: auto;
+  padding: 1px 6px;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  font-weight: 700;
+  letter-spacing: .5px;
+}
+/* MARKET MODE CARRIES ITS OWN INK.
+ *
+ * It used to take the title bar's colour, which is a mid grey on an
+ * INACTIVE window — so the badge went grey-on-dark-red the moment the
+ * ladder lost focus, which is most of the time when several are open.
+ * The one label that says a click will cross the market immediately
+ * was the least readable thing in the title bar.
+ *
+ * White, always, and stated after the inactive rule so losing focus
+ * cannot take it back. The border goes: a white outline on a solid
+ * block read as a sticker laid over the bar rather than part of it. */
+.window.mode-market .titlebar .mode-badge,
+.window.mode-market.inactive .titlebar .mode-badge {
+  background: var(--ask);
+  color: var(--band-text);
+  border-color: var(--ask-strong);
+}
+.titlebar button,
+.titlebar select { cursor: default; }
+/* The close button belongs at the FAR right of the title bar. Without
+   this it merely follows the title, which looks correct only while the
+   window is narrow enough for the title to fill the bar — the ladders.
+   The wide Exchanges window put its close button against the title, on
+   the left, where every other window on the screen has none. */
+.titlebar .winbtns { margin-left: auto; }
+.winbtn {
+  background: var(--chrome);
+  border: 1px solid #666;
+  cursor: pointer;
+  line-height: 1;
+  padding: 0 4px;
+}
+
+/* -- the quote strip ----------------------------------------------- */
+
+.quotestrip {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 3px 6px;
+  background: var(--frame);
+  color: var(--frame-text);
+  border-bottom: 1px solid var(--frame-line);
+}
+.quotestrip .netchg {
+  font-size: 17px;
+  font-weight: 700;
+  font-family: var(--mono);
+  color: var(--down);
+}
+.quotestrip .netchg.up { color: var(--traded); }
+.quotestrip .stats {
+  display: flex;
+  flex-direction: column;
+  font-size: 10px;
+  color: var(--frame-muted);
+}
+.quotestrip .stats b { font-family: var(--mono); color: var(--frame-text); }
+.quotestrip label { margin-right: 3px; }
+.quotestrip .ours {
+  margin-left: auto;
+  font-size: 9px;
+  color: var(--frame-muted);
+  border: 1px dotted var(--frame-muted);
+  padding: 0 3px;
+  cursor: help;
+}
+
+/* -- the body: control rail + grid ---------------------------------- */
+
+.body {
+  display: flex;
+  /* The ONLY part of the window that flexes. The quote strip and the
+   * footer are fixed height, so a window sized shorter than its
+   * content crops neither of them — it scrolls the ladder instead. */
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+.quotestrip, .titlebar { flex: 0 0 auto; }
+/* The two legs' books sit here, and they are the answer to "why is the
+ * spread not moving" — so they get their natural height and the LADDER
+ * gives way instead. The ladder is built to scroll; a bid-ask table
+ * with its last row cut off is just a table missing a number.
+ *
+ * The cap is a floor-guard for a window dragged very short, not a
+ * working size: at any ordinary height the footer is well under it and
+ * nothing scrolls. */
+.footer {
+  flex: 0 0 auto;
+  min-height: 0;
+  max-height: 45%;
+  overflow-y: auto;
+}
+
+.rail {
+  display: flex;
+  flex-direction: column;
+  /* Tightened so the whole rail fits a short window without
+   * scrolling: the operator was scrolling past BUY/SELL to reach the
+   * cancels on every ladder, and a button behind a scroll is a button
+   * that is not there when the market moves. */
+  gap: 1px;
+  width: var(--rail-w, 116px);
+  /* Dragged by the operator to fit several ladders side by side. */
+  resize: horizontal;
+  min-width: 96px;
+  /* Never more than a third of the window: the rail is the controls,
+   * the grid is the market, and a rail dragged past this leaves the
+   * price column too narrow to read the thing being traded. */
+  max-width: min(260px, 34%);
+  padding: 3px;
+  /* The rail's height is what the LADDER's floor is set from (see
+   * `fitLadderFloor`), so in the ordinary case this never scrolls. It
+   * stays as a last resort for a screen too short to hold the floor at
+   * all — cut off would be worse, since the cancels live at the bottom.
+   *
+   * Horizontally it never scrolls: a bar under the rail steals a row
+   * and hides nothing worth seeing, because every control in here is
+   * already told to fit the width it is given. */
+  overflow-y: auto;
+  overflow-x: hidden;
+  min-height: 0;
+  background: var(--frame);
+  color: var(--frame-text);
+  border-right: 1px solid var(--frame-line);
+}
+.rail select,
+.rail input[type="number"] {
+  width: 100%;
+  font: 11px var(--font);
+  padding: 3px 3px;
+  background: linear-gradient(#ffffff, #ececec);
+  border: 1px solid var(--frame-line);
+  border-radius: 2px;
+  box-shadow: inset 0 1px 0 #fff;
+}
+.rail select { cursor: pointer; font-weight: 600; }
+.rail select:hover { background: linear-gradient(#ffffff, #e0e0e0); }
+.rail input[type="number"] {
+  background: #fff;                 /* a FIELD, not a key */
+  box-shadow: inset 1px 1px 2px rgba(0, 0, 0, .12);
+}
+.rail .check { font-size: 10px; color: var(--frame-text); }
+.rail .auto-route-box { display: block; margin-top: 3px; }
+.rail .auto-route-state {
+  display: block;
+  font: 700 9px var(--mono);
+  color: var(--frame-muted);
+}
+.rail .fair {
+  margin-top: 4px;
+  padding: 3px;
+  background: #ffffff;
+  border: 1px solid var(--frame-line);
+}
+.rail .x-reach.out-of-range { color: #b03030; }
+.rail .gap-buy.up, .rail .gap-sell.up { color: #2f7d3f; }
+.rail .gap-buy.down, .rail .gap-sell.down { color: #b03030; }
+/* The warning REPLACES the reading, so it has to be readable in a
+ * 100px rail: it wraps, and the correction under it is a real button. */
+.rail .fair-warn {
+  margin-top: 3px;
+  padding: 2px 3px;
+  border: 1px solid #c9a227;
+  background: #fdf6e3;
+  font-size: 9px;
+  line-height: 1.25;
+  color: #6b5300;
+}
+.rail .fair-fix {
+  display: block;
+  width: 100%;
+  margin-top: 3px;
+  font-size: 9px;
+  cursor: pointer;
+}
+.rail .fair-note {
+  font-size: 9px;
+  color: var(--frame-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rail .exit {
+  margin-top: 4px;
+  padding: 3px;
+  background: #ffffff;
+  border: 1px solid var(--frame-line);
+}
+/* Tight on purpose: the rail is 100px wide, so the columns are
+ * initials and the numbers are the only long thing allowed in them. */
+table.exits {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  font: 9px var(--mono);
+}
+table.exits th {
+  text-align: left;
+  color: var(--frame-muted);
+  font-weight: 400;
+  width: 22%;
+}
+table.exits th.col-b, table.exits th.col-s { text-align: right; width: 32%; }
+table.exits th {
+  width: 36%;
+  font-size: 8px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+table.exits tr.heads th { color: var(--frame-muted); }
+table.exits td {
+  text-align: right;
+  /* A little air between the two columns: without it 59.21 and 58.99
+   * meet in the middle and read as one number. */
+  padding-left: 3px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+/* The two directions keep the ladder's colours: a long leaves on the
+ * blue side, a short buys back on the red. */
+table.exits td:nth-child(2) { color: #24558a; }
+table.exits td:nth-child(3) { color: #a02722; }
+.rail .exit-note {
+  font-size: 9px;
+  color: var(--frame-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rail-label { font-size: 10px; color: var(--frame-muted); margin-top: 3px; }
+/* Label and field on ONE line where the label is a word, not a
+ * sentence. Every stacked pair is a row of the rail, and the rail is
+ * read while the market moves. */
+.rail .inline-field {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 3px;
+}
+.rail .inline-field > span {
+  flex: 1 1 auto;
+  font-size: 10px;
+  color: var(--frame-muted);
+}
+/* Shrinkable. Pinned at a fixed basis, these ran past the rail's
+ * right edge at its narrowest — and the rail hides what overflows, so
+ * the field simply lost its last characters. */
+.rail .inline-field input {
+  flex: 0 1 62px;
+  width: 62px;
+  min-width: 0;
+}
+/* Which box is which, said twice: in the label and in the edge, in the
+ * side's own colour. Two identical boxes one above the other is a size
+ * typed into the wrong one. */
+/* ...and the label never wraps. On a narrow rail "Qty SELL" broke
+ * across two lines as "Qty" over "SELL", which reads as one Qty box
+ * with a side underneath it rather than as the SELL box of two — and
+ * the trader then checks the buy size against the sell box before
+ * clicking. It is two words; they stay together. */
+.rail .qty-buy,
+.rail .qty-sell { font-weight: 700; white-space: nowrap; }
+.rail .qty-buy { color: var(--ask-strong); }
+.rail .qty-sell { color: var(--bid-strong); }
+/* The size boxes stay big enough to read a number in at a glance —
+ * they are the last thing checked before a click. */
+.rail .qty-row input { flex: 0 1 72px; width: 72px; min-width: 0; }
+.rail .qty-box.buy { border-left: 3px solid var(--ask-strong); }
+.rail .qty-box.sell { border-left: 3px solid var(--bid-strong); }
+.rail .armed,
+.rail .sell-qty {
+  width: 100%;
+  font-family: var(--mono);
+  font-size: 13px;
+  text-align: center;
+  background: #fff;
+  border: 1px solid var(--grid-line);
+  padding: 2px 0;
+}
+/* Armed is a DIFFERENT state from the ladder's default size, and one
+ * click sends it — so it does not look the same. Teal rather than
+ * bright: the market-mode mark on the touch rows is the other accent
+ * on this window, and two
+ * different meanings in one colour is one meaning nobody reads. */
+.rail .armed.on {
+  background: #0c8599;
+  border-color: #095c6b;
+  color: #fff;
+  font-weight: 700;
+}
+.keypad button.on {
+  background: #0c8599;
+  border-color: #095c6b;
+  color: #fff;
+  font-weight: 700;
+}
+
+/* Which two accounts this ladder is routed across. */
+.route-box {
+  font-size: 10px;
+  color: var(--frame-muted);
+  background: #ffffff;
+  border: 1px solid var(--frame-line);
+  padding: 2px 3px;
+}
+.route-box b {
+  display: block;
+  color: var(--frame-text);
+  font-family: var(--mono);
+}
+.route-box .hint { color: var(--frame-muted); font-size: 9px; }
+/* Three across, not two: six presets in two rows instead of three, and
+ * the row saved is a row of the rail the trader would otherwise have
+ * to scroll for. */
+.keypad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 2px; }
+.keypad button {
+  font: 600 11px var(--font);
+  background: linear-gradient(#ffffff, #e6e6e6);
+  border: 1px solid var(--frame-line);
+  border-radius: 2px;
+  cursor: pointer;
+  padding: 3px 0;
+  box-shadow: inset 0 1px 0 #fff, 0 1px 1px rgba(0, 0, 0, .18);
+}
+.keypad button:hover { background: linear-gradient(#ffffff, #dcdcdc); }
+.keypad button:hover { background: #fff; }
+.default-qty { font-family: var(--mono); text-align: center; }
+
+/* The three fastest actions on the ladder. Big targets on purpose:
+ * these are pressed in a hurry, and a missed click is a missed trade —
+ * or the wrong one. */
+/* Everything on the rail is a KEY: raised, with a highlight along the
+ * top and a shadow under it, and it goes down when it is pressed. On a
+ * trading screen that is not decoration — a control that looks pressed
+ * is the only feedback between the click and the fill. */
+.quick {
+  position: relative;
+  font: 700 12px var(--font);
+  padding: 5px 0;
+  border: 1px solid rgba(0, 0, 0, .35);
+  border-radius: 2px;
+  cursor: pointer;
+  color: #fff;
+  text-shadow: 0 1px 0 rgba(0, 0, 0, .35);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .35),
+              0 1px 2px rgba(0, 0, 0, .3);
+}
+.quick:active,
+.keypad button:active,
+.cxl:not(:disabled):active,
+.btn:active {
+  transform: translateY(1px);
+  box-shadow: inset 0 2px 3px rgba(0, 0, 0, .35);
+}
+.quick small { font-weight: 400; opacity: .85; }
+/* The button takes the colour of the COLUMN it acts on: buying the
+ * spread lifts the offer, which is the red Asks side; selling hits the
+ * bid, which is the blue Bids side. A button coloured the other way is
+ * a button that reads as the opposite trade. */
+.buy-touch { background: var(--ask-strong); }
+.sell-touch { background: var(--bid-strong); }
+.flatten,
+.close-limit-go { background: #444; }
+.quick:hover { filter: brightness(1.15); }
+
+.cxl {
+  font: 600 11px var(--font);
+  text-align: left;
+  padding: 3px 5px;
+  border: 1px solid var(--frame-line);
+  border-radius: 2px;
+  cursor: pointer;
+  background: linear-gradient(#ffffff, #e6e6e6);
+  box-shadow: inset 0 1px 0 #fff, 0 1px 1px rgba(0, 0, 0, .18);
+}
+/* Tinted with the side they pull, as on the reference screen: the sell
+ * button carries the ask's red, the buy button the bid's blue. */
+/* Flat, as TT draws them: pink pulls the sells, blue pulls the buys,
+ * and the grey one in the middle pulls everything. */
+.cxl-s { background: #e9a6aa; }
+.cxl-b { background: #bfe0f4; }
+/* The count of orders the button would pull — how the trader knows it
+ * will do something before pressing it. */
+.cxl sup { font-size: 9px; margin-left: 2px; }
+/* A button with nothing to cancel is not a button. Dead on purpose, and
+ * visibly so — the alternative is three controls that look broken. */
+.cxl:disabled {
+  opacity: .45;
+  cursor: default;
+  filter: grayscale(1);
+}
+
+/* -- the ladder grid ------------------------------------------------ */
+
+.grid {
+  position: relative;
+  flex: 1;
+  /* WITHOUT this the grid is a flex item at its default `min-width:
+   * auto`, which means "never narrower than my content". Drag the rail
+   * wider, or open the ladder on a box that renders the fonts larger,
+   * and the grid refuses to shrink: it pushes past the window's right
+   * edge, and `.body { overflow: hidden }` silently cuts the LTQ
+   * column off. The ladder looked cropped, and nothing said so. */
+  min-width: 0;
+  overflow-y: auto;
+  /* The Work and LTQ columns either side of the coloured bands: near
+   * white, as on the reference screen, so the two bands are the only
+   * colour on the ladder. */
+  background: #f7f7f7;
+}
+.grid table {
+  border-collapse: collapse;
+  width: 100%;
+  table-layout: fixed;
+}
+.grid th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--frame);
+  color: var(--frame-text);
+  border: 1px solid var(--frame-line);
+  font: 600 10px var(--font);
+  padding: 1px 3px;
+  text-align: left;
+}
+.grid td {
+  height: var(--row-h);
+  /* White rules on a grey ladder, as on the reference screen: the
+   * gridlines separate without competing with the coloured bands. */
+  border: 1px solid var(--price-line);
+  padding: 0 3px;
+  font: 11px var(--mono);
+  text-align: right;
+  white-space: nowrap;
+}
+/* Proportions, not pixels. `table-layout: fixed` honours percentages
+ * exactly, so the columns keep their relative weights at any window
+ * width and at any display scaling — where a fixed 46px column keeps
+ * its 46px while the text inside it grows, and clips. The price column
+ * takes what is left, which is right: it is the one being read. */
+.c-work, .c-ltq { width: 15%; }
+.c-bid, .c-ask { width: 18%; }
+/* Which side each column is, said in the header as well as the band —
+ * TT underlines Bids in blue and Asks in red, and it is the one place
+ * the two names sit side by side. */
+.grid th.c-bid { box-shadow: inset 0 -3px 0 var(--bid); }
+.grid th.c-ask { box-shadow: inset 0 -3px 0 var(--ask); }
+
+/* The solid bands. Everything at or below the best bid is the bid side;
+ * everything at or above the best ask is the ask side. */
+/* The bands, and the implied SIZE printed in them — dark on the softer
+ * colour, because the number is what is being traded off. */
+/* Dark text on the softer bands: white on a pale blue is the first
+ * thing to become unreadable, and the size is the number being traded
+ * off. */
+/* THE TWO COLUMNS ARE FURNITURE, and this is the whole point.
+ *
+ * They used to be painted only where the market was: blue from the
+ * best bid DOWN, red from the best offer UP. So the top edge of the
+ * blue and the bottom edge of the red were the two touches, and both
+ * edges moved with every tick — a block of colour growing and
+ * shrinking down the screen. Holding the PRICE rows still did nothing
+ * about it, which is why the ladder still read as moving after the
+ * rows had stopped.
+ *
+ * On a TT ladder the Bids column is solid blue from the top of the
+ * window to the bottom and the Asks column is solid red, always. They
+ * never change size, so there is nothing to track out of the corner of
+ * the eye. What moves is the NUMBERS inside them, which is what the
+ * trader is actually reading.
+ *
+ * Every row is clickable in both columns and always was, so painting
+ * every row also stops the uncoloured rows looking inert. Where the
+ * market IS gets said by the things that say it without moving a block
+ * of colour: the touch markers, the sizes, and the heavy rule. */
+/* THE GRID IS RULED THROUGHOUT, in a very light grey.
+ *
+ * The bands used to run unbroken, because the rule was WHITE and on a
+ * deep blue that cut the column into forty bright tiles — a list
+ * rather than a block of furniture. Both halves of that have changed:
+ * the rule is now a very light grey and the blue is four steps
+ * lighter, so the line separates the rows without carving them up.
+ * Every cell on the ladder is ruled the same way, which is what makes
+ * a row read across as one row. */
+td.bid, td.ask {
+  color: var(--band-text);
+  font-weight: 600;
+}
+/* The bid band is pale enough now that white on it is the first thing
+ * to go. Dark ink on the blue, white on the red: what decides it is
+ * how light the band is, not which side it is. */
+td.bid { color: var(--band-ink); }
+td.bid { background: var(--bid); }
+td.ask { background: var(--ask); }
+/* Kept, and deliberately the same colour. The classes still carry
+ * "which side of the touch is this row", which MARKET mode and the
+ * Filter both read — they just no longer decide whether there is any
+ * colour here. */
+tr.in-bid td.bid { background: var(--bid); }
+tr.in-ask td.ask { background: var(--ask); }
+/* The touch itself: ONE row, a shade lighter, carrying the size and
+ * the arrow. A single row changing shade is not a block of colour
+ * sliding down the screen. */
+/* The touch row's SIZE, in dark ink on the bid side.
+ *
+ * White on this blue was the weakest thing on the ladder even before
+ * it was lightened — about 2.8:1, against 5.2:1 for the same number on
+ * the red side — and the touch size is the number being traded off. A
+ * lighter band makes that worse, so the text goes dark and the number
+ * comes back to a contrast the red side has always had. The red cell
+ * keeps white: it is dark enough to carry it. */
+td.bid.has-qty { background: var(--bid-cell); color: var(--band-ink); }
+td.ask.has-qty { background: var(--ask-cell); }
+
+/* The inside market is drawn by the two BANDS meeting — the blue ends
+ * where the bids end and the red begins at the offers, which is the
+ * same information the old rule carried. One black line on the ladder,
+ * not two: with a rule at the inside AND one at the mid, neither reads
+ * as "the market is here". */
+
+/* THE MID. On a wide spread the two touches are many rows apart, and
+ * "where is the market" is then a question the inside rule alone
+ * cannot answer — so the mid, which is also the row the ladder centres
+ * on, carries a heavier rule of its own. */
+tr.mid-line > td {
+  border-top: 2px solid #111;
+  border-bottom: 2px solid #111;
+}
+tr.mid-line > td.price { background: #dcdcdc; font-weight: 700; }
+
+td.price {
+  text-align: center;
+  font-weight: 600;
+  background: var(--price-cell);
+}
+td.price.last-trade { background: var(--last-trade); }
+td.ltq.print { background: var(--traded); color: #fff; }
+
+/* An order of YOURS at a price. TT tints it pale rather than solid —
+ * it is not the market, it is you, and the two must not look alike. */
+td.work.buy { background: var(--work-buy); color: #0b3a5c; cursor: pointer; }
+td.work.sell { background: var(--work-sell); color: #5c1414; cursor: pointer; }
+
+/* A click that has been SENT but is not in a snapshot yet. Hatched, and
+ * never added into the working total — a ghost is not an order yet, and
+ * a trader who cannot see their click clicks again. */
+/* Clicked, in the book, and NOT at the broker — the guards hold a
+   synthetic order back while the feed reads stale or desynced. It used
+   to be drawn exactly like an order resting at the broker, so a trader
+   watched a level they believed was working while nothing of theirs
+   was in the market. Hollow and amber: present, but not placed. */
+td.work.held {
+  background: #fff;
+  color: #8a6100;
+  font-style: italic;
+  box-shadow: inset 0 0 0 2px #d9a520;
+}
+/* An order in the book that reached NEITHER broker, across the whole
+ * row of the Working orders panel. The reason has always been in the
+ * table — in the ELEVENTH column, off the right edge of any normal
+ * window, behind a sideways scroll nobody makes. On its own row it
+ * cannot be scrolled away from. */
+tr.not-placed td {
+  background: #f3e2b8;
+  color: #5a3d00;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-top: 0;
+}
+
+/* Spreads this click still owes, held back until its close goes
+ * through. Not a working order — it is not at any broker and it is not
+ * in the W count — so it is marked as what it is: the rest of an
+ * instruction, waiting its turn. */
+td.work .after, table .after {
+  margin-left: 3px;
+  padding: 0 2px;
+  font-size: 9px;
+  font-weight: 700;
+  color: #5a3d00;
+  background: #f3e2b8;
+  border-radius: 2px;
+}
+td.work.pending .ghost {
+  display: inline-block;
+  margin-left: 3px;
+  padding: 0 3px;
+  border: 1px dashed currentColor;
+  opacity: .85;
+}
+td.work.pending.buy { background: repeating-linear-gradient(
+  45deg, var(--bid-cell), var(--bid-cell) 4px, #a8dbf7 4px, #a8dbf7 8px); }
+td.work.pending.sell { background: repeating-linear-gradient(
+  45deg, var(--ask-cell), var(--ask-cell) 4px, #e88 4px, #e88 8px); }
+
+/* The row lights up under the finger, before any round trip. */
+@keyframes flash-buy { from { background: var(--bid); } to { background: none; } }
+@keyframes flash-sell { from { background: var(--ask); } to { background: none; } }
+tr.flash-buy > td { animation: flash-buy .35s ease-out; }
+tr.flash-sell > td { animation: flash-sell .35s ease-out; }
+
+td.bid, td.ask { cursor: pointer; }
+tr:hover td.price { outline: 1px solid #333; }
+
+/* MARKET mode is unmistakable: the M rides the cursor over EVERY
+ * clickable price cell, because the mode is what the M names and the
+ * mode does not change halfway down the ladder. The two touch rows
+ * keep their box, so "crosses now" is still visible — a click away
+ * from the touch cannot cross at any price and rests as a working
+ * order, which the toast says when it happens. */
+.window.mode-market td.bid,
+.window.mode-market td.ask {
+  cursor: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24'><text x='2' y='17' font-family='Segoe UI,sans-serif' font-size='15' font-weight='700' fill='%23111' stroke='%23fff' stroke-width='0.7'>M</text></svg>") 4 12, crosshair;
+}
+.window.mode-market tr.market-line td.bid,
+.window.mode-market tr.market-line td.ask,
+.window.mode-market tr.best-ask td.bid,
+.window.mode-market tr.best-ask td.ask {
+  box-shadow: inset 0 0 0 2px #6b5a2b;
+}
+
+.counts .mismatch { background: var(--ask); padding: 0 3px; }
+.counts {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  gap: 6px;
+  padding: 1px 4px;
+  background: var(--bid);
+  color: #fff;
+  font: 10px var(--mono);
+}
+
+/* -- footer --------------------------------------------------------- */
+
+.footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  align-items: center;
+  padding: 2px 6px;
+  background: var(--frame);
+  color: var(--frame-text);
+  border-top: 1px solid var(--frame-line);
+  font-size: 10px;
+}
+.footer .refresh-feed { padding: 1px 6px; font-size: 11px; }
+.footer .feed.ok { color: var(--traded); }
+.footer .feed.warn { color: #8a6b1f; font-weight: 600; }
+.footer .feed.bad { color: var(--ask); font-weight: 700; }
+.footer .pnl.up { color: var(--traded); }
+.footer .pnl.down { color: var(--down); }
+.footer .errors { color: var(--ask); font-weight: 600; }
+/* The two legs' own books, in ONE place: a panel the width of the
+ * window, never wider. It used to be laid out in `ch` units, which is
+ * fine until the prices are four digits and a symbol is long — then it
+ * runs off the right-hand edge of the ladder and the Age column is the
+ * first thing to go, which is the column that says WHICH leg stopped.
+ *
+ * So: a fixed table at 100% of the footer, proportional columns, and
+ * the only thing allowed to overflow is the symbol name, which
+ * truncates. Numbers never truncate. */
+.footer .legs { flex: 1 1 100%; min-width: 0; }
+table.legbook {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  font: 10px/1.45 var(--mono);
+  color: var(--frame-text);
+  /* No box: it belongs to the footer it sits in. A panel with its own
+   * background and border read as a separate window stuck to the
+   * bottom of the ladder. */
+  background: none;
+  border: 0;
+}
+table.legbook th,
+table.legbook td {
+  padding: 0 3px;
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+}
+table.legbook thead th {
+  color: var(--frame-muted);
+  font-weight: 400;
+  border-bottom: 1px solid var(--frame-line);
+}
+table.legbook tbody th {
+  width: 7%;
+  color: var(--frame-muted);
+  text-align: left;
+}
+table.legbook .sym {
+  width: 27%;
+  text-align: left;
+  color: var(--frame-muted);
+  text-overflow: ellipsis;
+}
+/* The ladder's own colours, so a price means the same thing here as it
+ * does in the columns above: bid blue, ask red. */
+table.legbook .c-bid { width: 21%; color: #1f5f96; }
+table.legbook .c-ask { width: 21%; color: #a33; }
+table.legbook .c-width { width: 14%; color: var(--frame-text); }
+table.legbook .c-age { width: 11%; color: var(--frame-muted); }
+table.legbook td.age.bad { color: #b03030; font-weight: 700; }
+table.legbook tr.spread th,
+table.legbook tr.spread td {
+  border-top: 1px solid var(--frame-line);
+  font-weight: 700;
+}
+/* The spread's own row keeps the two colours — it IS a bid and an ask,
+ * the two prices the ladder trades at — and its width is the round
+ * turn, which is the number the whole window is about. */
+table.legbook tr.spread .c-width { color: #7a4b00; }
+
+/* -- the Market Grid ------------------------------------------------ */
+
+.window.market-grid { width: auto; max-width: 100%; }
+.market-grid .grid { overflow: auto; }
+.market-grid table {
+  border-collapse: collapse;
+  /* Auto, not fixed: every column is as wide as the number in it, and
+   * a value that overlaps its neighbour is a value nobody can read. */
+  table-layout: auto;
+  width: max-content;
+}
+.market-grid th {
+  background: var(--chrome);
+  border: 1px solid var(--grid-line);
+  font: 600 10px var(--font);
+  padding: 2px 4px;
+  text-align: right;
+}
+.market-grid th:first-child { text-align: left; }
+.market-grid th { white-space: nowrap; }
+.market-grid td {
+  border: 1px solid #d5d5d5;
+  padding: 1px 6px;
+  font: 11px var(--mono);
+  text-align: right;
+  white-space: nowrap;
+}
+.market-grid td.reason { max-width: 260px; overflow: hidden;
+                         text-overflow: ellipsis; }
+.market-grid td.contract { text-align: left; font-family: var(--font); cursor: pointer; }
+.market-grid td.bid { background: var(--bid); color: #fff; cursor: pointer; }
+.market-grid td.ask { background: var(--ask); color: #fff; cursor: pointer; }
+.market-grid tr.broken td { background: #ffe3e3; }
+.market-grid td.reason { text-align: left; color: var(--ask); font-family: var(--font); }
+.market-grid select { font: 10px var(--font); width: 96px; }
+.market-grid input { font: 10px var(--mono); width: 64px; text-align: right; }
+.window.mode-market .market-grid td.bid,
+.window.mode-market .market-grid td.ask { box-shadow: inset 0 0 0 1px #6b5a2b; }
+
+/* -- the positions monitor ------------------------------------------ */
+
+.window.monitor { width: auto; max-width: 100%; }
+.monitor table { table-layout: auto; width: max-content; min-width: 100%; }
+.monitor th, .monitor td { white-space: nowrap; }
+.monitor .tabs { display: flex; gap: 2px; padding: 2px; background: var(--chrome); }
+.monitor .tabs button {
+  font: 11px var(--font);
+  border: 1px solid var(--chrome-dark);
+  background: var(--panel);
+  cursor: pointer;
+  padding: 2px 8px;
+}
+.monitor .tabs button.on { background: #fff; font-weight: 600; }
+.monitor .pane { overflow: auto; max-height: 60vh; }
+.monitor table { border-collapse: collapse; width: 100%; }
+.monitor th {
+  background: var(--chrome);
+  border: 1px solid var(--grid-line);
+  font: 600 10px var(--font);
+  padding: 2px 4px;
+  text-align: right;
+}
+.monitor th:first-child, .monitor td:first-child { text-align: left; }
+.monitor td {
+  border: 1px solid #d5d5d5;
+  padding: 1px 4px;
+  font: 11px var(--mono);
+  text-align: right;
+}
+.monitor tr.detail td { background: #fafafa; font-size: 10px; }
+/* An order that stopped working, kept on screen with its reason. */
+.monitor tr.dead td { background: #f6eeee; color: var(--muted); }
+.monitor .up { color: var(--traded); font-weight: 600; }
+.monitor .down { color: var(--down); font-weight: 600; }
+.monitor .note {
+  padding: 4px 6px;
+  background: #edeae0;
+  border-top: 1px solid var(--chrome-dark);
+  font: 10px var(--font);
+}
+.monitor .mismatch { background: var(--ask); color: #fff; font-weight: 700; }
+/* A fill that is not ours: the trader's own terminal click. Kept in the
+ * journal, and never mistaken for ours. */
+.monitor tr.theirs td { background: #f4f4f4; font-style: italic; }
+.journal-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 6px;
+  background: var(--chrome);
+  border-bottom: 1px solid var(--chrome-dark);
+  font-size: 11px;
+}
+.journal-controls .btn { text-decoration: none; color: var(--text); }
+
+table.unclaimed { border-collapse: collapse; margin-top: 6px; background: #fff; }
+table.unclaimed th, table.unclaimed td {
+  border: 1px solid var(--chrome-dark);
+  padding: 1px 6px;
+  font: 11px var(--mono);
+  color: var(--text);
+}
+
+/* -- taskbar -------------------------------------------------------- */
+
+#taskbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  height: 28px;
+  padding: 2px 4px;
+  background: var(--frame);
+  border-top: 1px solid var(--frame-line);
+}
+#tabs { display: flex; gap: 3px; }
+
+/* The + menu: every ladder this installation has. */
+.menu {
+  position: fixed;
+  bottom: 32px;
+  left: 6px;
+  z-index: 2060;
+  min-width: 260px;
+  max-height: 60vh;
+  overflow: auto;
+  padding: 4px;
+  background: var(--frame);
+  border: 1px solid var(--frame-line);
+  box-shadow: 2px 2px 0 rgba(0, 0, 0, .35);
+}
+.menu-title {
+  padding: 3px 4px;
+  color: var(--frame-muted);
+  font: 700 10px var(--font);
+  text-transform: uppercase;
+}
+.menu button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 4px 6px;
+  background: none;
+  border: 0;
+  color: var(--frame-text);
+  font: 12px var(--font);
+  cursor: pointer;
+}
+.menu button small {
+  display: block;
+  color: var(--frame-muted);
+  font-size: 10px;
+}
+.menu button:hover { background: var(--bid); }
+.menu-note { padding: 4px 6px; color: var(--frame-muted); font-size: 11px; }
+/* "Is it working?", always on screen. Green only when both accounts
+ * answered AND every enabled ladder is quoting. */
+.link {
+  padding: 2px 8px;
+  font: 700 11px var(--font);
+  color: #fff;
+  border: 1px solid rgba(0, 0, 0, .35);
+  cursor: help;
+}
+.link.ok { background: #1b7a35; }
+.link.warn { background: #8a6b1f; }
+.link.bad { background: var(--ask); }
+.link.unknown { background: #6a6a6a; }
+.tab.off { opacity: .6; text-decoration: line-through; }
+.tab:active { transform: translateY(1px); box-shadow: inset 0 2px 3px rgba(0, 0, 0, .3); }
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font: 600 11px var(--font);
+  background: linear-gradient(#ffffff, #e2e2e2);
+  border-radius: 2px;
+  box-shadow: inset 0 1px 0 #fff, 0 1px 1px rgba(0, 0, 0, .2);
+  border: 1px solid var(--chrome-dark);
+  padding: 2px 8px;
+  cursor: pointer;
+}
+.tab.on { background: #fff; font-weight: 600; }
+.tab .badge {
+  background: var(--bid);
+  color: #fff;
+  border-radius: 2px;
+  padding: 0 4px;
+  font-size: 9px;
+}
+.taskbar-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.taskbar-right .stat { font: 10px var(--mono); color: var(--muted); }
+.kill {
+  font: 700 11px var(--font);
+  background: var(--ask);
+  color: #fff;
+  border: 1px solid #7a1010;
+  padding: 2px 10px;
+  cursor: pointer;
+}
+
+/* -- modal and toasts ----------------------------------------------- */
+
+.modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, .45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2050;
+}
+.modal-box {
+  background: #fff;
+  border: 1px solid #333;
+  padding: 14px 16px;
+  min-width: 380px;
+  max-width: 520px;
+}
+.modal-box h2 { margin: 0 0 6px; font-size: 14px; }
+table.keys { border-collapse: collapse; margin-bottom: 8px; }
+table.keys th {
+  text-align: left;
+  padding: 2px 10px 2px 0;
+  font: 700 12px var(--mono);
+  white-space: nowrap;
+}
+table.keys td { padding: 2px 0; font-size: 12px; }
+.fine { font-size: 11px; color: var(--muted); }
+.modal-box p { margin: 0 0 12px; font-size: 12px; white-space: pre-wrap; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.btn {
+  font: 600 12px var(--font);
+  padding: 3px 12px;
+  border: 1px solid var(--chrome-dark);
+  border-radius: 2px;
+  background: linear-gradient(#ffffff, #e4e4e4);
+  box-shadow: inset 0 1px 0 #fff, 0 1px 1px rgba(0, 0, 0, .18);
+  cursor: pointer;
+}
+.btn:hover { background: linear-gradient(#ffffff, #dadada); }
+.btn.danger { background: var(--ask); color: #fff; border-color: #7a1010; }
+
+#toasts {
+  position: fixed;
+  right: 8px;
+  bottom: 34px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  z-index: 2040;
+  max-width: 460px;
+}
+.toast {
+  background: #fff;
+  border-left: 4px solid var(--ask);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .4);
+  padding: 6px 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+/* An OUTCOME, not a fault. A 4px stripe was the only thing telling
+ * the two apart, so "resting at 8.11 to close 1 position(s)" — the
+ * system doing exactly as it was told — looked like the broker
+ * refusing something, and a desk that reads every notice as an alarm
+ * stops reading them. This one is tinted, and it clears itself. */
+.toast.ok {
+  border-left-color: var(--traded);
+  background: #edf7ee;
+}
+.toast .dismiss { float: right; color: var(--muted); }
+
+/* -- settings: accounts and pairs ------------------------------------ */
+
+.window.settings { width: 980px; max-width: 100%; }
+/* Dense on purpose. This page is a control panel, not a document: the
+ * operator is looking for ONE field, and every centimetre of white
+ * space between the fields is a centimetre they have to scroll past to
+ * find it. Same theme, same type, half the air. */
+.settings-body { overflow: auto; max-height: 70vh; padding: 6px; background: #fff; }
+.settings-body h3 {
+  margin: 8px 0 3px;
+  font-size: 12px;
+  border-bottom: 1px solid var(--chrome-dark);
+  padding-bottom: 1px;
+}
+.settings-body > *:first-child { margin-top: 0; }
+.settings-body .hint { font-size: 10px; line-height: 1.35; }
+.settings-body .where-exits {
+  margin: 3px 0 0;
+  padding: 3px 5px;
+  background: var(--panel, #f2f1ec);
+  border: 1px solid var(--chrome-dark);
+}
+.settings-body h3 small { font-weight: 400; color: var(--muted); margin-left: 8px; }
+.settings-body h4 { margin: 6px 0 3px; font-size: 11px; }
+
+/* Every settings form on this page, on one grid: label and control on
+ * one line, the explanation under them and only where it earns its
+ * place. Three columns where there is room, one where there is not. */
+.settings-body .fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 4px 12px;
+  align-items: start;
+}
+.settings-body .fields .field { gap: 0; }
+.settings-body .fields .field > span { margin-bottom: 0; }
+.settings-body .fields .field .hint {
+  color: var(--muted);
+  margin-top: 1px;
+}
+.settings-body .actions { margin-top: 6px; }
+.conn { padding: 4px 6px; margin-bottom: 5px; }
+
+table.grid-form { border-collapse: collapse; width: 100%; }
+table.grid-form th {
+  background: var(--chrome);
+  border: 1px solid var(--grid-line);
+  font: 600 10px var(--font);
+  padding: 2px 4px;
+  text-align: left;
+}
+table.grid-form td {
+  border: 1px solid #d5d5d5;
+  padding: 3px 4px;
+  font: 11px var(--font);
+  vertical-align: top;
+}
+table.grid-form input,
+table.grid-form select { font: 11px var(--font); width: 100%; padding: 1px 2px; }
+table.grid-form tr.new td { background: #f4f9ff; }
+table.grid-form td.actions { white-space: nowrap; width: 1%; }
+table.grid-form td.actions .btn { margin-right: 3px; }
+
+/* Is the system connected — the first thing on the page, and the one
+ * question the operator is actually asking. */
+.conn {
+  padding: 6px 8px;
+  margin-bottom: 8px;
+  border: 1px solid var(--chrome-dark);
+  font: 12px var(--font);
+}
+.conn.up { background: #ebfbee; border-color: #2f9e44; }
+.conn.down { background: #fff4e6; border-color: #e8590c; }
+.conn.checking { background: var(--panel); color: var(--muted); }
+.conn b { margin-right: 6px; letter-spacing: .5px; }
+.conn ul { margin: 4px 0 0 18px; padding: 0; }
+
+/* The checklist behind Connect / Test / Diagnose. */
+.checklist-head { font: 600 11px var(--font); padding: 3px 0; }
+.checklist-head.pass { color: #1b6b32; }
+.checklist-head.warn { color: #8a6b1f; }
+.checklist-head.fail { color: var(--ask); }
+table.checks { border-collapse: collapse; width: 100%; }
+table.checks td {
+  border-top: 1px solid #e6e6e6;
+  padding: 2px 6px;
+  font: 11px var(--font);
+  vertical-align: top;
+}
+table.checks td.status {
+  width: 46px;
+  font: 700 10px var(--mono);
+  text-align: center;
+}
+table.checks td.what { width: 190px; font-weight: 600; }
+/* The Pairs table's own verdict column: is this ladder actually
+ * quoting, or only saved? */
+td.pair-status { max-width: 320px; font-weight: 600; }
+td.pair-status.c-pass { color: #1b6b32; }
+td.pair-status.c-fail { color: var(--ask); font-weight: 400; }
+td.pair-status.c-info { color: var(--muted); font-weight: 400; }
+tr.c-pass td.status { color: #1b6b32; }
+tr.c-warn td.status { color: #8a6b1f; }
+tr.c-fail td.status { color: var(--ask); }
+tr.c-info td.status { color: var(--muted); }
+ul.fix { margin: 2px 0 2px 16px; padding: 0; color: var(--muted); }
+ul.fix li { margin: 1px 0; }
+tr.checklist td { background: #fbfbfb; }
+
+/* A refusal, on the row it belongs to. Not in a log, and not in a toast
+ * that vanishes before it is read. */
+tr.problem td {
+  background: #ffe3e3;
+  color: #7a1010;
+  font: 11px var(--font);
+}
+tr.good td { background: #ebfbee; color: #1b6b32; font: 11px var(--font); }
+.problem-text { color: var(--ask); }
+
+.hint { font: 10px var(--font); color: var(--muted); margin-top: 2px; }
+.hint .btn.tiny { margin-left: 4px; }
+.btn.tiny { font-size: 10px; padding: 0 5px; }
+
+.pair-form {
+  margin-top: 10px;
+  padding: 8px;
+  border: 1px solid var(--chrome-dark);
+  background: var(--panel);
+}
+.trading-fields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(240px, 1fr));
+  gap: 8px 16px;
+  margin-bottom: 6px;
+}
+.trading-fields .check { font-weight: 600; }
+
+.pair-form .fields {
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 5px 12px;
+}
+.field { display: flex; flex-direction: column; font: 11px var(--font); }
+.field > span { font-weight: 600; margin-bottom: 2px; }
+.field input, .field select { font: 11px var(--font); padding: 1px 3px; }
+.field .symbols { line-height: 1.8; }
+.field .symbol-row { display: flex; gap: 4px; }
+.field .symbol-row input { flex: 1; }
+
+/* The header stays put while the operator scrolls a long account list —
+ * a column whose name has scrolled away is a field being filled in
+ * blind. */
+.settings-body table.grid-form th { position: sticky; top: 0; z-index: 2; }
+
+/* What MT5 itself says, before anything is saved: the derivation beside
+ * every derived number. */
+.derived {
+  margin-top: 5px;
+  padding: 4px 6px;
+  background: #edeae0;
+  border: 1px solid #c4bda4;
+  font: 11px var(--font);
+}
+.pair-form .actions { margin-top: 5px; display: flex; gap: 6px; }
+
+/* --- the centring controls -------------------------------------------
+ * Lock and Centre are one decision — "does this ladder follow the
+ * market?" — so they sit on one line rather than being read as two
+ * unrelated widgets a row apart. */
+.rail .centre-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 4px;
+}
+.rail .centre-row .lock { flex: 1 1 auto; }
+.rail .btn.recentre {
+  /* Takes a row of its own when the two checkboxes have used this one.
+   * Clipped instead, it read "Ce" — a button with half a word on it. */
+  flex: 1 0 auto;
+  padding: 1px 6px;
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+/* A size that CHANGED, for one frame. The eye catches motion far
+ * faster than it reads a number, and on a ladder that no longer moves
+ * this is the only thing left that says the book is live. Background
+ * only: nothing reflows, so the click target never shifts. */
+@keyframes size-tick { from { background-color: #fff6d5; } to { background-color: transparent; } }
+td.bid.ticked, td.ask.ticked { animation: size-tick 320ms ease-out; }
+@media (prefers-reduced-motion: reduce) {
+  td.bid.ticked, td.ask.ticked { animation: none; }
+}
+
+
+/* --- rail density ----------------------------------------------------
+ * Every ladder carries a rail, so a pixel here is a pixel on each of
+ * them. Small enough to fit; never so small the numbers stop being
+ * readable at a glance mid-trade. */
+.rail .rail-label { font-size: 9px; line-height: 1.25; margin: 1px 0 0; }
+.rail .keypad { gap: 2px; }
+.rail .keypad .qty { padding: 1px 0; font-size: 10px; }
+.rail .quick { padding: 4px 0; font-size: 12px; }
+.rail .cxl { padding: 2px 0; font-size: 10px; }
+.rail select, .rail input[type="number"] { padding: 2px 3px; font-size: 10px; }
+.rail .exits { font-size: 9px; }
+.rail .exits td { padding: 0 2px; }
+/* The labels are the widest thing in the box — `P% on M` needs
+ * every pixel at this size, and a clipped label is a figure
+ * nobody can identify. */
+.rail .exits th { padding: 0; white-space: nowrap; }
+.rail .fair-value { font-size: 11px; }
+.rail .route-box { font-size: 9px; line-height: 1.2; }
+/* Equity under each leg: quieter than the symbol, still legible. */
+.rail .route-eq { font-variant-numeric: tabular-nums; opacity: .95; }
+
+
+/* Fair value and the exit, in a window of their own — off by default,
+ * and per pair. The pair is named across the title bar because two of
+ * these open at once are otherwise two identical tables of figures
+ * with nothing to say which instrument either belongs to. */
+/* Compact by construction. Two short tables of figures do not need a
+ * pane the size of a ladder: the labels are read down the left and the
+ * numbers down the right, and everything between them is screen the
+ * trader could have given to a price. */
+/* The window is as wide as its widest ROW and no wider. A fixed width
+ * puts the labels down the left and the numbers hard against the right
+ * with a corridor of nothing between them — which is what this looked
+ * like. Hugging the content, the number sits where the eye already is.
+ */
+.window.fairwin {
+  width: max-content;
+  min-width: 0;
+  max-width: 260px;
+}
+.window.fairwin .fw-body { padding: 0; }
+.window.fairwin .fair,
+.window.fairwin .exit {
+  margin: 0;
+  padding: 2px 4px;
+  border: 0;
+  border-bottom: 1px solid var(--frame-line);
+  background: #fff;
+}
+/* The section name and its cog on ONE line, with a rule under it. */
+.window.fairwin .rail-label {
+  display: block;
+  margin: 0 0 1px;
+  font: 700 10px var(--font);
+  color: var(--frame-text);
+  text-transform: none;
+}
+.window.fairwin .rail-label .cog { float: right; font-size: 10px; }
+/* `auto`, not `fixed`: the label column takes what the words need and
+ * the figures follow immediately after. Fixed percentages are what put
+ * the corridor there. */
+.window.fairwin table.exits {
+  width: 100%;
+  table-layout: auto;
+  font: 11px var(--mono);
+}
+.window.fairwin table.exits th {
+  width: auto;
+  white-space: nowrap;
+  font: 10px var(--font);
+  color: var(--frame-muted);
+  padding: 0 6px 0 0;
+  line-height: 1.25;
+}
+.window.fairwin table.exits th.col-b,
+.window.fairwin table.exits th.col-s {
+  width: 1%;
+  padding: 0 0 0 6px;
+  text-align: right;
+}
+.window.fairwin table.exits td {
+  width: 1%;
+  padding: 0 0 0 6px;
+  line-height: 1.25;
+}
+/* One value, not two: the rows that carry a single figure use the
+ * whole right-hand side rather than leaving a column of nothing. */
+.window.fairwin table.exits td[colspan="2"] { text-align: right; }
+/* The notes must not DRIVE the width. `width: max-content` sizes to
+ * the longest line in the window, and "2% of 135.80 margin per spread
+ * = 10.00, over commission" is a sentence — it would set the width of
+ * a panel of four-character numbers. Zero width with a 100% minimum
+ * takes them out of that measurement and wraps them inside whatever
+ * the tables settle on. */
+.window.fairwin .fair-note,
+.window.fairwin .exit-note {
+  width: 0;
+  min-width: 100%;
+  font: 9px var(--font);
+  color: var(--frame-muted);
+  line-height: 1.3;
+  white-space: normal;
+}
+/* Wide enough for the figures that actually appear, so the window does
+ * not breathe in and out as a value changes from an em dash to -4.17.
+ * A panel that resizes three times a second is a panel that cannot be
+ * read. */
+.window.fairwin table.exits td { min-width: 5.2ch; }
+.window.fairwin .exit { border-bottom: 0; }
+.window.fairwin .titlebar .fw-pair {
+  font-weight: 700;
+  letter-spacing: .02em;
+}
+.window.fairwin .fw-body {
+  padding: 4px;
+  background: var(--panel, #f2f1ec);
+  overflow: auto;
+}
+.window.fairwin .fair,
+.window.fairwin .exit { margin-top: 0; margin-bottom: 4px; }
+.window.fairwin table.exits { width: 100%; }
+/* The way in to the fields these panels are computed from. */
+.rail-label .cog {
+  float: right;
+  border: 0;
+  background: none;
+  padding: 0 1px;
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+  color: var(--frame-muted);
+}
+.rail-label .cog:hover { color: var(--frame-text); }
+
+
+/* --- this ladder's own settings ---------------------------------------
+ * Over the ladder, not in the rail: the rail is read top to bottom
+ * while the market moves, and a form in it is a form between the
+ * trader and the price. Three groups side by side so the whole thing
+ * fits without scrolling — which is the point of moving it here.
+ */
+.window.ladder { position: relative; }
+/* `display: flex` below beats the `hidden` attribute, and a pane that
+ * is invisible but still laid over the ladder swallows every click on
+ * it — on the panel where a click IS an order. The browser test for a
+ * one-click market entry caught it within the minute. */
+.ladder-settings[hidden] { display: none !important; }
+.ladder-settings {
+  position: absolute;
+  top: 22px;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel, #f2f1ec);
+  border-top: 1px solid var(--frame-line);
+  font: 11px var(--font);
+}
+.ladder-settings .ls-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 6px;
+  background: var(--frame);
+  color: var(--frame-text);
+  border-bottom: 1px solid var(--frame-line);
+}
+.ladder-settings .ls-head .ls-pair { color: var(--frame-muted); flex: 1; }
+.ladder-settings .ls-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 2px 10px;
+  padding: 4px 6px;
+  align-content: start;
+}
+.ladder-settings .ls-group { min-width: 0; }
+.ladder-settings h4 {
+  margin: 2px 0 3px;
+  font-size: 11px;
+  border-bottom: 1px solid var(--frame-line);
+  padding-bottom: 1px;
+}
+/* Label and field on ONE line: a stacked form of twenty fields is a
+ * form nobody can see the bottom of. */
+.ladder-settings .lsf {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 1px;
+  line-height: 1.5;
+}
+.ladder-settings .lsf > span {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--muted, #666);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ladder-settings .lsf input[type="number"],
+.ladder-settings .lsf input[type="text"],
+.ladder-settings .lsf select {
+  flex: 0 0 78px;
+  width: 78px;
+  font: 11px var(--mono);
+  padding: 0 2px;
+}
+.ladder-settings .lsf input[type="checkbox"] { flex: 0 0 auto; }
+.ladder-settings .ls-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 6px;
+  border-top: 1px solid var(--frame-line);
+}
+.ladder-settings .ls-note { font-size: 10px; }
+
+/* WHICH LEG carries the real pending. Small, quiet, and always there:
+ * in LIMIT mode one leg rests an order and the other crosses at market
+ * when it fills, so a broker window showing nothing on leg A is the
+ * mode working — and until this line existed there was nowhere on the
+ * screen that said so. */
+.rail .quoting-note {
+  margin-top: 2px;
+  font-size: 9px;
+  line-height: 1.25;
+  color: var(--frame-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Darker once a pending is actually AT the broker on that leg. */
+.rail .quoting-note.live { color: var(--frame-text); }
+/* ...and loud when there is an order that reached NEITHER broker. The
+ * ladder draws it exactly like one that is resting, so this line is
+ * the only thing on the screen that can say otherwise. */
+.rail .quoting-note.held {
+  color: #5a3d00;
+  background: #f3e2b8;
+  font-weight: 700;
+  white-space: normal;
+  padding: 1px 2px;
+}
+
+/* Which way out is this ladder's DEFAULT — the one F fires. Both
+ * buttons stay on the screen either way; the ring says which one the
+ * key will press, so nobody has to remember. */
+.rail .quick.primary-exit {
+  outline: 2px solid #f0c674;
+  outline-offset: -2px;
+}
+
+/* Close at a price, on the row under CLOSE ALL. One row, not two: the
+ * rail is read top to bottom while the market moves. */
+.rail .close-lmt-row { display: flex; gap: 2px; margin-top: 2px; }
+.rail .close-lmt-row .close-limit {
+  flex: 1 1 auto;
+  min-width: 0;
+  font: 11px var(--mono);
+}
+.rail .close-lmt-row .close-limit-go {
+  flex: 0 0 auto;
+  margin-top: 0;
+  padding: 1px 6px;
+  font-size: 10px;
+}
+
+/* The three cancels on one row. They are read as a group and pressed
+ * one at a time, and three stacked rows pushed the exit off the rail. */
+.rail .cxl-row { display: flex; gap: 2px; }
+.rail .cxl-row .cxl { flex: 1 1 auto; min-width: 0; padding: 1px 2px; }
+.rail .cxl-row .cxl-all { flex: 1.6 1 auto; }
+.rail .auto-route-state.armed { color: var(--traded); font-weight: 700; }
+
+
+/* The rail, in as few ROWS as it can honestly manage. Every row is one
+ * the trader reads past while the market moves, and the pane must not
+ * scroll: a button behind a scroll is a button that is not there. */
+.rail .route-box.row { display: flex; gap: 3px; }
+.rail .route-box.row .route-leg { flex: 1 1 0; min-width: 0; }
+.rail .mode-row { display: flex; gap: 2px; }
+.rail .mode-row select { flex: 1 1 0; min-width: 0; }
+.rail .centre-row .check { flex: 0 0 auto; }
+
+
+/* A ladder has a FLOOR: dragged shorter, the rail goes behind a
+ * scrollbar and the two legs' books get pushed out of the frame, and
+ * both are things the trader reads while the market moves. Below the
+ * floor the LADDER scrolls instead, which is what a ladder is for.
+ *
+ * The value here is only a starting point. The real one is MEASURED
+ * from the rail on the machine the screen is actually running on —
+ * Segoe UI on Windows sets taller than the font this was designed
+ * against, and a rail that fits by 4px in one place scrolls in the
+ * other. `fitLadderFloor` writes the measured number over this. */
+.window.ladder { min-height: 420px; }
+
+/* AutoRouting, said in the title bar. It changes what a FILL does, so
+ * it is not something to discover by opening a panel. */
+.titlebar .mode-badge.auto {
+  background: var(--traded);
+  color: #fff;
+  font-weight: 700;
+}
+
+/* Ticked on the ladder, switched off for the system: stated flatly
+ * rather than dressed as live. */
+.titlebar .mode-badge.auto-held {
+  background: transparent;
+  color: var(--muted, #777);
+  font-weight: 400;
+  text-decoration: line-through;
+}
+
+/* A field for something this pair does not have: still visible, so the
+ * operator can see it was considered, and plainly not for filling in. */
+.ladder-settings .lsf.not-applicable > span { opacity: .55; }
+.ladder-settings .lsf.not-applicable input {
+  background: var(--chrome, #ececec);
+  color: var(--muted, #777);
+  font-style: italic;
+}
+.ladder-settings h4 small { font-weight: 400; color: var(--muted, #777); }
+
+.window.fairwin .fair-kind,
+.window.fairwin .stat-note {
+  width: 0;
+  min-width: 100%;
+  font: 9px var(--font);
+  color: var(--frame-muted);
+  line-height: 1.3;
+  white-space: normal;
+}
+.ladder-settings .lsf-note {
+  grid-column: 1 / -1;
+  margin-top: 2px;
+  font-size: 9px;
+  line-height: 1.3;
+}
+
+
+/* Which TICKET a working close is against. One click bigger than the
+ * oldest position arms one order per ticket it covers, and without
+ * this those rows differ only by size — which reads as one order
+ * placed twice at the wrong quantity. */
+.monitor .closing {
+  font-size: 10px;
+  font-weight: 700;
+  color: #166aae;
+  letter-spacing: 0.02em;
+}
+
+/* A size the broker will not take, said on the box it was typed into
+ * rather than only in the refusal after the click. */
+.rail .qty-box.over {
+  border-color: var(--ask-strong);
+  background: #fff4f4;
+  color: var(--ask-strong);
+  font-weight: 700;
+}
+/* ...and a keypad preset that could never be traded on this pair. */
+.rail .keypad .qty[disabled] {
+  opacity: .38;
+  cursor: not-allowed;
+}
+
+/* == the Exchanges page ==============================================
+ *
+ * This page is a FORM the operator fills in once and then reads under
+ * pressure, and every rule below exists so a field can be found without
+ * reading the page. The shape is always the same:
+ *
+ *   a section heading, a bordered BOX, and inside the box rows of
+ *   fields where the LABEL SITS ABOVE ITS CONTROL.
+ *
+ * Label above, not beside. A label on the same line as its input drifts
+ * away from it as the column widens, and on the one page where typing
+ * the wrong number into the right-looking box costs money, the label
+ * and the thing it names must not be able to come apart.
+ */
+
+.settings-body section { margin-bottom: 12px; }
+.settings-body section:last-child { margin-bottom: 0; }
+
+/* -- is it connected: the first line, and the only one some days ----- */
+
+.ready-line {
+  padding: 6px 8px;
+  margin-bottom: 10px;
+  border: 1px solid var(--chrome-dark);
+  border-left-width: 4px;
+  background: var(--panel);
+  font: 12px var(--font);
+  line-height: 1.45;
+}
+.ready-line b { margin-right: 6px; letter-spacing: .5px; }
+.ready-line.ready { background: #ebfbee; border-color: #2f9e44; }
+.ready-line.unknown { background: var(--panel); border-color: var(--chrome-dark); }
+/* NOT READY carries the broker's own words, and they can be a
+ * paragraph — `Status : 400 … | Message : … | Request : POST …`. It
+ * wraps, it keeps its line breaks, and it is never truncated: a refusal
+ * cut off mid-sentence is a refusal the operator has to go and find in
+ * a log. */
+.ready-line.not-ready {
+  background: #fff4e6;
+  border-color: #e8590c;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font: 11px var(--mono);
+}
+.ready-line.no-creds { background: #fff4e6; border-color: #e8590c; }
+
+/* -- a box of fields ------------------------------------------------ */
+
+.session-box,
+.charge-block,
+.pair-form {
+  padding: 8px 10px;
+  border: 1px solid var(--frame-line);
+  background: #e6e6e6;
+}
+
+/* Three columns where there is room, fewer where there is not. The
+ * minimum is what a contract symbol needs; below it the row collapses
+ * to one column rather than clipping. */
+/* THREE, counted, not `auto-fit`. auto-fit collapses the tracks a
+ * full-width field spans, so a row holding one field and one wide one
+ * left the single field at its 210px minimum while the row beside it
+ * split into equal thirds — two rows of the same form, two different
+ * column widths. The columns line up down the page or they are not
+ * columns. */
+.field-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px 14px;
+  align-items: start;
+  margin-bottom: 8px;
+}
+@media (max-width: 720px) {
+  .field-row { grid-template-columns: minmax(0, 1fr); }
+}
+.field-row:last-child { margin-bottom: 0; }
+
+/* THE field. Label, control, and — only where it earns its place — one
+ * line of hint underneath. */
+.sfield { display: block; min-width: 0; font: 11px var(--font); }
+.sfield > span {
+  display: block;
+  margin-bottom: 2px;
+  font: 600 10px var(--font);
+  color: var(--frame-muted);
+  letter-spacing: .2px;
+}
+.sfield > span i { font-style: normal; font-weight: 400; opacity: .8; }
+.sfield > input,
+.sfield > select {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  font: 11px var(--font);
+  padding: 2px 4px;
+  border: 1px solid var(--chrome-dark);
+  background: #fff;
+  color: var(--text);
+}
+.sfield > input.mono, .sfield > select.mono { font-family: var(--mono); }
+.sfield > input:focus, .sfield > select:focus {
+  outline: none;
+  border-color: var(--bid-strong);
+  box-shadow: 0 0 0 1px var(--bid-strong);
+}
+.sfield > input[type="checkbox"] { width: auto; display: inline-block; }
+.sfield.wide { grid-column: 1 / -1; }
+.sfield .hint { margin-top: 2px; }
+
+/* A hint is an aside. It never competes with the value above it, and it
+ * never pushes the next field down a line it did not need. */
+.settings-body .hint {
+  font: 10px var(--font);
+  color: var(--frame-muted);
+  line-height: 1.35;
+}
+.settings-body .hint code {
+  font: 10px var(--mono);
+  background: #f4f4f4;
+  border: 1px solid #dcdcdc;
+  padding: 0 2px;
+}
+/* The one hint that is a WARNING — the TOTP seed. Tinted, and it keeps
+ * its own left rule so it reads as a caution and not as prose. */
+.hint.warn-hint {
+  margin-top: 3px;
+  padding: 3px 5px;
+  background: #fff4e6;
+  border-left: 3px solid #e8590c;
+  color: #6b3a06;
+}
+.warn { color: #8a4b04; }
+.ok-ink { color: #1b6b32; font-weight: 600; }
+.bad-ink { color: var(--ask); font-weight: 600; }
+.dim { color: var(--muted); font-weight: 400; }
+.mono { font-family: var(--mono); }
+
+/* The declaration the reconciler leans on. It is a claim about the
+ * ACCOUNT, not a preference, so it sits alone in its own bordered strip
+ * and turns green only when it is switched on. */
+.dedicated {
+  display: block;
+  margin-top: 8px;
+  padding: 5px 7px;
+  border: 1px solid var(--chrome-dark);
+  background: #f6f6f6;
+  font: 11px var(--font);
+}
+.dedicated.on { background: #ebfbee; border-color: #2f9e44; }
+.dedicated input[type="checkbox"] { margin: 0 5px 0 0; vertical-align: -1px; }
+.dedicated .hint { margin-top: 3px; margin-left: 18px; }
+
+/* Buttons, and the sentence that says what pressing one will do. */
+.session-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin-top: 8px;
+}
+.session-actions .hint { margin-top: 0; flex: 1 1 240px; }
+
+/* -- segments -------------------------------------------------------- */
+
+/* Two failure modes, told apart: no rows in the master is one thing,
+ * and no value in the SDK's enum is another. The row colour says which
+ * without reading the note column. */
+.segments-table tr.ok td { background: #f4fbf5; }
+.segments-table tr.warn td { background: #fffaf2; }
+.segments-table td:nth-child(2),
+.segments-table td:nth-child(3) { width: 70px; }
+.segments-table td:nth-child(4) { width: 80px; text-align: right; }
+
+/* -- charges --------------------------------------------------------- */
+
+/* One block per segment, side by side rather than stacked: five
+ * segments down the page is five screens of scrolling to compare two
+ * numbers that belong together. */
+.charges-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 8px;
+}
+.charges-grid > .charge-block { margin-bottom: 0; }
+.charge-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 5px;
+  padding-bottom: 3px;
+  border-bottom: 1px solid var(--frame-line);
+  font: 12px var(--font);
+}
+/* EVERY RATE DEFAULTS TO ZERO, and a zero charge is a P&L that is
+ * wrong in the trader's favour. The block says so on its own head,
+ * where the fields are, and not in a note at the bottom of the page. */
+.warn-pill {
+  padding: 1px 5px;
+  background: #fff4e6;
+  border: 1px solid #e8590c;
+  color: #8a4b04;
+  font: 600 10px var(--font);
+}
+/* Seven short numbers. They are read across, so they are laid out
+ * across, and the label wraps under itself rather than pushing the
+ * next field on to a new row. */
+.charge-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
+  gap: 5px 8px;
+}
+.sfield.tight > span {
+  font-size: 9px;
+  line-height: 1.25;
+  min-height: 22px;
+  letter-spacing: 0;
+}
+.sfield.tight > span small {
+  display: block;
+  font-weight: 400;
+  color: var(--muted);
+}
+.sfield.tight > input { text-align: right; padding: 1px 3px; }
+
+/* -- trading --------------------------------------------------------- */
+
+.settings-body .trading-fields {
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 8px 14px;
+  padding: 8px 10px;
+  border: 1px solid var(--frame-line);
+  background: #e6e6e6;
+  margin-bottom: 0;
+}
+
+/* -- pairs ----------------------------------------------------------- */
+
+.pairs-table td.actions .btn { margin-right: 3px; }
+.pairs-table td .dim { font: 10px var(--mono); }
+
+.pair-form { margin-top: 10px; background: #e6e6e6; }
+.pair-form-head {
+  margin-bottom: 6px;
+  padding-bottom: 3px;
+  border-bottom: 1px solid var(--frame-line);
+  font: 12px var(--font);
+}
+/* The two legs, side by side. A spread is a relationship between them,
+ * and a form that puts one above the other hides the comparison the
+ * operator is actually making. */
+.pair-legs {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 10px;
+}
+.pair-leg {
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid var(--chrome-dark);
+  background: #f6f6f6;
+}
+.pair-leg .sfield { margin-bottom: 6px; }
+.pair-leg .sfield:last-child { margin-bottom: 0; }
+.leg-head {
+  margin: -7px -8px 6px;
+  padding: 3px 8px;
+  font: 600 11px var(--font);
+  color: var(--band-text);
+  letter-spacing: .3px;
+}
+/* Leg A is the one the ratio multiplies; leg B is the one the spread is
+ * quoted in. Blue and red, the same convention as the ladder. */
+.leg-head.leg-a { background: var(--bid-strong); }
+.leg-head.leg-b { background: var(--ask-strong); }
+
+/* What the instrument master says about the contract chosen above —
+ * lot size, tick size, expiry, freeze quantity. Read, never typed. */
+table.spec {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 4px;
+  background: #fff;
+  border: 1px solid #dcdcdc;
+}
+table.spec td {
+  padding: 1px 4px;
+  border-top: 1px solid #ececec;
+  font: 10px var(--font);
+  vertical-align: top;
+}
+table.spec td:first-child { color: var(--frame-muted); width: 45%; }
+table.spec td.mono { font-family: var(--mono); text-align: right; }
+/* A missing lot size REFUSES — it is never assumed to be 1 — and the
+ * refusal is shown where the contract was chosen. */
+.spec-problem {
+  margin-top: 4px;
+  padding: 3px 5px;
+  background: #ffe3e3;
+  border-left: 3px solid var(--ask);
+  color: #7a1010;
+  font: 10px var(--font);
+  line-height: 1.35;
+  white-space: pre-wrap;
+}
+
+/* L_B, k, and the money a tick is worth: the numbers nothing is saved
+ * without, each beside the derivation it came from. */
+.derived-table { margin-top: 6px; }
+.derived-table td:nth-child(2) { text-align: right; width: 120px; }
+.derived-table td:nth-child(3) { font-size: 10px; }
+
+/* A section that cannot render yet says why, in the place its content
+ * would have been — not as a bare sentence floating between two
+ * headings. */
+.settings-body section > p.hint {
+  margin: 0;
+  padding: 5px 7px;
+  border: 1px solid var(--chrome-dark);
+  border-left-width: 3px;
+  background: #f6f6f6;
+  white-space: pre-wrap;
+}

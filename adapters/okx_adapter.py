@@ -235,6 +235,49 @@ class OKXAdapter(ExchangeAdapter):
 
         return None
 
+    async def get_candles(self, symbol: str, bar: str = "15m",
+                          limit: int = 300) -> list:
+        """Historical candles, OLDEST FIRST: [(ts_sec, open, high, low, close)].
+
+        ``bar`` is an OKX bar size (5m, 15m, 1H, 4H…). OKX answers newest
+        first with up to 300 rows per call; pages beyond that come from
+        /history-candles with ``after`` pagination."""
+        bar_map = {"5m": "5m", "15m": "15m", "1h": "1H", "4h": "4H",
+                   "1d": "1Dutc"}
+        okx_bar = bar_map.get(str(bar).lower(), str(bar))
+        rows: list = []
+        try:
+            result = await self._request(
+                "GET", "/api/v5/market/candles",
+                params={"instId": symbol, "bar": okx_bar, "limit": str(min(limit, 300))},
+            )
+            if result and result.get("code") == "0":
+                rows.extend(result.get("data") or [])
+            # Older pages, 100 rows each, keyed by the oldest ts seen so far.
+            while len(rows) < limit and rows:
+                oldest = rows[-1][0]
+                more = await self._request(
+                    "GET", "/api/v5/market/history-candles",
+                    params={"instId": symbol, "bar": okx_bar,
+                            "after": str(oldest), "limit": "100"},
+                )
+                page = (more or {}).get("data") or []
+                if not page:
+                    break
+                rows.extend(page)
+        except Exception as e:
+            logger.error("Error fetching OKX candles for %s %s: %s", symbol, bar, e)
+            return []
+        out = []
+        for r in rows[:limit]:
+            try:
+                out.append((float(r[0]) / 1000.0, float(r[1]), float(r[2]),
+                            float(r[3]), float(r[4])))
+            except (TypeError, ValueError, IndexError):
+                continue
+        out.sort(key=lambda x: x[0])
+        return out
+
     async def place_order(
         self,
         symbol: str,

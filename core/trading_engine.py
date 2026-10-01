@@ -79,6 +79,11 @@ class TradingEngine:
         # stop the AlgoTrader (manual restart required).
         self.on_critical_halt: Optional[Callable[[str], None]] = None
 
+        # Execution log for the desk's Fills & Slippage window: one event per
+        # spread order, with per-leg ref (target) vs fill prices and timing.
+        from collections import deque as _deque
+        self.execution_events = _deque(maxlen=200)
+
         # Control flags
         self._running = False
         self._task: Optional[asyncio.Task] = None
@@ -769,7 +774,7 @@ class TradingEngine:
             return True  # Don't block trading on verification error
 
     async def execute_spread(self, direction: str, quantity: float,
-                             is_entry: bool) -> Dict[str, Any]:
+                             is_entry: bool, source: str = "manual") -> Dict[str, Any]:
         """The ONE spread order path — used by BOTH the manual endpoints and
         the AlgoTrader. ``direction`` is LONG_SPREAD (buy spot / sell perp) or
         SHORT_SPREAD (sell spot / buy perp); for an EXIT it is the direction
@@ -799,6 +804,23 @@ class TradingEngine:
             fut_px = fut_px or ft.mid
             self.state.current_position = (ptype if is_entry else "NONE")
             k = 1.0
+            now = datetime.utcnow().timestamp()
+            self.execution_events.appendleft({
+                "ts": now, "date": datetime.utcnow().strftime("%d %b"),
+                "label": "Open" if is_entry else "Close", "mode": "paper",
+                "source": source,
+                "legs": [
+                    {"symbol": self.config.spot_symbol,
+                     "side": ("buy" if (is_entry == (ptype == "LONG")) else "sell"),
+                     "qty": quantity, "ref_price": spot_px, "fill_price": spot_px,
+                     "slippage": 0.0, "slippage_usd": 0.0, "fill_ms": 0,
+                     "sent_at": now, "filled_at": now, "order_type": "paper"},
+                    {"symbol": self.config.futures_symbol,
+                     "side": ("sell" if (is_entry == (ptype == "LONG")) else "buy"),
+                     "qty": quantity, "ref_price": fut_px, "fill_price": fut_px,
+                     "slippage": 0.0, "slippage_usd": 0.0, "fill_ms": 0,
+                     "sent_at": now, "filled_at": now, "order_type": "paper"},
+                ]})
             return {"success": True, "paper": True,
                     "message": f"paper {'entry' if is_entry else 'exit'} filled",
                     "leg_a_fill": spot_px, "leg_b_fill": fut_px,
@@ -810,6 +832,7 @@ class TradingEngine:
                           quantity=quantity, is_open=is_entry)
             if is_entry:
                 ok = await self._execute_entry_orders(trade, ptype)
+                self._record_execution("Open", source, quantity)
                 if ok:
                     self.state.current_position = ptype
                     return {"success": True, "message": "entry filled",
@@ -824,6 +847,7 @@ class TradingEngine:
                 return {"success": False,
                         "error": self.state.error or "entry orders failed"}
             ok = await self._execute_exit_orders(trade, ptype)
+            self._record_execution("Close", source, quantity)
             if ok:
                 self.state.current_position = "NONE"
                 return {"success": True, "message": "exit filled",
@@ -840,6 +864,43 @@ class TradingEngine:
             return {"success": False, "error": str(e)}
         finally:
             self._executing_trade = False
+
+    def _record_execution(self, label: str, source: str, qty: float) -> None:
+        """One execution event from the order executor's last spread order —
+        per-leg ref (target) vs fill prices and timing, for the desk's
+        Fills & Slippage window."""
+        try:
+            so = self.order_executor.active_order if self.order_executor else None
+            if so is None:
+                return
+            legs = []
+            for leg in (so.spot_leg, so.futures_leg):
+                ref = getattr(leg, "target_price", 0.0) or None
+                fill = leg.filled_price or None
+                side = str(leg.side or "").lower()
+                slip = None
+                if ref and fill:
+                    slip = (fill - ref) if side == "buy" else (ref - fill)
+                sent = so.created_at.timestamp() if so.created_at else None
+                done = leg.last_update.timestamp() if leg.last_update else None
+                legs.append({
+                    "symbol": leg.symbol, "side": side, "qty": leg.quantity,
+                    "ref_price": ref, "fill_price": fill,
+                    "slippage": round(slip, 4) if slip is not None else None,
+                    "slippage_usd": (round(slip * (leg.filled_qty or qty), 4)
+                                     if slip is not None else None),
+                    "fill_ms": (round((done - sent) * 1000)
+                                if sent and done else None),
+                    "sent_at": sent, "filled_at": done,
+                    "order_type": self.config.entry_execution_mode,
+                    "status": leg.status.name if hasattr(leg.status, "name") else str(leg.status),
+                })
+            self.execution_events.appendleft({
+                "ts": datetime.utcnow().timestamp(),
+                "date": datetime.utcnow().strftime("%d %b"),
+                "label": label, "mode": "live", "source": source, "legs": legs})
+        except Exception:
+            logger.debug("could not record execution event", exc_info=True)
 
     async def _execute_entry_orders(self, trade: Trade, position_type: str) -> bool:
         """Execute entry orders on exchanges using the order executor."""

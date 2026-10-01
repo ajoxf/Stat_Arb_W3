@@ -1,169 +1,137 @@
 {% extends "base.html" %}
-
-{% block title %}Analysis - Nexus{% endblock %}
+{% block title %}Analysis — Nexus{% endblock %}
 
 {% block content %}
-<div class="row g-3 mb-4">
-    <!-- Statistics Cards -->
-    <div class="col-md-2">
-        <div class="card">
-            <div class="card-body metric-card">
-                <div class="metric-value">{{ stats.total_trades }}</div>
-                <div class="metric-label">Total Trades</div>
-            </div>
-        </div>
-    </div>
-    <div class="col-md-2">
-        <div class="card">
-            <div class="card-body metric-card">
-                <div class="metric-value price-up">{{ stats.winning_trades }}</div>
-                <div class="metric-label">Winning</div>
-            </div>
-        </div>
-    </div>
-    <div class="col-md-2">
-        <div class="card">
-            <div class="card-body metric-card">
-                <div class="metric-value price-down">{{ stats.losing_trades }}</div>
-                <div class="metric-label">Losing</div>
-            </div>
-        </div>
-    </div>
-    <div class="col-md-2">
-        <div class="card">
-            <div class="card-body metric-card">
-                <div class="metric-value">{{ stats.win_rate }}%</div>
-                <div class="metric-label">Win Rate</div>
-            </div>
-        </div>
-    </div>
-    <div class="col-md-2">
-        <div class="card">
-            <div class="card-body metric-card">
-                <div class="metric-value {% if stats.total_pnl >= 0 %}price-up{% else %}price-down{% endif %}">
-                    ${{ stats.total_pnl }}
-                </div>
-                <div class="metric-label">Total P&L</div>
-            </div>
-        </div>
-    </div>
-    <div class="col-md-2">
-        <div class="card">
-            <div class="card-body metric-card">
-                <div class="metric-value {% if stats.avg_pnl >= 0 %}price-up{% else %}price-down{% endif %}">
-                    ${{ stats.avg_pnl }}
-                </div>
-                <div class="metric-label">Avg P&L</div>
-            </div>
+<h3 class="mb-3"><i class="bi bi-bar-chart me-2"></i>Analysis</h3>
+
+<style>
+    .metric { font-size: 1.4rem; font-weight: 700; font-family: var(--bs-font-monospace); }
+    .metric-label { font-size: 0.72rem; color: var(--bs-secondary-color); }
+</style>
+
+<div class="card">
+    <div class="card-header"><i class="bi bi-clipboard-data me-2"></i>Session Summary</div>
+    <div class="card-body">
+        <div class="row text-center g-3">
+            <div class="col"><div class="metric" id="a-count">0</div><div class="metric-label">Closed Trades</div></div>
+            <div class="col"><div class="metric" id="a-pnl">$0.00</div><div class="metric-label">Net P&amp;L</div></div>
+            <div class="col"><div class="metric" id="a-win">0.0%</div><div class="metric-label">Win Rate</div></div>
+            <div class="col"><div class="metric" id="a-open">—</div><div class="metric-label">Open Position</div></div>
         </div>
     </div>
 </div>
 
-<div class="row g-3">
-    <!-- SD Touch Analysis -->
-    <div class="col-lg-6">
-        <div class="card">
-            <div class="card-header d-flex justify-content-between align-items-center">
-                <span><i class="bi bi-bar-chart me-2"></i>SD Touch Distribution</span>
-                <select class="form-select form-select-sm" style="width: auto;" id="asset-filter">
-                    <option value="">All Assets</option>
-                    {% for key in assets.keys() %}
-                    <option value="{{ key }}" {% if config.asset == key %}selected{% endif %}>{{ key }}</option>
-                    {% endfor %}
-                </select>
-            </div>
-            <div class="card-body">
-                <canvas id="sdTouchChart" height="300"></canvas>
-            </div>
+<div class="card mt-3">
+    <div class="card-header"><i class="bi bi-graph-down-arrow me-2"></i>Drawdown &amp; Adverse Excursion
+        <span class="text-secondary small ms-1">— worst-case behaviour of closed trades</span></div>
+    <div class="card-body">
+        <div class="row text-center g-3 mb-2">
+            <div class="col"><div class="metric text-danger" id="dd-max">$0</div><div class="metric-label">Max Drawdown</div></div>
+            <div class="col"><div class="metric" id="dd-max-pct">0.0%</div><div class="metric-label">Max DD %</div></div>
+            <div class="col"><div class="metric" id="dd-cur">$0</div><div class="metric-label">Current Drawdown</div></div>
+            <div class="col"><div class="metric text-success" id="dd-peak">$0</div><div class="metric-label">Peak Equity</div></div>
         </div>
-    </div>
-
-    <!-- SD Touch Table -->
-    <div class="col-lg-6">
-        <div class="card">
-            <div class="card-header">
-                <i class="bi bi-list me-2"></i>Recent SD Touches
-            </div>
-            <div class="card-body p-0">
-                <div class="table-responsive" style="max-height: 400px; overflow-y: auto;">
-                    <table class="table table-striped table-hover mb-0">
-                        <thead style="position: sticky; top: 0; background: var(--bg-secondary);">
-                            <tr>
-                                <th>Time</th>
-                                <th>SD Level</th>
-                                <th>Direction</th>
-                                <th>Z-Score</th>
-                                <th>Spread</th>
-                            </tr>
-                        </thead>
-                        <tbody id="sd-touch-table">
-                            {% for touch in sd_touches[:50] %}
-                            <tr>
-                                <td>{{ touch.timestamp[:19] if touch.timestamp else '-' }}</td>
-                                <td>
-                                    <span class="badge {% if touch.sd_level > 0 %}bg-success{% else %}bg-danger{% endif %}">
-                                        {{ touch.sd_level }}
-                                    </span>
-                                </td>
-                                <td>
-                                    {% if touch.direction == 'UP' %}
-                                    <i class="bi bi-arrow-up text-success"></i>
-                                    {% else %}
-                                    <i class="bi bi-arrow-down text-danger"></i>
-                                    {% endif %}
-                                </td>
-                                <td>{{ "%.4f"|format(touch.zscore) }}</td>
-                                <td>{{ "%.6f"|format(touch.spread) }}</td>
-                            </tr>
-                            {% else %}
-                            <tr>
-                                <td colspan="5" class="text-center text-secondary">No SD touch events</td>
-                            </tr>
-                            {% endfor %}
-                        </tbody>
-                    </table>
-                </div>
-            </div>
+        <div class="table-responsive" style="max-height:280px;overflow:auto;">
+            <table class="table table-sm table-hover small mb-0">
+                <thead><tr><th>Side</th><th>Exit</th><th class="text-end">MAE (against)</th>
+                    <th class="text-end">MFE (best)</th><th class="text-end">Net P&amp;L</th>
+                    <th class="text-end">Util %</th></tr></thead>
+                <tbody id="dd-tbody"><tr><td colspan="6" class="text-secondary text-center">No closed trades yet.</td></tr></tbody>
+            </table>
         </div>
     </div>
 </div>
 
-<div class="row g-3 mt-3">
-    <!-- Trade Journal -->
-    <div class="col-12">
-        <div class="card">
-            <div class="card-header">
-                <i class="bi bi-journal-text me-2"></i>Trade Journal
+<div class="card mt-3">
+    <div class="card-header"><i class="bi bi-sliders me-2"></i>Take / Hold Calibration
+        <span class="text-secondary small ms-1">— set the take from measured peaks, not opinion</span></div>
+    <div class="card-body">
+        <div class="row text-center g-3">
+            <div class="col"><div class="metric" id="cal-n">0</div><div class="metric-label">Trades</div></div>
+            <div class="col"><div class="metric" id="cal-p50">—</div><div class="metric-label">Peak p50</div></div>
+            <div class="col"><div class="metric" id="cal-p70">—</div><div class="metric-label">Peak p70</div></div>
+            <div class="col"><div class="metric" id="cal-p90">—</div><div class="metric-label">Peak p90</div></div>
+            <div class="col"><div class="metric text-success" id="cal-take">—</div><div class="metric-label">Suggested Take ($)</div></div>
+        </div>
+        <div class="form-text mt-2">Take near the 60–70th percentile of peaks. Feed this into
+            <em>Settings → Exits</em> (the fixed-$ Profit Target, or back out the equivalent % of margin).</div>
+    </div>
+</div>
+
+<div class="card mt-3">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-activity me-2"></i>Z-Score Excursions
+            <span class="text-secondary small ms-1">since <span id="x-since">—</span></span></span>
+        <button class="btn btn-sm btn-outline-secondary" onclick="resetExc()"><i class="bi bi-arrow-counterclockwise"></i> Reset</button>
+    </div>
+    <div class="card-body">
+        <div class="row text-center g-3">
+            <div class="col">
+                <div class="metric" id="x-2">0</div>
+                <div class="metric-label">Touched ±2σ</div>
+                <div class="small text-secondary">↑<span id="x-2u">0</span> &nbsp; ↓<span id="x-2d">0</span></div>
             </div>
-            <div class="card-body p-0">
-                <div class="table-responsive">
-                    <table class="table table-striped table-hover mb-0">
-                        <thead style="background: var(--bg-secondary);">
-                            <tr>
-                                <th>Entry Time</th>
-                                <th>Exit Time</th>
-                                <th>Asset</th>
-                                <th>Type</th>
-                                <th>Entry Z</th>
-                                <th>Exit Z</th>
-                                <th>Entry Spot</th>
-                                <th>Entry Fut</th>
-                                <th>Exit Spot</th>
-                                <th>Exit Fut</th>
-                                <th>Notional</th>
-                                <th>P&L</th>
-                                <th>P&L %</th>
-                                <th>Exit Reason</th>
-                            </tr>
-                        </thead>
-                        <tbody id="trade-journal-table">
-                            <tr>
-                                <td colspan="14" class="text-center text-secondary">Loading...</td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
+            <div class="col">
+                <div class="metric" id="x-3">0</div>
+                <div class="metric-label">Touched ±3σ</div>
+                <div class="small text-secondary">↑<span id="x-3u">0</span> &nbsp; ↓<span id="x-3d">0</span></div>
             </div>
+            <div class="col">
+                <div class="metric text-success" id="x-rev">0</div>
+                <div class="metric-label">Reverted to Mean</div>
+                <div class="small text-secondary">from ≥2σ → 0</div>
+            </div>
+            <div class="col">
+                <div class="metric" id="x-peak">0.00</div>
+                <div class="metric-label">Peak z (max / min)</div>
+                <div class="small text-secondary"><span id="x-max">0.00</span> / <span id="x-min">0.00</span></div>
+            </div>
+        </div>
+        <hr class="my-3">
+        <div style="height: 220px;"><canvas id="exc-canvas"></canvas></div>
+    </div>
+</div>
+
+<div class="card mt-3">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-clock-history me-2"></i>Excursion Log</span>
+        <span class="badge bg-secondary"><span id="x-evcount">0</span> events</span>
+    </div>
+    <div class="card-body p-0">
+        <div class="table-responsive" style="max-height: 360px; overflow-y: auto;">
+            <table class="table table-sm mb-0 align-middle">
+                <thead class="sticky-top" style="background: var(--bs-body-bg);"><tr class="small text-secondary">
+                    <th class="ps-3">Time (UTC)</th><th>Event</th><th>Band</th><th class="text-end pe-3">Z</th>
+                </tr></thead>
+                <tbody id="x-evbody"><tr><td colspan="4" class="text-center text-secondary py-3">No excursions yet</td></tr></tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<div class="card mt-3 mb-3">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-journal-text me-2"></i>Trade Journal</span>
+        <span class="small">Realized P&amp;L: <strong id="j-total" class="text-secondary">$0.00</strong>
+            <span class="badge bg-secondary ms-1"><span id="j-count">0</span> trades</span></span>
+    </div>
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-sm mb-0 align-middle">
+                <thead><tr class="small text-secondary">
+                    <th class="ps-3">Closed (UTC)</th><th>Dir</th><th>Owner</th><th class="text-end">Qty</th>
+                    <th class="text-end">Z (entry→exit)</th>
+                    <th class="text-end">Spread (entry→exit)</th>
+                    <th class="text-end">Spot (entry→exit)</th>
+                    <th class="text-end">Perp (entry→exit)</th>
+                    <th class="text-end">Held</th>
+                    <th>Exit</th>
+                    <th class="text-end">Fees</th>
+                    <th class="text-end">Net P&amp;L</th>
+                    <th class="text-end pe-3">Cum P&amp;L</th>
+                </tr></thead>
+                <tbody id="j-body"><tr><td colspan="13" class="text-center text-secondary py-3">No completed trades yet</td></tr></tbody>
+            </table>
         </div>
     </div>
 </div>
@@ -171,132 +139,164 @@
 
 {% block scripts %}
 <script>
-    // SD Touch Distribution Chart
-    const sdTouchData = {{ sd_touches | tojson }};
+    function _usd(v) { return (v == null) ? '—' : (v < 0 ? '−$' : '$') + Math.abs(Number(v)).toFixed(2); }
+    function _pnlCls(v) { return v > 0 ? 'text-success' : (v < 0 ? 'text-danger' : ''); }
+    function _num(v, d = 2) { return (v == null) ? '—' : Number(v).toFixed(d); }
+    function _arrow(a, b, d = 2) {
+        return `${_num(a, d)} <span class="text-secondary">→</span> ${_num(b, d)}`;
+    }
+    function _held(s) {
+        if (s == null) return '—';
+        s = Math.round(s); const m = Math.floor(s / 60), sec = s % 60;
+        return m ? `${m}m ${sec}s` : `${sec}s`;
+    }
 
-    // Count SD touches by level
-    const sdCounts = {};
-    sdTouchData.forEach(touch => {
-        const level = touch.sd_level;
-        sdCounts[level] = (sdCounts[level] || 0) + 1;
-    });
+    async function load() {
+        // Session summary + journal from the round trips.
+        const d = await fetch('/api/desk/trades').then(x => x.json());
+        const trips = d.trips || [];
+        const wins = trips.filter(t => (t.net_pnl || 0) > 0).length;
+        document.getElementById('a-count').textContent = d.count || 0;
+        const pnlEl = document.getElementById('a-pnl');
+        pnlEl.textContent = _usd(d.total_pnl);
+        pnlEl.className = 'metric ' + _pnlCls(Number(d.total_pnl || 0));
+        document.getElementById('a-win').textContent =
+            trips.length ? (wins / trips.length * 100).toFixed(1) + '%' : '0.0%';
+        document.getElementById('a-open').textContent = d.open
+            ? (d.open.direction || '').replace('_SPREAD', '') + ' (' + (d.open.source || '') + ')'
+            : 'flat';
 
-    const levels = [-3, -2, -1, 1, 2, 3];
-    const counts = levels.map(l => sdCounts[l] || 0);
-    const colors = levels.map(l => l > 0 ? 'rgba(35, 134, 54, 0.8)' : 'rgba(218, 54, 51, 0.8)');
-
-    const sdTouchCtx = document.getElementById('sdTouchChart').getContext('2d');
-    const sdTouchChart = new Chart(sdTouchCtx, {
-        type: 'bar',
-        data: {
-            labels: levels.map(l => (l > 0 ? '+' : '') + l + ' SD'),
-            datasets: [{
-                label: 'Touch Count',
-                data: counts,
-                backgroundColor: colors,
-                borderColor: colors.map(c => c.replace('0.8', '1')),
-                borderWidth: 1
-            }]
-        },
-        options: {
-            responsive: true,
-            plugins: {
-                legend: { display: false }
-            },
-            scales: {
-                x: {
-                    grid: { display: false },
-                    ticks: { color: '#212529' }
-                },
-                y: {
-                    beginAtZero: true,
-                    grid: { color: 'rgba(0, 0, 0, 0.1)' },
-                    ticks: { color: '#212529' }
-                }
-            }
+        document.getElementById('j-count').textContent = d.count || 0;
+        const totEl = document.getElementById('j-total');
+        totEl.textContent = _usd(d.total_pnl);
+        totEl.className = _pnlCls(Number(d.total_pnl || 0));
+        const body = document.getElementById('j-body');
+        if (!trips.length) {
+            body.innerHTML = '<tr><td colspan="13" class="text-center text-secondary py-3">No completed trades yet</td></tr>';
+        } else {
+            body.innerHTML = trips.map(x => {
+                const np = Number(x.net_pnl || 0);
+                return `<tr class="small">
+                    <td class="ps-3 font-monospace">${x.time}</td>
+                    <td><span class="badge ${x.direction === 'LONG_SPREAD' ? 'bg-success' : 'bg-danger'}">${(x.direction || '').replace('_SPREAD', '')}</span></td>
+                    <td><span class="badge ${x.exit_source === 'algo' ? 'bg-primary' : 'bg-secondary'}" style="font-size:.7em">${x.exit_source === 'algo' ? 'algo' : 'man'}</span></td>
+                    <td class="text-end font-monospace">${_num(x.qty, 6)}</td>
+                    <td class="text-end font-monospace">${_arrow(x.entry_zscore, x.exit_zscore)}</td>
+                    <td class="text-end font-monospace">${_arrow(x.entry_spread, x.exit_spread)}</td>
+                    <td class="text-end font-monospace">${_arrow(x.entry_leg_a, x.exit_leg_a)}</td>
+                    <td class="text-end font-monospace">${_arrow(x.entry_leg_b, x.exit_leg_b)}</td>
+                    <td class="text-end">${_held(x.held_sec)}</td>
+                    <td><span class="badge ${({target: 'bg-success', profit_target: 'bg-success', stop: 'bg-danger', dollar_stop: 'bg-danger', time_stop: 'bg-warning text-dark', hard_time_stop: 'bg-warning text-dark'}[x.exit_reason]) || 'bg-secondary'}">${(x.exit_reason || '—').replace(/_/g, ' ')}</span></td>
+                    <td class="text-end font-monospace">${_usd(x.fees)}</td>
+                    <td class="text-end fw-bold ${_pnlCls(np)}">${_usd(np)}</td>
+                    <td class="text-end pe-3 font-monospace ${_pnlCls(Number(x.cum_pnl || 0))}">${_usd(x.cum_pnl)}</td></tr>`;
+            }).join('');
         }
+
+        // Take/hold calibration from measured lifecycle extremes.
+        try {
+            const c = await fetch('/api/calibration').then(x => x.json());
+            const pk = c.peak_pctile || {};
+            const set = (id, v, s) => { const el = document.getElementById(id);
+                if (el) el.textContent = (v == null ? '—' : (s ? _usd(v) : v)); };
+            set('cal-n', c.n);
+            set('cal-p50', pk['50'], true); set('cal-p70', pk['70'], true); set('cal-p90', pk['90'], true);
+            set('cal-take', c.suggested_take_usd, true);
+        } catch (e) { /* leave */ }
+    }
+    load(); setInterval(load, 3000);
+
+    // ── Z-Score Excursions ───────────────────────────────────────────────────
+    function _t(id, v) { document.getElementById(id).textContent = v; }
+    function _dur(s) {
+        s = Math.max(0, Math.round(s));
+        const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+        return h ? `${h}h ${m}m` : `${m}m`;
+    }
+    const _EXC_LABEL = {
+        touch_2_up: 'Touched +2σ', touch_2_down: 'Touched −2σ',
+        touch_3_up: 'Touched +3σ', touch_3_down: 'Touched −3σ',
+        reversion: 'Reverted to mean',
+    };
+    const _EXC_BADGE = {
+        touch_2_up: 'bg-primary', touch_2_down: 'bg-primary',
+        touch_3_up: 'bg-danger', touch_3_down: 'bg-danger', reversion: 'bg-success',
+    };
+    const excChart = new Chart(document.getElementById('exc-canvas'), {
+        type: 'bar',
+        data: { labels: ['↑ +2σ', '↓ −2σ', '↑ +3σ', '↓ −3σ', 'Reversions'],
+            datasets: [{ data: [0, 0, 0, 0, 0],
+                backgroundColor: ['#0d6efd', '#0d6efd', '#dc3545', '#dc3545', '#198754'],
+                borderRadius: 4 }] },
+        options: { responsive: true, maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: { y: { beginAtZero: true, ticks: { precision: 0 } } } },
     });
+    async function loadExc() {
+        try {
+            const e = await fetch('/api/excursions').then(r => r.json());
+            _t('x-2', e.touch_2_total); _t('x-2u', e.touch_2_up); _t('x-2d', e.touch_2_down);
+            _t('x-3', e.touch_3_total); _t('x-3u', e.touch_3_up); _t('x-3d', e.touch_3_down);
+            _t('x-rev', e.reversions);
+            _t('x-max', Number(e.max_z).toFixed(2)); _t('x-min', Number(e.min_z).toFixed(2));
+            _t('x-peak', Number(Math.max(Math.abs(e.max_z), Math.abs(e.min_z))).toFixed(2));
+            _t('x-since', _dur(e.since_sec));
+            excChart.data.datasets[0].data = [e.touch_2_up, e.touch_2_down,
+                e.touch_3_up, e.touch_3_down, e.reversions];
+            excChart.update();
+            _t('x-evcount', e.event_count || 0);
+            const body = document.getElementById('x-evbody');
+            const evs = e.events || [];
+            if (!evs.length) {
+                body.innerHTML = '<tr><td colspan="4" class="text-center text-secondary py-3">No excursions yet</td></tr>';
+            } else {
+                body.innerHTML = evs.map(ev => {
+                    const band = ev.type === 'reversion' ? '—'
+                        : (ev.type.indexOf('_3_') >= 0 ? '3σ' : '2σ');
+                    const zc = ev.z > 0 ? 'text-danger' : (ev.z < 0 ? 'text-success' : '');
+                    return `<tr class="small"><td class="ps-3 font-monospace">${ev.time}</td>
+                        <td><span class="badge ${_EXC_BADGE[ev.type] || 'bg-secondary'}">${_EXC_LABEL[ev.type] || ev.type}</span></td>
+                        <td>${band}</td><td class="text-end pe-3 font-monospace ${zc}">${Number(ev.z).toFixed(2)}</td></tr>`;
+                }).join('');
+            }
+        } catch (e) {}
+    }
+    async function resetExc() {
+        if (!confirm('Reset the session-cumulative ±2σ / ±3σ touch and reversion counters?')) return;
+        try { await fetch('/api/excursions/reset', { method: 'POST' }); loadExc();
+              showToast('Excursion counters reset', 'success'); }
+        catch (e) { showToast('Reset failed: ' + e, 'danger'); }
+    }
+    loadExc(); setInterval(loadExc, 2000);
 
-    // Load trade journal
-    fetch('/api/trade-journal')
-        .then(response => response.json())
-        .then(data => {
-            const tbody = document.getElementById('trade-journal-table');
-            tbody.innerHTML = '';
-
-            if (data.trades.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="14" class="text-center text-secondary">No trades recorded</td></tr>';
+    // ── Drawdown & adverse excursion ─────────────────────────────────────────
+    async function loadDrawdown() {
+        try {
+            const d = await fetch('/api/drawdown').then(r => r.json());
+            const dd = d.drawdown || {};
+            document.getElementById('dd-max').textContent = _usd(dd.max_usd);
+            document.getElementById('dd-max-pct').textContent = (dd.max_pct || 0).toFixed(1) + '%';
+            document.getElementById('dd-cur').textContent = _usd(dd.current_usd);
+            document.getElementById('dd-peak').textContent = _usd(dd.peak_equity_usd);
+            const rows = d.excursion || [];
+            const body = document.getElementById('dd-tbody');
+            if (!rows.length) {
+                body.innerHTML = '<tr><td colspan="6" class="text-secondary text-center">No closed trades yet.</td></tr>';
                 return;
             }
-
-            const formatPrice = (price) => price ? '$' + price.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2}) : '-';
-
-            data.trades.forEach(trade => {
-                const pnlClass = trade.pnl_usd > 0 ? 'price-up' : trade.pnl_usd < 0 ? 'price-down' : '';
-                const row = document.createElement('tr');
-                row.innerHTML = `
-                    <td>${trade.entry_time ? new Date(trade.entry_time).toLocaleString() : '-'}</td>
-                    <td>${trade.exit_time ? new Date(trade.exit_time).toLocaleString() : '-'}</td>
-                    <td>${trade.asset}</td>
-                    <td><span class="badge ${trade.position_type === 'LONG' ? 'badge-long' : 'badge-short'}">${trade.position_type}</span></td>
-                    <td>${(trade.entry_zscore || 0).toFixed(4)}</td>
-                    <td>${trade.exit_zscore ? trade.exit_zscore.toFixed(4) : '-'}</td>
-                    <td>${formatPrice(trade.entry_spot_price)}</td>
-                    <td>${formatPrice(trade.entry_futures_price)}</td>
-                    <td>${formatPrice(trade.exit_spot_price)}</td>
-                    <td>${formatPrice(trade.exit_futures_price)}</td>
-                    <td>$${(trade.notional_usd || 0).toFixed(2)}</td>
-                    <td class="${pnlClass}">$${(trade.pnl_usd || 0).toFixed(2)}</td>
-                    <td class="${pnlClass}">${(trade.pnl_percent || 0).toFixed(2)}%</td>
-                    <td><span class="badge ${trade.is_open ? 'bg-warning' : 'bg-secondary'}">${trade.exit_reason || (trade.is_open ? 'OPEN' : '-')}</span></td>
-                `;
-                tbody.appendChild(row);
-            });
-        })
-        .catch(error => {
-            console.error('Error:', error);
-            document.getElementById('trade-journal-table').innerHTML =
-                '<tr><td colspan="14" class="text-center text-danger">Error loading trades</td></tr>';
-        });
-
-    // Asset filter
-    document.getElementById('asset-filter').addEventListener('change', function() {
-        const asset = this.value;
-        fetch(`/api/sd-touches?asset=${asset}&limit=500`)
-            .then(response => response.json())
-            .then(touches => {
-                // Update chart
-                const sdCounts = {};
-                touches.forEach(touch => {
-                    const level = touch.sd_level;
-                    sdCounts[level] = (sdCounts[level] || 0) + 1;
-                });
-
-                const counts = levels.map(l => sdCounts[l] || 0);
-                sdTouchChart.data.datasets[0].data = counts;
-                sdTouchChart.update();
-
-                // Update table
-                const tbody = document.getElementById('sd-touch-table');
-                tbody.innerHTML = '';
-
-                if (touches.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="5" class="text-center text-secondary">No SD touch events</td></tr>';
-                    return;
-                }
-
-                touches.slice(0, 50).forEach(touch => {
-                    const row = document.createElement('tr');
-                    row.innerHTML = `
-                        <td>${touch.timestamp ? touch.timestamp.substring(0, 19) : '-'}</td>
-                        <td><span class="badge ${touch.sd_level > 0 ? 'bg-success' : 'bg-danger'}">${touch.sd_level}</span></td>
-                        <td><i class="bi bi-arrow-${touch.direction === 'UP' ? 'up text-success' : 'down text-danger'}"></i></td>
-                        <td>${(touch.zscore || 0).toFixed(4)}</td>
-                        <td>${(touch.spread || 0).toFixed(6)}</td>
-                    `;
-                    tbody.appendChild(row);
-                });
-            });
-    });
+            body.innerHTML = rows.map(r => {
+                const sideCls = r.direction === 'SHORT' ? 'text-danger' : 'text-success';
+                const pnlCls = (r.pnl_usd || 0) >= 0 ? 'text-success' : 'text-danger';
+                return `<tr>
+                    <td class="${sideCls}">${r.direction || '—'}</td>
+                    <td class="small">${r.exit_reason || '—'}</td>
+                    <td class="text-end font-monospace text-danger">${r.mae_usd == null ? '—' : '−$' + Number(r.mae_usd).toFixed(2)}</td>
+                    <td class="text-end font-monospace text-success">${r.mfe_usd == null ? '—' : '$' + Number(r.mfe_usd).toFixed(2)}</td>
+                    <td class="text-end font-monospace ${pnlCls}">${_usd(r.pnl_usd)}</td>
+                    <td class="text-end font-monospace">${r.util_pct == null ? '—' : r.util_pct + '%'}</td></tr>`;
+            }).join('');
+        } catch (e) {}
+    }
+    loadDrawdown(); setInterval(loadDrawdown, 3000);
 </script>
 {% endblock %}

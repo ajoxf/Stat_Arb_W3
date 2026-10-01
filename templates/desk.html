@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Desk - Nexus</title>
+<!-- Everything here is self-hosted — a blocked CDN has taken a trading
+     screen down before. -->
+<link rel="icon" href="/static/favicon.svg">
+<link rel="stylesheet" href="/static/ladder.css?v={{ ver }}">
+<link rel="stylesheet" href="/static/desk.css?v={{ ver }}">
+<script src="/static/vendor/chart.umd.min.js"></script>
+<script src="/static/candles_chart.js?v={{ ver }}"></script>
+</head>
+<body class="desk">
+
+<div id="brand" title="Nexus — spread desk">
+  <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true">
+    <rect x="6.5" y="10.9" width="11" height="2.2" fill="#1c1c1c"/>
+    <circle cx="7" cy="12" r="3.4" fill="#5a9bd8"/>
+    <circle cx="17" cy="12" r="3.4" fill="#c0342f"/>
+  </svg>
+  <span class="brand-name">NEXUS</span>
+  <span class="brand-note">spread desk · Spot − Perp</span>
+</div>
+
+<!-- LIVE: real orders. Shown only while the server says LIVE. -->
+<div id="live-trading-banner" class="banner critical hidden d-none" data-live-only>
+  LIVE TRADING — real orders go to OKX with real funds. Check the quantity,
+  the leverage and the available margin before trading.
+</div>
+<!-- The MANUAL / ALGO lock, in words, whenever it is holding anything back. -->
+<div id="lock-banner" class="banner hidden"></div>
+<!-- A dead engine must never look like a quiet market. -->
+<div id="engine-banner" class="banner critical hidden"></div>
+
+<div id="desktop"></div>
+
+<div id="taskbar">
+  <button id="add-panel" class="tab plus" title="Open a window">+</button>
+  <div id="add-menu" class="menu hidden"></div>
+  <div id="tabs"></div>
+  <div class="taskbar-right">
+    <span id="link-badge" class="link unknown" title="OKX connection and price feed">checking…</span>
+    <span class="desk-algo">{% include "_algo_control.html" %}</span>
+    <button id="tidy" class="tab" title="Put every window back in its place">Tidy</button>
+    <a class="tab" href="/dashboard" title="The classic dashboard — same engine">Dashboard</a>
+    <span id="loop-stat" class="stat" title="Age of the last status snapshot">—</span>
+  </div>
+</div>
+
+<!-- One shared dialog for every confirmation on the desk. -->
+<div id="modal" class="modal hidden" role="dialog" aria-modal="true">
+  <div class="modal-box">
+    <h2 id="modal-title"></h2>
+    <p id="modal-body"></p>
+    <div class="modal-actions">
+      <button id="modal-cancel" class="btn">Cancel</button>
+      <button id="modal-confirm" class="btn danger"></button>
+    </div>
+  </div>
+</div>
+
+<!-- Errors stay until they are dismissed. -->
+<div id="toasts"></div>
+
+<script src="/static/desk.js?v={{ ver }}"></script>
+</body>
+</html>

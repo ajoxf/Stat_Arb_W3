@@ -112,6 +112,8 @@ class AlgoTrader:
                 "entry_leg_b": pos.get("entry_leg_b"),
                 "entry_std": pos.get("entry_std"),
                 "entry_time": float(pos.get("ts") or self._clock()),
+                "band_source": pos.get("band_source") or "ticks",
+                "band_tf": pos.get("band_tf"),
                 "peak_pnl": 0.0, "trough_pnl": 0.0,
                 "peak_min": 0.0, "trough_min": 0.0,
                 "restored": True,
@@ -449,10 +451,19 @@ class AlgoTrader:
             self._set_snap(snap)
             return
 
-        if not sig.get("ready"):
-            need = sig.get("min_signal_minutes", 0)
-            have = (sig.get("history_sec") or 0) / 60.0
-            snap["status"] = f"collecting signal ({have:.1f}/{need:.0f} min)"
+        # A held position is managed on the bands it ENTERED with, even if the
+        # band setting has changed since — so its readiness, not the setting's,
+        # gates the exit logic.
+        pos_bands = self._position_bands(sig)
+        if not sig.get("ready") and pos_bands is None:
+            if sig.get("band_source") == "candles":
+                snap["status"] = (f"loading candles ({sig.get('candles_have', 0)}/"
+                                  f"{sig.get('candles_need', 0)} on "
+                                  f"{sig.get('band_timeframe')})")
+            else:
+                need = sig.get("min_signal_minutes", 0)
+                have = (sig.get("history_sec") or 0) / 60.0
+                snap["status"] = f"collecting signal ({have:.1f}/{need:.0f} min)"
             self._set_snap(snap)
             return
 
@@ -504,9 +515,29 @@ class AlgoTrader:
         else:
             self._tick_in_position(p, sig, snap, z, exit_z, stop_z, now,
                                    z_sell, z_buy, sp_sell, sp_buy, z_mid,
-                                   spread_mid, half_life, sample_interval)
+                                   spread_mid, half_life, sample_interval,
+                                   pos_bands)
 
         self._set_snap(snap)
+
+    def _position_bands(self, sig: Dict) -> Optional[Tuple[float, float]]:
+        """(mean, σ) the OPEN position is managed on when they differ from the
+        current setting — the bands it entered with. None = use the signal's."""
+        pos = self._pos
+        if not pos:
+            return None
+        src, tf = pos.get("band_source") or "ticks", pos.get("band_tf")
+        if src == sig.get("band_source") and (src != "candles"
+                                              or tf == sig.get("band_timeframe")):
+            return None
+        if src == "candles":
+            b = (sig.get("bands") or {}).get(tf or "") or {}
+            m, sd = b.get("mean"), b.get("std")
+        else:
+            m, sd = sig.get("tick_mean"), sig.get("tick_std")
+        if m is None or not sd or sd <= 1e-12:
+            return None
+        return float(m), float(sd)
 
     def _tick_flat(self, p, sig, snap, z, std, entry_z, exit_z, now,
                    z_sell, z_buy, sp_sell, sp_buy, z_mid, spread_mid,
@@ -638,13 +669,21 @@ class AlgoTrader:
 
     def _tick_in_position(self, p, sig, snap, z, exit_z, stop_z, now,
                           z_sell, z_buy, sp_sell, sp_buy, z_mid, spread_mid,
-                          half_life, sample_interval) -> None:
+                          half_life, sample_interval,
+                          pos_bands: Optional[Tuple[float, float]] = None) -> None:
         # A position is closed on the OPPOSITE side it was opened on: a LONG
         # (bought) spread is closed by SELLING it, a SHORT by BUYING it.
         if self._pos["direction"] == "LONG_SPREAD":
             z_close, sp_close = z_sell, sp_sell
         else:
             z_close, sp_close = z_buy, sp_buy
+        if pos_bands is not None:
+            # The bands the position ENTERED with, not the current setting's.
+            pm, ps = pos_bands
+            if sp_close is not None:
+                z_close = (float(sp_close) - pm) / ps
+            if spread_mid is not None:
+                z_mid = (float(spread_mid) - pm) / ps
         z = z_close if z_close is not None else z_mid
         entry_z_sign = self._pos["entry_z"]
         reverted = (z >= exit_z) if entry_z_sign < 0 else (z <= exit_z)
@@ -652,6 +691,12 @@ class AlgoTrader:
         min_hold_sec = float(p.get("min_hold_sec", 0.0) or 0.0)
         max_hold_sec = (float(p.get("time_stop_half_lives", 3.0))
                         * half_life * sample_interval) if half_life > 0 else 0.0
+        if self._pos.get("band_source") == "candles":
+            # candle mode: max hold = N candles of the timeframe it entered on
+            from core.spread_candles import tf_seconds
+            mhc = float(p.get("max_hold_candles", 0) or 0)
+            max_hold_sec = (mhc * tf_seconds(self._pos.get("band_tf") or "15m")
+                            if mhc > 0 else 0.0)
         spread_now = sp_close if sp_close is not None else spread_mid
 
         # ── live mark-to-market net P&L on the open position ($) ──────────
@@ -821,6 +866,9 @@ class AlgoTrader:
                 logger.warning("AlgoTrader: %s", msg)
                 return msg
 
+        sig_now = self._signal() or {}
+        band_src = sig_now.get("band_source") or "ticks"
+        band_tf = sig_now.get("band_timeframe") if band_src == "candles" else None
         res = self._execute(direction, qty, source="algo",
                             z=round(z, 4), spread=round(spread, 4)) or {}
         if res.get("success"):
@@ -828,11 +876,12 @@ class AlgoTrader:
             self._pos = {
                 "direction": direction, "qty": qty,
                 "entry_z": z, "entry_spread": round(spread, 2),
-                "entry_std": (self._signal() or {}).get("std"),
+                "entry_std": sig_now.get("std"),
                 "entry_fill_spread": (float(fill) if fill is not None else round(spread, 2)),
                 "entry_leg_a": res.get("leg_a_fill"),
                 "entry_leg_b": res.get("leg_b_fill"),
                 "entry_time": self._clock(),
+                "band_source": band_src, "band_tf": band_tf,   # the bands it keeps
                 "peak_pnl": 0.0, "trough_pnl": 0.0,
                 "peak_min": 0.0, "trough_min": 0.0,
             }

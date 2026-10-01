@@ -18,6 +18,12 @@ DEFAULT_ALGO_PARAMS = {
     "resume_max_gap_min": 10.0,
     "persist_interval_sec": 30.0,
 
+    # ── mean & bands source ──────────────────────────────────────────────────
+    "band_source": "ticks",           # ticks (rolling window) / candles (TV BB, EMA basis)
+    "band_timeframe": "15m",          # 5m / 15m / 1h / 4h (candle mode)
+    "band_length": 20,                # BB length N (candle mode)
+    "max_hold_candles": 0,            # candle mode's time-stop; 0 = off
+
     # ── entry ────────────────────────────────────────────────────────────────
     "entry_zscore": 2.5,              # enter when the executable z goes beyond this
     "exit_zscore": 0.0,               # z-reversion reference (BE-gated secondary exit)
