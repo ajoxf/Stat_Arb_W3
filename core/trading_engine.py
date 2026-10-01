@@ -10,10 +10,9 @@ from typing import Optional, Callable, Dict, Any, List
 from dataclasses import dataclass
 
 from models import (
-    TradingConfig, Trade, MarketTick, Signal, Position,
+    TradingConfig, Trade, MarketTick, Position,
     OrderResult, CRYPTO_ASSETS, get_symbols_for_asset
 )
-from core.signals import SignalGenerator
 from core.order_executor import OrderExecutor
 from core.trade_logger import get_trade_logger
 from core.telegram_bot import get_notifier
@@ -32,24 +31,21 @@ MAX_SAFE_FUTURES_LEVERAGE = 25
 class EngineState:
     """Current engine state."""
     is_running: bool = False
-    algo_enabled: bool = False
     paper_trading: bool = True
     current_position: str = "NONE"  # NONE, LONG, SHORT
     last_tick_time: Optional[datetime] = None
-    last_signal: Optional[Signal] = None
     current_trade: Optional[Trade] = None
     error: str = ""
 
 
 class TradingEngine:
-    """
-    Main trading engine that coordinates price feeds, signal generation,
-    and order execution for crypto statistical arbitrage.
-    """
+    """Market/execution service: price feeds, leverage, reconciliation and
+    the spread order path. Trading DECISIONS live outside (core/algo_trader.py
+    and the manual endpoints) — this engine never opens or closes a position
+    on its own."""
 
     def __init__(self, config: TradingConfig):
         self.config = config
-        self.signal_generator = SignalGenerator(config)
         self.state = EngineState(paper_trading=config.paper_trading)
 
         # Exchange adapters (REST)
@@ -73,25 +69,19 @@ class TradingEngine:
 
         # Callbacks for UI updates
         self.on_tick: Optional[Callable[[MarketTick, MarketTick], None]] = None
-        self.on_signal: Optional[Callable[[Signal], None]] = None
         self.on_trade: Optional[Callable[[Trade], None]] = None
         self.on_status: Optional[Callable[[Dict[str, Any]], None]] = None
         self.on_error: Optional[Callable[[str], None]] = None
+        # Fired when reconciliation force-clears the engine's position state —
+        # app.py wires this to AlgoTrader.clear_position + journal fixup.
+        self.on_position_cleared: Optional[Callable[[str], None]] = None
+        # Fired on a critical execution-failure pattern — app.py wires this to
+        # stop the AlgoTrader (manual restart required).
+        self.on_critical_halt: Optional[Callable[[str], None]] = None
 
         # Control flags
         self._running = False
         self._task: Optional[asyncio.Task] = None
-
-        # Post-stop-loss cooldown: prevent re-entry for this many seconds after a stop-loss
-        self._stop_loss_cooldown_sec = 60
-        self._stop_loss_cooldown_until: Optional[datetime] = None
-
-        # General entry cooldown: prevent rapid re-entry after any trade
-        self._entry_cooldown_until: Optional[datetime] = None
-
-        # Daily loss tracking
-        self._daily_loss_usd: float = 0.0
-        self._daily_reset_date: Optional[date] = None
 
         # Execution lock to prevent new trades while one is being executed
         self._executing_trade = False
@@ -111,10 +101,6 @@ class TradingEngine:
         self._orphan_mismatch_count: int = 0  # consecutive detections of orphan futures
         self._orphan_auto_close_threshold: int = 3  # close after ~60s (3 × 20s intervals)
 
-        # Exit retry throttle — prevents rapid-fire exit attempts when spot fails
-        self._last_exit_attempt: Optional[datetime] = None
-        self._exit_retry_interval_sec: int = 10
-
         # Order execution tracking for pattern detection
         self._spot_order_attempts = 0
         self._spot_order_failures = 0
@@ -129,9 +115,7 @@ class TradingEngine:
     def update_config(self, config: TradingConfig) -> None:
         """Update trading configuration."""
         self.config = config
-        self.signal_generator.update_config(config)
         self.state.paper_trading = config.paper_trading
-        self.state.algo_enabled = config.algo_enabled
         if self.order_executor:
             self.order_executor.update_config(config)
 
@@ -276,23 +260,6 @@ class TradingEngine:
         finally:
             self._processing_tick = False
 
-    def toggle_algo(self, enabled: bool) -> None:
-        """Enable or disable algorithmic trading."""
-        self.state.algo_enabled = enabled
-        self.config.algo_enabled = enabled
-        logger.info("Algo trading %s", "enabled" if enabled else "disabled")
-
-    def _check_daily_loss(self) -> bool:
-        """Reset daily counter at UTC midnight; return True if limit exceeded."""
-        today = datetime.utcnow().date()
-        if self._daily_reset_date != today:
-            self._daily_reset_date = today
-            self._daily_loss_usd = 0.0
-        limit = self.config.daily_max_loss_usd
-        if limit > 0 and self._daily_loss_usd <= -limit:
-            return True
-        return False
-
     async def start(self) -> None:
         """Start the trading engine."""
         if self._running:
@@ -427,27 +394,23 @@ class TradingEngine:
         if not self.state.paper_trading:
             await self._periodic_position_check()
 
-        # Update signal generator with position
-        self.signal_generator.set_position(self.state.current_position)
-
-        # Add tick to signal generator
-        self.signal_generator.add_tick(self.spot_tick, self.futures_tick)
-
-        # Notify tick callback
+        # Notify tick callback (the SignalEngine samples from get_book())
         if self.on_tick:
             self.on_tick(self.spot_tick, self.futures_tick)
 
-        # Generate signal
-        signal = self.signal_generator.generate_signal()
-        self.state.last_signal = signal
+    def get_book(self) -> Optional[Dict[str, Any]]:
+        """Top-of-book snapshot for the SignalEngine:
+        {"leg_a": {bid, ask, ltp, ts}, "leg_b": {…}} — leg_a = SPOT, leg_b = PERP."""
+        st, ft = self.spot_tick, self.futures_tick
+        if not st or not ft:
+            return None
 
-        # Notify signal callback
-        if self.on_signal:
-            self.on_signal(signal)
+        def leg(t: MarketTick) -> Dict[str, Any]:
+            ts = t.timestamp.timestamp() if t.timestamp else None
+            return {"bid": t.bid or None, "ask": t.ask or None,
+                    "ltp": t.last or None, "ts": ts}
 
-        # Execute trading logic if algo enabled
-        if self.state.algo_enabled and signal.signal_type != "NONE":
-            await self._process_signal(signal)
+        return {"leg_a": leg(st), "leg_b": leg(ft)}
 
     async def _get_spot_tick(self) -> Optional[MarketTick]:
         """Get current spot price."""
@@ -518,297 +481,6 @@ class TradingEngine:
             volume_24h=random.uniform(1000000, 10000000),
             timestamp=datetime.utcnow(),
         )
-
-    async def _process_signal(self, signal: Signal) -> None:
-        """Process a trading signal."""
-        logger.debug("Processing signal: %s (zscore=%.4f, position=%s)",
-                     signal.signal_type, signal.zscore, self.state.current_position)
-
-        # Notify Telegram for actionable signals (entry/exit/stop-loss)
-        if signal.signal_type in ("LONG", "SHORT", "EXIT", "STOP_LOSS"):
-            get_notifier().notify_signal(signal)
-
-        if signal.signal_type in ("LONG", "SHORT"):
-            await self._open_position(signal)
-        elif signal.signal_type in ("EXIT", "STOP_LOSS"):
-            await self._close_position(signal)
-
-    async def _open_position(self, signal: Signal) -> None:
-        """Open a new position."""
-        if self.state.current_position != "NONE":
-            logger.warning("Already in position, ignoring entry signal")
-            self.signal_generator.last_blocked_signal = {
-                'timestamp': datetime.utcnow().isoformat(),
-                'would_be_signal': signal.signal_type,
-                'zscore': round(signal.zscore, 4),
-                'reason': f"Already in {self.state.current_position} position",
-            }
-            return
-
-        # Check if already executing a trade (prevents duplicate orders)
-        if self._executing_trade:
-            logger.debug("Trade execution in progress, ignoring signal")
-            self.signal_generator.last_blocked_signal = {
-                'timestamp': datetime.utcnow().isoformat(),
-                'would_be_signal': signal.signal_type,
-                'zscore': round(signal.zscore, 4),
-                'reason': "Trade execution already in progress",
-            }
-            return
-
-        # Check post-stop-loss cooldown
-        if self._stop_loss_cooldown_until and datetime.utcnow() < self._stop_loss_cooldown_until:
-            remaining = (self._stop_loss_cooldown_until - datetime.utcnow()).total_seconds()
-            logger.debug("Stop-loss cooldown active, %.0fs remaining", remaining)
-            self.signal_generator.last_blocked_signal = {
-                'timestamp': datetime.utcnow().isoformat(),
-                'would_be_signal': signal.signal_type,
-                'zscore': round(signal.zscore, 4),
-                'reason': f"Stop-loss cooldown ({int(remaining)}s remaining)",
-            }
-            return
-
-        # Check general entry cooldown (prevents rapid re-entry after any trade)
-        if self._entry_cooldown_until and datetime.utcnow() < self._entry_cooldown_until:
-            remaining = (self._entry_cooldown_until - datetime.utcnow()).total_seconds()
-            logger.debug("Entry cooldown active, %.0fs remaining", remaining)
-            self.signal_generator.last_blocked_signal = {
-                'timestamp': datetime.utcnow().isoformat(),
-                'would_be_signal': signal.signal_type,
-                'zscore': round(signal.zscore, 4),
-                'reason': f"Entry cooldown ({int(remaining)}s remaining)",
-            }
-            return
-
-        # Check daily loss limit
-        if self._check_daily_loss():
-            self.state.algo_enabled = False
-            self.config.algo_enabled = False
-            msg = (f"Daily loss limit ${self.config.daily_max_loss_usd:.0f} reached "
-                   f"(lost ${abs(self._daily_loss_usd):.2f} today) — algo disabled")
-            logger.critical("🛑 %s", msg)
-            self.state.error = msg
-            get_notifier().notify_error(msg)
-            self.signal_generator.last_blocked_signal = {
-                'timestamp': datetime.utcnow().isoformat(),
-                'would_be_signal': signal.signal_type,
-                'zscore': round(signal.zscore, 4),
-                'reason': 'Daily loss limit reached — algo disabled',
-            }
-            return
-
-        # SAFETY: Verify no existing position on exchange before entering
-        if self.config.verify_exchange_position and not self.state.paper_trading:
-            existing_position = await self._check_exchange_position()
-            if existing_position:
-                logger.warning("Exchange has existing position! Blocking entry. Position: %s", existing_position)
-                self.signal_generator.last_blocked_signal = {
-                    'timestamp': datetime.utcnow().isoformat(),
-                    'would_be_signal': signal.signal_type,
-                    'zscore': round(signal.zscore, 4),
-                    'reason': f"Exchange already has position: {existing_position}",
-                }
-                return
-
-        # SAFETY: Check for existing open orders before placing new ones
-        # This prevents placing duplicate orders when previous ones are still pending
-        if not self.state.paper_trading:
-            open_order_count = await self._count_open_orders()
-            if open_order_count > 0:
-                logger.warning("Exchange already has %d open order(s) - blocking new entry to prevent duplicates",
-                               open_order_count)
-                # Apply a short cooldown to give time for existing orders to resolve
-                self._entry_cooldown_until = datetime.utcnow() + timedelta(seconds=30)
-                self.signal_generator.last_blocked_signal = {
-                    'timestamp': datetime.utcnow().isoformat(),
-                    'would_be_signal': signal.signal_type,
-                    'zscore': round(signal.zscore, 4),
-                    'reason': f"Exchange has {open_order_count} open order(s) already pending",
-                }
-                return
-
-        if not self.spot_tick or not self.futures_tick:
-            logger.warning("No tick data available")
-            self.signal_generator.last_blocked_signal = {
-                'timestamp': datetime.utcnow().isoformat(),
-                'would_be_signal': signal.signal_type,
-                'zscore': round(signal.zscore, 4),
-                'reason': "No price data available",
-            }
-            return
-
-        position_type = signal.signal_type  # LONG or SHORT
-        spot_price = self.spot_tick.mid
-        futures_price = self.futures_tick.mid
-
-        # Guard: position size must not exceed configured max
-        max_size = getattr(self.config, 'max_position_size_usd', float('inf'))
-        if self.config.position_size_usd > max_size:
-            logger.error("Position size $%.0f exceeds max $%.0f — blocking entry",
-                         self.config.position_size_usd, max_size)
-            self.signal_generator.last_blocked_signal = {
-                'timestamp': datetime.utcnow().isoformat(),
-                'would_be_signal': signal.signal_type,
-                'zscore': round(signal.zscore, 4),
-                'reason': f"position_size_usd (${self.config.position_size_usd:.0f}) > max (${max_size:.0f})",
-            }
-            return
-
-        # Calculate quantity
-        quantity = self.config.position_size_usd / spot_price
-
-        # Create trade record
-        _leverage = max(getattr(self.config, 'futures_leverage', 1), 1)
-        trade = Trade(
-            asset=self.config.asset,
-            position_type=position_type,
-            entry_time=datetime.utcnow(),
-            entry_spot_price=spot_price,
-            entry_futures_price=futures_price,
-            entry_spread=signal.spread,
-            entry_zscore=signal.zscore,
-            entry_spread_mean=signal.spread_mean,
-            entry_spread_std=signal.spread_std,
-            quantity=quantity,
-            notional_usd=self.config.position_size_usd,
-            margin_usd=round(self.config.position_size_usd / _leverage, 2),
-            is_open=True,
-            is_paper=self.state.paper_trading,
-        )
-
-        # Execute orders if not paper trading
-        if not self.state.paper_trading:
-            self._executing_trade = True
-            try:
-                success = await self._execute_entry_orders(trade, signal)
-                if not success:
-                    # Apply cooldown after any failed order to prevent rapid retry
-                    # This is critical: without this, the engine retries on every tick
-                    cooldown_sec = max(30, getattr(self.config, 'entry_cooldown_seconds', 60))
-                    self._entry_cooldown_until = datetime.utcnow() + timedelta(seconds=cooldown_sec)
-                    logger.warning("Entry orders failed - applying %ds cooldown to prevent rapid retry",
-                                   cooldown_sec)
-                    return
-            finally:
-                self._executing_trade = False
-
-        self.open_trade = trade
-        self.state.current_position = position_type
-        self.signal_generator.set_position(
-            position_type,
-            entry_mean=signal.spread_mean,
-            entry_std=signal.spread_std,
-        )
-
-        logger.info("Opened %s position: qty=%.6f, spot=%.2f, futures=%.2f, spread=%.6f, zscore=%.4f",
-                    position_type, quantity, spot_price, futures_price, signal.spread, signal.zscore)
-
-        get_notifier().notify_trade_entry(trade, signal)
-
-        if self.on_trade:
-            self.on_trade(trade)
-
-    async def _close_position(self, signal: Signal) -> None:
-        """Close current position."""
-        if self.state.current_position == "NONE" or not self.open_trade:
-            logger.warning("No position to close")
-            return
-
-        if not self.spot_tick or not self.futures_tick:
-            logger.warning("No tick data available")
-            return
-
-        trade = self.open_trade
-        spot_price = self.spot_tick.mid
-        futures_price = self.futures_tick.mid
-
-        # Calculate P&L  (spread = Futures - Spot)
-        if trade.position_type == "LONG":
-            # Long spread: bought spot, sold futures
-            # Profit when spread falls: P&L = (entry_spread - exit_spread) * quantity
-            spread_change = trade.entry_spread - signal.spread
-            pnl = spread_change * trade.quantity
-        else:
-            # Short spread: sold spot, bought futures
-            # Profit when spread rises: P&L = (exit_spread - entry_spread) * quantity
-            spread_change = signal.spread - trade.entry_spread
-            pnl = spread_change * trade.quantity
-
-        pnl_percent = (pnl / trade.notional_usd) * 100 if trade.notional_usd > 0 else 0
-
-        # Update trade record
-        trade.exit_time = datetime.utcnow()
-        trade.exit_spot_price = spot_price
-        trade.exit_futures_price = futures_price
-        trade.exit_spread = signal.spread
-        trade.exit_zscore = signal.zscore
-        trade.exit_reason = signal.signal_type
-        trade.pnl_usd = pnl
-        trade.pnl_percent = pnl_percent
-
-        # Accumulate daily loss (pnl is negative for losses)
-        self._daily_loss_usd += pnl
-
-        # Execute orders BEFORE marking closed — if orders fail we leave the
-        # position open so the engine retries on the next tick rather than
-        # silently leaving an unclosed position on the exchange.
-        if not self.state.paper_trading:
-            # Throttle: don't hammer the exchange if the last exit just failed
-            if self._last_exit_attempt is not None:
-                elapsed = (datetime.utcnow() - self._last_exit_attempt).total_seconds()
-                if elapsed < self._exit_retry_interval_sec:
-                    logger.debug(
-                        "Exit retry throttled — %.1fs since last attempt (min %ds)",
-                        elapsed, self._exit_retry_interval_sec,
-                    )
-                    return
-
-            self._last_exit_attempt = datetime.utcnow()
-            self._executing_trade = True
-            try:
-                exit_ok = await self._execute_exit_orders(trade, signal)
-            except Exception as exc:
-                logger.exception("Exit orders raised an exception: %s", exc)
-                exit_ok = False
-            finally:
-                self._executing_trade = False
-
-            if not exit_ok:
-                logger.error(
-                    "Exit orders FAILED for %s position — leaving position open for retry",
-                    trade.position_type,
-                )
-                return  # Do NOT reset state; engine retries on next signal
-
-            self._last_exit_attempt = None  # Clear on success
-
-        trade.is_open = False
-
-        logger.info("Closed %s position: pnl=$%.2f (%.2f%%), reason=%s, zscore=%.4f",
-                    trade.position_type, pnl, pnl_percent, signal.signal_type, signal.zscore)
-
-        get_notifier().notify_trade_exit(trade)
-
-        # Reset state
-        self.state.current_position = "NONE"
-        self.signal_generator.set_position("NONE")
-        self.open_trade = None
-
-        # Apply post-stop-loss cooldown to prevent immediate re-entry
-        if signal.signal_type == "STOP_LOSS":
-            from datetime import timedelta
-            self._stop_loss_cooldown_until = datetime.utcnow() + timedelta(seconds=self._stop_loss_cooldown_sec)
-            logger.info("Stop-loss cooldown active for %ds", self._stop_loss_cooldown_sec)
-
-        # Apply general entry cooldown after any trade
-        from datetime import timedelta
-        cooldown_sec = getattr(self.config, 'entry_cooldown_seconds', 60)
-        if cooldown_sec > 0:
-            self._entry_cooldown_until = datetime.utcnow() + timedelta(seconds=cooldown_sec)
-            logger.info("Entry cooldown active for %ds", cooldown_sec)
-
-        if self.on_trade:
-            self.on_trade(trade)
 
     async def _check_exchange_position(self) -> Optional[str]:
         """
@@ -934,8 +606,12 @@ class TradingEngine:
                         self.open_trade.exit_reason = "MISMATCH_AUTO_CLEAR"
                     self.state.current_position = "NONE"
                     self.open_trade = None
-                    self._last_exit_attempt = None
                     self._orphan_mismatch_count = 0
+                    if self.on_position_cleared:
+                        try:
+                            self.on_position_cleared("exchange flat — mismatch auto-clear")
+                        except Exception:
+                            logger.exception("on_position_cleared callback failed")
                     get_notifier().notify_error(
                         "Engine position auto-cleared after exchange showed flat for "
                         f"{self._orphan_auto_close_threshold} consecutive checks"
@@ -1092,7 +768,80 @@ class TradingEngine:
             logger.error("Error verifying leverage: %s", e)
             return True  # Don't block trading on verification error
 
-    async def _execute_entry_orders(self, trade: Trade, signal: Signal) -> bool:
+    async def execute_spread(self, direction: str, quantity: float,
+                             is_entry: bool) -> Dict[str, Any]:
+        """The ONE spread order path — used by BOTH the manual endpoints and
+        the AlgoTrader. ``direction`` is LONG_SPREAD (buy spot / sell perp) or
+        SHORT_SPREAD (sell spot / buy perp); for an EXIT it is the direction
+        of the position being CLOSED. Returns a result dict with the fills:
+
+            {success, message/error, leg_a_fill, leg_b_fill, fill_spread,
+             spot_order_id, futures_order_id, paper}
+        """
+        ptype = "LONG" if str(direction).upper().startswith("LONG") else "SHORT"
+        if quantity <= 0:
+            return {"success": False, "error": "quantity must be > 0"}
+        if self._executing_trade:
+            return {"success": False, "error": "another order is still executing"}
+        if not self.spot_tick or not self.futures_tick:
+            return {"success": False, "error": "no tick data available"}
+
+        # PAPER mode: simulate immediate fills at the executable side.
+        if self.state.paper_trading:
+            st, ft = self.spot_tick, self.futures_tick
+            if is_entry:
+                spot_px = st.ask if ptype == "LONG" else st.bid    # buy A / sell A
+                fut_px = ft.bid if ptype == "LONG" else ft.ask     # sell B / buy B
+            else:
+                spot_px = st.bid if ptype == "LONG" else st.ask    # close: sell A / buy A
+                fut_px = ft.ask if ptype == "LONG" else ft.bid     # close: buy B / sell B
+            spot_px = spot_px or st.mid
+            fut_px = fut_px or ft.mid
+            self.state.current_position = (ptype if is_entry else "NONE")
+            k = 1.0
+            return {"success": True, "paper": True,
+                    "message": f"paper {'entry' if is_entry else 'exit'} filled",
+                    "leg_a_fill": spot_px, "leg_b_fill": fut_px,
+                    "fill_spread": round(k * spot_px - fut_px, 4)}
+
+        self._executing_trade = True
+        try:
+            trade = Trade(asset=self.config.asset, position_type=ptype,
+                          quantity=quantity, is_open=is_entry)
+            if is_entry:
+                ok = await self._execute_entry_orders(trade, ptype)
+                if ok:
+                    self.state.current_position = ptype
+                    return {"success": True, "message": "entry filled",
+                            "leg_a_fill": trade.entry_spot_price,
+                            "leg_b_fill": trade.entry_futures_price,
+                            "fill_spread": (round(trade.entry_spot_price
+                                                  - trade.entry_futures_price, 4)
+                                            if trade.entry_spot_price and
+                                            trade.entry_futures_price else None),
+                            "spot_order_id": trade.spot_order_id,
+                            "futures_order_id": trade.futures_order_id}
+                return {"success": False,
+                        "error": self.state.error or "entry orders failed"}
+            ok = await self._execute_exit_orders(trade, ptype)
+            if ok:
+                self.state.current_position = "NONE"
+                return {"success": True, "message": "exit filled",
+                        "leg_a_fill": trade.exit_spot_price,
+                        "leg_b_fill": trade.exit_futures_price,
+                        "fill_spread": (round(trade.exit_spot_price
+                                              - trade.exit_futures_price, 4)
+                                        if trade.exit_spot_price and
+                                        trade.exit_futures_price else None)}
+            return {"success": False,
+                    "error": self.state.error or "exit orders failed"}
+        except Exception as e:
+            logger.exception("execute_spread failed")
+            return {"success": False, "error": str(e)}
+        finally:
+            self._executing_trade = False
+
+    async def _execute_entry_orders(self, trade: Trade, position_type: str) -> bool:
         """Execute entry orders on exchanges using the order executor."""
         if not self.order_executor:
             logger.error("Order executor not configured for live trading")
@@ -1111,7 +860,7 @@ class TradingEngine:
 
         try:
             spread_order = await self.order_executor.execute_entry(
-                position_type=signal.signal_type,
+                position_type=position_type,
                 spot_tick=self.spot_tick,
                 futures_tick=self.futures_tick,
                 quantity=trade.quantity,
@@ -1141,7 +890,7 @@ class TradingEngine:
                 csv_logger = get_trade_logger()
                 csv_logger.log_trade(
                     event_type="ENTRY",
-                    position_type=signal.signal_type,
+                    position_type=position_type,
                     quantity=trade.quantity,
                     spot_price=trade.entry_spot_price,
                     futures_price=trade.entry_futures_price,
@@ -1215,9 +964,12 @@ class TradingEngine:
             self.state.error = f"CRITICAL: Spot orders failing {spot_fail_rate*100:.0f}% of the time"
             get_notifier().notify_error(critical_msg)
 
-            # Auto-disable algo to prevent further leg imbalance
-            self.state.algo_enabled = False
-            self.config.algo_enabled = False
+            # Auto-halt the algo to prevent further leg imbalance
+            if self.on_critical_halt:
+                try:
+                    self.on_critical_halt(critical_msg)
+                except Exception:
+                    logger.exception("on_critical_halt callback failed")
             # Reset counters so manual re-enable gets a fresh start
             self._spot_order_attempts = 0
             self._spot_order_failures = 0
@@ -1279,13 +1031,7 @@ class TradingEngine:
                        cfg.limit_order_timeout_sec,
                        getattr(cfg, 'orphan_recovery_timeout_sec', 60),
                        getattr(cfg, 'entry_cooldown_seconds', 60))
-            logger.info("SIGNALS: z_entry=%.2f, z_exit=%.2f, stop_loss=%.2f",
-                       cfg.entry_threshold,
-                       cfg.exit_threshold,
-                       getattr(cfg, 'stop_loss_zscore', 4.0))
-            logger.info("FILTERS: hurst=%s (threshold=%.2f), std=%s (min=%.1fx)",
-                       cfg.hurst_enabled, cfg.hurst_threshold,
-                       cfg.std_filter_enabled, cfg.min_std_multiple)
+            logger.info("DECISIONS: external (core/algo_trader.py + manual endpoints)")
             logger.info("=" * 60)
 
             # Also log to CSV for easy reference
@@ -1297,7 +1043,7 @@ class TradingEngine:
         except Exception as e:
             logger.error("Error in startup summary: %s", e)
 
-    async def _execute_exit_orders(self, trade: Trade, signal: Signal) -> bool:
+    async def _execute_exit_orders(self, trade: Trade, position_type: str) -> bool:
         """Execute exit orders on exchanges using the order executor."""
         if not self.order_executor:
             logger.error("Order executor not configured for live trading")
@@ -1343,16 +1089,8 @@ class TradingEngine:
 
     def get_status(self) -> Dict[str, Any]:
         """Get current engine status."""
-        signal_state = self.signal_generator.get_state()
-
-        # Calculate stop-loss cooldown remaining
-        sl_cooldown_remaining = 0
-        if self._stop_loss_cooldown_until and datetime.utcnow() < self._stop_loss_cooldown_until:
-            sl_cooldown_remaining = round((self._stop_loss_cooldown_until - datetime.utcnow()).total_seconds())
-
         return {
             'is_running': self.state.is_running,
-            'algo_enabled': self.state.algo_enabled,
             'paper_trading': self.state.paper_trading,
             'asset': self.config.asset,
             'position': self.state.current_position,
@@ -1360,45 +1098,26 @@ class TradingEngine:
             'error': self.state.error,
             'spot_connected': self.spot_adapter is not None,
             'futures_connected': self.futures_adapter is not None,
-            'signal': signal_state,
             'spot_tick': self.spot_tick.to_dict() if self.spot_tick else None,
             'futures_tick': self.futures_tick.to_dict() if self.futures_tick else None,
-            'open_trade': self.open_trade.to_dict() if self.open_trade else None,
-            'sl_cooldown_remaining': sl_cooldown_remaining,
-            'sl_cooldown_sec': self._stop_loss_cooldown_sec,
             'executing_trade': self._executing_trade,
             'position_mismatch': self._position_mismatch,
             'entry_execution_mode': getattr(self.config, 'entry_execution_mode', 'LIMIT'),
             'exit_execution_mode': getattr(self.config, 'exit_execution_mode', 'LIMIT'),
-            'daily_loss_usd': round(self._daily_loss_usd, 2),
-            'daily_loss_limit': self.config.daily_max_loss_usd,
         }
 
-    def get_spread_history(self, n: int = 100) -> List[float]:
-        """Get spread history for charting."""
-        return self.signal_generator.get_spread_history(n)
-
-    def get_zscore_history(self, n: int = 100) -> List[float]:
-        """Get Z-score history for charting."""
-        return self.signal_generator.get_zscore_history(n)
+    def set_position_state(self, position: str) -> None:
+        """Let the shared order path mark the engine's position view
+        (NONE / LONG / SHORT) so reconciliation checks the right thing."""
+        self.state.current_position = position or "NONE"
 
     def reset(self) -> None:
         """Reset engine state (preserves running status)."""
-        # Preserve running state
         was_running = self.state.is_running
-        algo_was_enabled = self.state.algo_enabled
-
-        self.signal_generator.reset()
         self.state = EngineState(paper_trading=self.config.paper_trading)
-
-        # Restore running state
         self.state.is_running = was_running
-        self.state.algo_enabled = algo_was_enabled
-
-        self.open_trade = None
         self.spot_tick = None
         self.futures_tick = None
-        self._stop_loss_cooldown_until = None
         self._executing_trade = False
-        self._tick_fail_count = 0  # Reset tick failure counter too
-        logger.info("Engine reset (running=%s, algo=%s)", was_running, algo_was_enabled)
+        self._tick_fail_count = 0
+        logger.info("Engine reset (running=%s)", was_running)

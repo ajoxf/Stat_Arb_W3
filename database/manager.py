@@ -258,6 +258,44 @@ class DatabaseManager:
                 )
             """)
 
+            # Algo strategy params: one JSON blob, so new strategy knobs never
+            # need a schema migration. Read/written via get_algo_params /
+            # save_algo_params (merged over DEFAULT_ALGO_PARAMS).
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS algo_params (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    params_json TEXT NOT NULL DEFAULT '{}',
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            cursor.execute("SELECT COUNT(*) FROM algo_params")
+            if cursor.fetchone()[0] == 0:
+                cursor.execute("INSERT INTO algo_params (id, params_json) VALUES (1, '{}')")
+
+            # Trade journal for the algo/manual order path (entry+exit rows
+            # with owner, reason, fills) — the arrow-style trade log.
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS spread_journal (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ts REAL NOT NULL,
+                    event TEXT NOT NULL,            -- OPEN or CLOSE
+                    direction TEXT NOT NULL,        -- LONG_SPREAD / SHORT_SPREAD
+                    qty REAL NOT NULL,
+                    source TEXT DEFAULT 'manual',   -- manual / algo
+                    reason TEXT,
+                    z REAL,
+                    spread REAL,                    -- fill spread
+                    leg_a_fill REAL,
+                    leg_b_fill REAL,
+                    net_pnl REAL,                   -- CLOSE rows only
+                    gross_pnl REAL,
+                    fees REAL,
+                    peak_pnl REAL,
+                    trough_pnl REAL,
+                    open_id INTEGER                 -- CLOSE rows: the OPEN row id
+                )
+            """)
+
             # Insert default config if not exists
             cursor.execute("SELECT COUNT(*) FROM trading_config")
             if cursor.fetchone()[0] == 0:
@@ -1163,3 +1201,116 @@ class DatabaseManager:
             """, (datetime.utcnow().isoformat(), exit_reason, trade_id))
             logger.info("Manually closed trade ID %d", trade_id)
             return True
+
+    # ── algo params (JSON blob — no schema migrations for strategy knobs) ─────
+
+    def get_algo_params(self) -> Dict[str, Any]:
+        """The stored algo strategy params (raw dict; caller merges defaults)."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT params_json FROM algo_params WHERE id = 1")
+            row = cursor.fetchone()
+            if not row:
+                return {}
+            try:
+                return json.loads(row[0]) or {}
+            except (TypeError, ValueError):
+                return {}
+
+    def save_algo_params(self, params: Dict[str, Any]) -> None:
+        """Merge ``params`` into the stored algo params (None deletes a key)."""
+        current = self.get_algo_params()
+        for k, v in (params or {}).items():
+            if v is None:
+                current.pop(k, None)
+            else:
+                current[k] = v
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE algo_params SET params_json = ?, updated_at = ? WHERE id = 1",
+                (json.dumps(current), datetime.utcnow().isoformat()))
+
+    # ── spread journal (the algo/manual order path's trade log) ──────────────
+
+    def journal_open(self, direction: str, qty: float, source: str,
+                     z: Optional[float], spread: Optional[float],
+                     leg_a_fill: Optional[float], leg_b_fill: Optional[float],
+                     ts: Optional[float] = None) -> int:
+        import time as _time
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO spread_journal (ts, event, direction, qty, source,
+                                            z, spread, leg_a_fill, leg_b_fill)
+                VALUES (?, 'OPEN', ?, ?, ?, ?, ?, ?, ?)
+            """, (ts or _time.time(), direction, qty, source, z, spread,
+                  leg_a_fill, leg_b_fill))
+            return cursor.lastrowid
+
+    def journal_close(self, open_id: Optional[int], direction: str, qty: float,
+                      source: str, reason: Optional[str], z: Optional[float],
+                      spread: Optional[float], leg_a_fill: Optional[float],
+                      leg_b_fill: Optional[float], net_pnl: Optional[float],
+                      gross_pnl: Optional[float], fees: Optional[float],
+                      peak_pnl: Optional[float] = None,
+                      trough_pnl: Optional[float] = None,
+                      ts: Optional[float] = None) -> int:
+        import time as _time
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO spread_journal (ts, event, direction, qty, source,
+                                            reason, z, spread, leg_a_fill,
+                                            leg_b_fill, net_pnl, gross_pnl,
+                                            fees, peak_pnl, trough_pnl, open_id)
+                VALUES (?, 'CLOSE', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (ts or _time.time(), direction, qty, source, reason, z, spread,
+                  leg_a_fill, leg_b_fill, net_pnl, gross_pnl, fees,
+                  peak_pnl, trough_pnl, open_id))
+            return cursor.lastrowid
+
+    def journal_rows(self, limit: int = 100) -> List[Dict[str, Any]]:
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM spread_journal ORDER BY ts DESC LIMIT ?",
+                           (limit,))
+            return [dict(r) for r in cursor.fetchall()]
+
+    def journal_open_position(self) -> Optional[Dict[str, Any]]:
+        """The latest OPEN row that has no CLOSE referencing it — the one open
+        position, or None when flat."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT * FROM spread_journal o
+                WHERE o.event = 'OPEN'
+                  AND NOT EXISTS (SELECT 1 FROM spread_journal c
+                                  WHERE c.event = 'CLOSE' AND c.open_id = o.id)
+                ORDER BY o.ts DESC LIMIT 1
+            """)
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+    def journal_day_stats(self, day_start_ts: float) -> Dict[str, Any]:
+        """(day_pnl, loss_streak) from CLOSE rows: day P&L since ``day_start_ts``
+        and the count of consecutive most-recent losing closes."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT COALESCE(SUM(net_pnl), 0) FROM spread_journal
+                WHERE event = 'CLOSE' AND ts >= ? AND net_pnl IS NOT NULL
+            """, (day_start_ts,))
+            day_pnl = float(cursor.fetchone()[0] or 0)
+            cursor.execute("""
+                SELECT net_pnl FROM spread_journal
+                WHERE event = 'CLOSE' AND net_pnl IS NOT NULL
+                ORDER BY ts DESC LIMIT 50
+            """)
+            streak = 0
+            for (pnl,) in cursor.fetchall():
+                if pnl is not None and pnl < 0:
+                    streak += 1
+                else:
+                    break
+            return {"day_pnl": day_pnl, "loss_streak": streak}

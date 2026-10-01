@@ -17,8 +17,10 @@ from flask import Flask, render_template, jsonify, request, redirect, url_for
 from flask_socketio import SocketIO, emit
 from dotenv import load_dotenv
 
-from models import TradingConfig, Exchange, Trade, MarketTick, Signal, CRYPTO_ASSETS
-from core.signals import SignalGenerator
+from models import TradingConfig, Exchange, Trade, MarketTick, CRYPTO_ASSETS
+from core.signal_engine import SignalEngine
+from core.algo_trader import AlgoTrader
+from core.algo_params import DEFAULT_ALGO_PARAMS
 from core.trading_engine import TradingEngine
 from core.post_trade_analyzer import PostTradeAnalyzer
 from core.auto_tuner import AutoTuner
@@ -71,6 +73,239 @@ loop: Optional[asyncio.AbstractEventLoop] = None
 engine_thread: Optional[Thread] = None
 ws_manager: Optional[OKXWebSocketManager] = None
 shutdown_in_progress = False
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Signal engine + auto-trader (ported from arrow-statarb)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _algo_params() -> Dict[str, Any]:
+    """Live strategy params: defaults ← stored algo_params ← account facts.
+    Read EVERY tick, so a settings save applies with no restart."""
+    p = dict(DEFAULT_ALGO_PARAMS)
+    try:
+        p.update(db.get_algo_params() or {})
+    except Exception:
+        logger.exception("could not read algo params")
+    cfg = engine.config
+    # Facts the cost/sizing model needs, from TradingConfig:
+    p["position_size_usd"] = cfg.position_size_usd
+    p["spot_leverage"] = getattr(cfg, "spot_leverage", 1)
+    p["futures_leverage"] = getattr(cfg, "futures_leverage", 1)
+    p["spot_maker_fee_bps"] = getattr(cfg, "spot_maker_fee_bps", 8.0)
+    p["spot_taker_fee_bps"] = getattr(cfg, "spot_taker_fee_bps", 10.0)
+    p["futures_maker_fee_bps"] = getattr(cfg, "futures_maker_fee_bps", 2.0)
+    p["futures_taker_fee_bps"] = getattr(cfg, "futures_taker_fee_bps", 5.0)
+    p["slippage_bps"] = getattr(cfg, "slippage_bps", 1.5)
+    p["entry_execution_mode"] = getattr(cfg, "entry_execution_mode", "LIMIT")
+    p["exit_execution_mode"] = getattr(cfg, "exit_execution_mode", "LIMIT")
+    # Day P&L + loss streak from the journal (daily loss limit / streak pause).
+    try:
+        day_start = datetime.now(timezone.utc).replace(
+            hour=0, minute=0, second=0, microsecond=0).timestamp()
+        p.update(db.journal_day_stats(day_start))
+    except Exception:
+        pass
+    return p
+
+
+signal_engine = SignalEngine(
+    params_provider=_algo_params,
+    book_provider=lambda: engine.get_book(),
+    persist_path=os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                              "data", "signal_window.json"),
+    series_key_provider=lambda: f"{engine.config.spot_symbol}|{engine.config.futures_symbol}",
+)
+
+
+# ── MANUAL / ALGO lock (whole account) ───────────────────────────────────────
+# One account, one pair, one position at a time, and exactly one owner:
+#   • while the algo is ON, no manual order of any kind is accepted;
+#   • while a MANUAL position is open — or a manual order is executing —
+#     the algo cannot be started and cannot enter.
+# Enforced HERE, where every order passes, not only by greying out buttons.
+from threading import Lock
+_manual_busy = Lock()                     # held for the life of a manual order
+
+
+def _open_position_view() -> Optional[Dict[str, Any]]:
+    """The one open position, with its OWNER: the algo's in-memory position
+    first (authoritative while it exists), else the journal's open record."""
+    st = algo_trader.get_state() or {}
+    pos = st.get("position")
+    if isinstance(pos, dict) and pos.get("direction"):
+        return {"owner": "algo", "direction": pos["direction"],
+                "qty": float(pos.get("qty", 0) or 0), "algo_pos": pos}
+    op = db.journal_open_position()
+    if op and op.get("direction"):
+        return {"owner": op.get("source") or "manual", "direction": op["direction"],
+                "qty": float(op.get("qty", 0) or 0), "journal": op}
+    return None
+
+
+def _manual_blocked() -> Optional[str]:
+    if algo_trader.running:
+        return ("The algo is ON — manual orders are not allowed. "
+                "Turn the algo OFF first.")
+    return None
+
+
+def _algo_blocked() -> Optional[str]:
+    """Why the algo may not start / enter now, or None."""
+    if _manual_busy.locked():
+        return "A manual order is being executed — wait for it to finish."
+    op = _open_position_view()
+    if op and op["owner"] != "algo":
+        return (f"A MANUAL {op['direction'].replace('_', ' ')} position "
+                f"(qty {op['qty']:.6f}) is open — close it before starting the algo.")
+    return None
+
+
+def _run_engine_coro(coro, timeout: float = 120.0):
+    """Run a coroutine on the engine's event loop from a web/algo thread."""
+    if loop is None:
+        return {"success": False, "error": "engine loop not running"}
+    future = asyncio.run_coroutine_threadsafe(coro, loop)
+    return future.result(timeout=timeout)
+
+
+def _spread_execute(direction: str, qty: float, source: str = "manual",
+                    z: Optional[float] = None,
+                    spread: Optional[float] = None) -> Dict[str, Any]:
+    """The shared spread OPEN path (manual + algo), with the exclusivity lock."""
+    if source == "algo":
+        why = _algo_blocked()
+        if why:
+            return {"success": False, "error": why}
+        return _spread_execute_unlocked(direction, qty, source, z, spread)
+    why = _manual_blocked()
+    if why:
+        return {"success": False, "error": why}
+    op = _open_position_view()
+    if op:
+        return {"success": False,
+                "error": (f"A {op['owner'].upper()} {op['direction'].replace('_', ' ')} "
+                          f"position is already open — close it first "
+                          f"(one position at a time).")}
+    if not _manual_busy.acquire(blocking=False):
+        return {"success": False, "error": "Another manual order is still executing."}
+    try:
+        if algo_trader.running:               # re-check under the lock
+            return {"success": False, "error": _manual_blocked()}
+        return _spread_execute_unlocked(direction, qty, source, z, spread)
+    finally:
+        _manual_busy.release()
+
+
+def _spread_execute_unlocked(direction: str, qty: float, source: str,
+                             z: Optional[float], spread: Optional[float]) -> Dict[str, Any]:
+    try:
+        res = _run_engine_coro(engine.execute_spread(direction, qty, is_entry=True))
+    except Exception as e:
+        logger.exception("spread execute failed")
+        return {"success": False, "error": str(e)}
+    if res.get("success"):
+        open_id = db.journal_open(direction=direction, qty=qty, source=source,
+                                  z=z, spread=res.get("fill_spread") or spread,
+                                  leg_a_fill=res.get("leg_a_fill"),
+                                  leg_b_fill=res.get("leg_b_fill"))
+        res["open_id"] = open_id
+        ptype = "LONG" if direction.startswith("LONG") else "SHORT"
+        engine.set_position_state(ptype)
+        try:
+            get_notifier().notify_error(
+                f"✅ OPEN {direction.replace('_', ' ')} qty {qty:.6f} "
+                f"({source}, z={z if z is not None else '—'})")
+        except Exception:
+            pass
+    return res
+
+
+def _spread_close(direction: str, qty: float, source: str = "manual",
+                  reason: Optional[str] = None, z: Optional[float] = None,
+                  peak_pnl: Optional[float] = None,
+                  trough_pnl: Optional[float] = None) -> Dict[str, Any]:
+    """The shared spread CLOSE path. An EXIT is never blocked for the algo;
+    a manual close is refused only while the algo is ON."""
+    if source != "algo":
+        why = _manual_blocked()
+        if why:
+            return {"success": False, "error": why}
+        if not _manual_busy.acquire(blocking=False):
+            return {"success": False, "error": "Another manual order is still executing."}
+        try:
+            if algo_trader.running:
+                return {"success": False, "error": _manual_blocked()}
+            return _spread_close_unlocked(direction, qty, source, reason, z,
+                                          peak_pnl, trough_pnl)
+        finally:
+            _manual_busy.release()
+    return _spread_close_unlocked(direction, qty, source, reason, z,
+                                  peak_pnl, trough_pnl)
+
+
+def _spread_close_unlocked(direction: str, qty: float, source: str,
+                           reason: Optional[str], z: Optional[float],
+                           peak_pnl: Optional[float],
+                           trough_pnl: Optional[float]) -> Dict[str, Any]:
+    try:
+        res = _run_engine_coro(engine.execute_spread(direction, qty, is_entry=False))
+    except Exception as e:
+        logger.exception("spread close failed")
+        return {"success": False, "error": str(e)}
+    if res.get("success"):
+        op = db.journal_open_position()
+        open_id = op.get("id") if op else None
+        entry_spread = op.get("spread") if op else None
+        fill_spread = res.get("fill_spread")
+        gross = net = fees = None
+        if entry_spread is not None and fill_spread is not None:
+            d = 1.0 if direction.startswith("LONG") else -1.0
+            gross = d * (float(fill_spread) - float(entry_spread)) * qty
+            p = _algo_params()
+            ra = (op.get("leg_a_fill") if op else None) or res.get("leg_a_fill")
+            rb = (op.get("leg_b_fill") if op else None) or res.get("leg_b_fill")
+            fees = algo_trader._round_trip_cost(p, qty=qty, ref_a=ra, ref_b=rb)
+            net = gross - fees
+        db.journal_close(open_id=open_id, direction=direction, qty=qty,
+                         source=source, reason=reason or "manual", z=z,
+                         spread=fill_spread,
+                         leg_a_fill=res.get("leg_a_fill"),
+                         leg_b_fill=res.get("leg_b_fill"),
+                         net_pnl=net, gross_pnl=gross, fees=fees,
+                         peak_pnl=peak_pnl, trough_pnl=trough_pnl)
+        res["net_pnl"] = net
+        engine.set_position_state("NONE")
+        try:
+            _np = f"${net:.2f}" if net is not None else "n/a"
+            _emoji = "🟢" if (net or 0) >= 0 else "🔴"
+            get_notifier().notify_error(
+                f"{_emoji} CLOSE {direction.replace('_', ' ')} "
+                f"({reason or 'manual'}, {source}) · net {_np}")
+        except Exception:
+            pass
+    return res
+
+
+algo_trader = AlgoTrader(
+    signal_provider=signal_engine.get_signal,
+    params_provider=_algo_params,
+    execute_fn=_spread_execute,
+    close_fn=_spread_close,
+)
+
+# Reconciliation force-clear + critical halt reach the algo too.
+engine.on_position_cleared = lambda why: algo_trader.clear_position(why)
+engine.on_critical_halt = lambda msg: algo_trader.stop()
+
+
+def _okx_mode() -> str:
+    """PAPER / DEMO / LIVE as the server knows it."""
+    if engine.config.paper_trading:
+        return "paper"
+    if os.getenv('OKX_DEMO_MODE', 'false').lower() == 'true':
+        return "demo"
+    return "live"
 
 
 def run_async_loop(loop: asyncio.AbstractEventLoop):
@@ -133,15 +368,11 @@ def start_engine_loop():
 
     # Set up callbacks
     engine.on_tick = on_tick_callback
-    engine.on_signal = on_signal_callback
     engine.on_trade = on_trade_callback
     engine.on_error = on_error_callback
 
     # Give the auto-tuner a reference to the live engine so it can update config in-process
     auto_tuner.engine = engine
-
-    # Set up SD touch callback on signal generator
-    engine.signal_generator.on_sd_touch = on_sd_touch_callback
 
     # Configure Telegram notifier with current config and wire up data callbacks
     _telegram = get_notifier()
@@ -149,38 +380,32 @@ def start_engine_loop():
     _telegram.get_status_cb = lambda: engine.get_status()
     _telegram.get_trades_cb = lambda: [t.to_dict() for t in db.get_trades(limit=20)]
     _telegram.get_balance_cb = _get_balance_for_telegram
-    _telegram.optimize_cb = lambda: engine.signal_generator.optimize_parameters()
     # Start command polling in a background daemon thread
     _telegram.start_polling()
 
-    # Load spread history from database for recovery
-    spread_history = db.get_spread_history(config.asset, limit=config.lookback_period)
-    if spread_history:
-        spreads = [h['spread'] for h in spread_history]
-        engine.signal_generator.load_spread_history(spreads)
-        logger.info("Loaded %d spread values from database", len(spreads))
-
     # Cleanup old spread history to prevent database bloat
-    # Keep at least 2x lookback period to ensure sufficient data after restart
-    keep_count = max(config.lookback_period * 2, 2000)
-    db.cleanup_old_spread_history(config.asset, keep_count=keep_count)
+    db.cleanup_old_spread_history(config.asset, keep_count=20000)
 
-    # Recover open position from database (real trades only — paper positions
-    # are not carried over after a restart since they have no real exchange state)
-    open_trades = db.get_trades(limit=1, open_only=True)
-    if open_trades:
-        open_trade = open_trades[0]
-        if open_trade.is_paper:
-            logger.info("Ignoring open paper trade in recovery (id=%s)", open_trade.id)
-        elif open_trade.asset == config.asset:
-            engine.open_trade = open_trade
-            engine.state.current_position = open_trade.position_type
-            engine.signal_generator.set_position(open_trade.position_type)
-            logger.info("Recovered open %s position from database (trade_id=%d, entry_zscore=%.2f)",
-                       open_trade.position_type, open_trade.id, open_trade.entry_zscore)
-        else:
-            logger.warning("Open trade exists for different asset (%s vs %s), not recovering",
-                          open_trade.asset, config.asset)
+    # Recover the open position from the journal so the (stopped) algo can
+    # re-adopt it when started; a manual position stays manual and is shown /
+    # closable from the dashboard.
+    op = db.journal_open_position()
+    if op and op.get("direction"):
+        ptype = "LONG" if str(op["direction"]).startswith("LONG") else "SHORT"
+        engine.set_position_state(ptype)
+        if (op.get("source") or "manual") == "algo":
+            algo_trader.restore_position({
+                "direction": op["direction"], "qty": op.get("qty"),
+                "entry_spread": op.get("spread"),
+                "entry_leg_a": op.get("leg_a_fill"),
+                "entry_leg_b": op.get("leg_b_fill"),
+                "ts": op.get("ts"),
+            })
+        logger.info("Recovered open %s position from journal (owner=%s)",
+                    op["direction"], op.get("source"))
+
+    # Start the signal engine (samples the spread window from live ticks).
+    signal_engine.start()
 
     # Set up WebSocket streaming if enabled
     use_websocket = os.getenv('USE_WEBSOCKET', 'true').lower() == 'true'
@@ -236,6 +461,15 @@ def stop_engine_loop():
 
     logger.info("Shutting down trading engine...")
 
+    try:
+        algo_trader.stop()
+    except Exception:
+        pass
+    try:
+        signal_engine.stop()      # persists the window for a warm restart
+    except Exception:
+        pass
+
     if loop:
         try:
             # Stop the engine (which stops WebSocket)
@@ -270,48 +504,28 @@ if hasattr(signal, 'SIGTERM'):
 
 
 # Callback functions for engine events
+_last_spread_save = 0.0
+
+
 def on_tick_callback(spot_tick: MarketTick, futures_tick: MarketTick):
-    """Handle tick updates."""
+    """Handle tick updates: persist the spread (throttled) for the Analysis
+    page. The dashboard polls /api/signal — no socket emit needed."""
+    global _last_spread_save
+    now = time.time()
+    if now - _last_spread_save < 5.0:
+        return
+    _last_spread_save = now
+    # Convention: spread = spot − perp (leg_a − leg_b).
+    spread = spot_tick.mid - futures_tick.mid
     try:
-        tick_data = {
-            'spot': spot_tick.to_dict(),
-            'futures': futures_tick.to_dict(),
-            'timestamp': datetime.now(timezone.utc).isoformat(),
-        }
-        # Use socketio.emit with explicit namespace for background thread
-        socketio.emit('tick', tick_data, namespace='/')
-    except Exception as e:
-        logger.error("Error emitting tick: %s", e)
-
-    # Save spread to database for persistence/recovery
-    spread = futures_tick.mid - spot_tick.mid
-    db.save_spread(
-        asset=config.asset,
-        spot_price=spot_tick.mid,
-        futures_price=futures_tick.mid,
-        spread=spread,
-    )
-
-
-def on_signal_callback(signal: Signal):
-    """Handle signal updates."""
-    try:
-        signal_data = signal.to_dict()
-        signal_data['asset'] = config.asset
-        # Add data_points and lookback from signal generator state
-        sg_state = engine.signal_generator.get_state()
-        signal_data['data_points'] = sg_state.get('data_points', 0)
-        signal_data['lookback'] = sg_state.get('lookback', config.lookback_period)
-        signal_data['data_ready'] = sg_state.get('data_ready', False)
-        signal_data['std_ratio'] = sg_state.get('std_ratio')
-        signal_data['std_ratio_required'] = sg_state.get('std_ratio_required')
-        socketio.emit('signal', signal_data, namespace='/')
-    except Exception as e:
-        logger.error("Error emitting signal: %s", e)
-
-    # Log significant signals
-    if signal.signal_type != "NONE":
-        db.log_signal(signal_data)
+        db.save_spread(
+            asset=config.asset,
+            spot_price=spot_tick.mid,
+            futures_price=futures_tick.mid,
+            spread=spread,
+        )
+    except Exception:
+        logger.exception("Error saving spread history")
 
 
 def on_trade_callback(trade: Trade):
@@ -336,13 +550,6 @@ def on_error_callback(error: str):
         socketio.emit('error', {'message': error}, namespace='/')
     except Exception as e:
         logger.error("Error emitting error event: %s", e)
-
-
-def on_sd_touch_callback(event):
-    """Handle SD touch events - log to database."""
-    db.log_sd_touch(event)
-    logger.debug("SD touch: level=%s, direction=%s, zscore=%.4f",
-                 event.sd_level, event.direction, event.zscore)
 
 
 # Routes
@@ -476,23 +683,153 @@ def set_demo_mode():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-@app.route('/api/engine/toggle-algo', methods=['POST'])
-def toggle_algo():
-    """Toggle algorithmic trading."""
-    data = request.json
-    enabled = data.get('enabled', False)
+# ═══════════════════════════════════════════════════════════════════════════
+# Algo control + signal API (the arrow-statarb surface)
+# ═══════════════════════════════════════════════════════════════════════════
 
-    engine.toggle_algo(enabled)
-    # Re-read config from DB to avoid stale in-memory state, then update
-    current_config = db.get_config()
-    current_config.algo_enabled = enabled
-    db.save_config(current_config)
-    global config
-    config = current_config
+@app.route('/api/algo/state', methods=['GET'])
+def algo_state():
+    """THE one algo state every page's control button polls."""
+    st = algo_trader.get_state()
+    st['mode'] = _okx_mode()
+    st['qty_usd'] = engine.config.position_size_usd
+    st['algo_block'] = _algo_blocked() if not algo_trader.running else None
+    op = _open_position_view()
+    st['open_position'] = op
+    return jsonify(st)
 
-    socketio.emit('status', engine.get_status())
 
-    return jsonify({'success': True, 'algo_enabled': enabled})
+@app.route('/api/algo/start', methods=['POST'])
+def algo_start():
+    why = _algo_blocked()
+    if why:
+        return jsonify({'success': False, 'error': why})
+    if not signal_engine.running:
+        signal_engine.start()
+    started = algo_trader.start()
+    return jsonify({'success': True, 'running': algo_trader.running,
+                    'already_running': not started})
+
+
+@app.route('/api/algo/stop', methods=['POST'])
+def algo_stop():
+    algo_trader.stop()
+    return jsonify({'success': True, 'running': algo_trader.running})
+
+
+@app.route('/api/signal', methods=['GET'])
+def api_signal():
+    """The live signal snapshot + algo snapshot + edge preview — the one
+    payload the dashboard polls."""
+    sig = signal_engine.get_signal()
+    sig['algo'] = algo_trader.get_state()
+    sig['mode'] = _okx_mode()
+    try:
+        sig['edge'] = algo_trader.edge_preview(sig)
+    except Exception:
+        sig['edge'] = {}
+    sig['open_position'] = _open_position_view()
+    return jsonify(sig)
+
+
+@app.route('/api/signal/series', methods=['GET'])
+def api_signal_series():
+    """Downsampled spread/z series for the charts."""
+    try:
+        max_points = int(request.args.get('max_points', 200))
+        last_sec = request.args.get('last_sec')
+        last_sec = float(last_sec) if last_sec else None
+    except (TypeError, ValueError):
+        max_points, last_sec = 200, None
+    return jsonify(signal_engine.get_series(max_points=max_points, last_sec=last_sec))
+
+
+@app.route('/api/signal/reset', methods=['POST'])
+def api_signal_reset():
+    """Discard the rolling window (fresh warm-up)."""
+    signal_engine.reset()
+    return jsonify({'success': True})
+
+
+@app.route('/api/excursions', methods=['GET'])
+def api_excursions():
+    return jsonify(signal_engine.get_excursions())
+
+
+@app.route('/api/excursions/reset', methods=['POST'])
+def api_excursions_reset():
+    signal_engine.reset_excursions()
+    return jsonify({'success': True})
+
+
+@app.route('/api/execute', methods=['POST'])
+def api_execute():
+    """MANUAL spread entry (refused while the algo is ON)."""
+    data = request.json or {}
+    direction = str(data.get('direction', '')).upper()
+    if direction not in ('LONG_SPREAD', 'SHORT_SPREAD'):
+        return jsonify({'success': False, 'error': f'bad direction: {direction}'}), 400
+    sig = signal_engine.get_signal()
+    qty = data.get('qty')
+    if qty is None:
+        la = sig.get('leg_a')
+        if not la:
+            return jsonify({'success': False, 'error': 'no price to size from'}), 400
+        qty = engine.config.position_size_usd / float(la)
+    z = sig.get('z_sell') if direction == 'SHORT_SPREAD' else sig.get('z_buy')
+    spread = (sig.get('sell_spread') if direction == 'SHORT_SPREAD'
+              else sig.get('buy_spread')) or sig.get('spread')
+    res = _spread_execute(direction, float(qty), source='manual',
+                          z=z if z is not None else sig.get('zscore'),
+                          spread=spread)
+    return jsonify(res)
+
+
+@app.route('/api/close', methods=['POST'])
+def api_close():
+    """MANUAL close of the open position (refused while the algo is ON)."""
+    op = _open_position_view()
+    if not op:
+        return jsonify({'success': False, 'error': 'No open position'}), 400
+    sig = signal_engine.get_signal()
+    direction = op['direction']
+    z = sig.get('z_sell') if direction == 'LONG_SPREAD' else sig.get('z_buy')
+    res = _spread_close(direction, float(op['qty']), source='manual',
+                        reason='manual',
+                        z=z if z is not None else sig.get('zscore'))
+    if res.get('success'):
+        algo_trader.clear_position('closed manually')
+    return jsonify(res)
+
+
+@app.route('/api/algo-params', methods=['GET'])
+def get_algo_params_route():
+    """Effective params (defaults ← stored) + which keys are stored."""
+    return jsonify({'params': _algo_params(),
+                    'stored': db.get_algo_params(),
+                    'defaults': DEFAULT_ALGO_PARAMS})
+
+
+@app.route('/api/algo-params', methods=['POST'])
+def save_algo_params_route():
+    data = request.json or {}
+    # Only accept known keys so a typo can't silently create a dead setting.
+    unknown = [k for k in data if k not in DEFAULT_ALGO_PARAMS]
+    if unknown:
+        return jsonify({'success': False,
+                        'error': f"unknown params: {', '.join(unknown)}"}), 400
+    db.save_algo_params(data)
+    return jsonify({'success': True, 'params': _algo_params()})
+
+
+@app.route('/api/journal', methods=['GET'])
+def api_journal():
+    """The spread journal (OPEN/CLOSE rows, newest first)."""
+    try:
+        limit = int(request.args.get('limit', 100))
+    except (TypeError, ValueError):
+        limit = 100
+    return jsonify({'rows': db.journal_rows(limit=limit)})
 
 
 @app.route('/api/engine/status', methods=['GET'])
@@ -522,7 +859,6 @@ def sync_position():
         # Force clear the position state (useful if position was manually closed on exchange)
         old_position = engine.state.current_position
         engine.state.current_position = "NONE"
-        engine.signal_generator.set_position("NONE")
         engine.open_trade = None
 
         # Also mark any open trades in DB as closed
@@ -565,7 +901,6 @@ def sync_position():
         old_position = engine.state.current_position
         engine.open_trade = open_trade
         engine.state.current_position = open_trade.position_type
-        engine.signal_generator.set_position(open_trade.position_type)
 
         socketio.emit('status', engine.get_status())
 
@@ -1221,7 +1556,7 @@ def close_trade_manually(trade_id):
         spot_price = engine.spot_tick.mid
         futures_price = engine.futures_tick.mid
         spread = futures_price - spot_price
-        zscore = engine.signal_generator.current_zscore
+        zscore = (signal_engine.get_signal() or {}).get('zscore') or 0.0
 
         # Update the trade with exit details
         with db._get_connection() as conn:
@@ -1243,7 +1578,6 @@ def close_trade_manually(trade_id):
             if cursor.rowcount > 0:
                 # Reset engine position
                 engine.state.current_position = "NONE"
-                engine.signal_generator.set_position("NONE")
                 engine.open_trade = None
                 logger.info("Manually closed trade %d at spread=%.2f, zscore=%.4f", trade_id, spread, zscore)
                 return jsonify({'success': True})
@@ -1252,7 +1586,6 @@ def close_trade_manually(trade_id):
     success = db.close_trade(trade_id, exit_reason="MANUAL")
     if success:
         engine.state.current_position = "NONE"
-        engine.signal_generator.set_position("NONE")
         engine.open_trade = None
         return jsonify({'success': True})
     return jsonify({'success': False, 'error': 'Trade not found or already closed'}), 404
@@ -1266,8 +1599,7 @@ def clear_sd_touches():
 
     deleted = db.clear_sd_touches(asset=asset)
     # Also clear from signal generator memory
-    engine.signal_generator.sd_touch_events.clear()
-    engine.signal_generator.last_sd_level = 0.0
+    # (legacy SD-touch state removed with the old SignalGenerator)
 
     return jsonify({'success': True, 'deleted': deleted})
 
@@ -1280,86 +1612,15 @@ def clear_spread_history():
 
     deleted = db.clear_spread_history(asset=asset)
     # Reset signal generator
-    engine.signal_generator.reset()
+    signal_engine.reset()
 
     return jsonify({'success': True, 'deleted': deleted})
 
 
 @app.route('/api/engine/close-position', methods=['POST'])
 def close_current_position():
-    """Close the current open position manually."""
-    if engine.state.current_position == "NONE" or not engine.open_trade:
-        return jsonify({'success': False, 'error': 'No open position'}), 400
-
-    # Create a manual exit signal
-    if engine.spot_tick and engine.futures_tick:
-        from models import Signal
-        manual_signal = Signal(
-            signal_type="EXIT",
-            zscore=engine.signal_generator.current_zscore,
-            spread=engine.signal_generator.current_spread,
-            spread_mean=engine.signal_generator.current_mean,
-            spread_std=engine.signal_generator.current_std,
-            hurst=engine.signal_generator.current_hurst,
-            regime="MANUAL_CLOSE",
-            current_position=engine.state.current_position,
-            timestamp=datetime.now(timezone.utc),
-        )
-
-        # Execute the close
-        async def close_position():
-            trade = engine.open_trade
-            spot_price = engine.spot_tick.mid
-            futures_price = engine.futures_tick.mid
-
-            # Calculate P&L
-            if trade.position_type == "LONG":
-                spread_change = manual_signal.spread - trade.entry_spread
-                pnl = spread_change * trade.quantity
-            else:
-                spread_change = trade.entry_spread - manual_signal.spread
-                pnl = spread_change * trade.quantity
-
-            pnl_percent = (pnl / trade.notional_usd) * 100 if trade.notional_usd > 0 else 0
-
-            # Update trade
-            trade.exit_time = datetime.now(timezone.utc)
-            trade.exit_spot_price = spot_price
-            trade.exit_futures_price = futures_price
-            trade.exit_spread = manual_signal.spread
-            trade.exit_zscore = manual_signal.zscore
-            trade.exit_reason = "MANUAL"
-            trade.pnl_usd = pnl
-            trade.pnl_percent = pnl_percent
-            trade.is_open = False
-
-            # Execute exit orders if not paper trading
-            if not engine.state.paper_trading and engine.order_executor:
-                await engine._execute_exit_orders(trade, manual_signal)
-
-            # Save to database
-            db.save_trade(trade)
-
-            # Reset engine state
-            engine.state.current_position = "NONE"
-            engine.signal_generator.set_position("NONE")
-            engine.open_trade = None
-
-            # Notify via socket
-            socketio.emit('trade', trade.to_dict(), namespace='/')
-
-            return trade
-
-        if loop:
-            future = asyncio.run_coroutine_threadsafe(close_position(), loop)
-            trade = future.result(timeout=30)
-            return jsonify({
-                'success': True,
-                'trade': trade.to_dict(),
-                'message': f"Position closed. P&L: ${trade.pnl_usd:.2f} ({trade.pnl_percent:.2f}%)"
-            })
-
-    return jsonify({'success': False, 'error': 'No price data available'}), 400
+    """Legacy alias — closes the open position via the shared order path."""
+    return api_close()
 
 
 @app.route('/api/exchange-orders', methods=['GET'])
@@ -2399,12 +2660,10 @@ async def _suite_open_order(order_type: str, quantity: float, forced_mode: str |
             entry_price = tick.mid
             sprd_now = round(engine.futures_tick.mid - engine.spot_tick.mid, 4) \
                        if engine.spot_tick and engine.futures_tick else None
-            z_now    = round(engine.signal_generator.current_zscore, 4) \
-                       if engine.signal_generator else None
-            std_now  = round(engine.signal_generator.current_std,  4) \
-                       if engine.signal_generator else None
-            mean_now = round(engine.signal_generator.current_mean, 4) \
-                       if engine.signal_generator else None
+            _sig = signal_engine.get_signal() or {}
+            z_now    = _sig.get('zscore')
+            std_now  = _sig.get('std')
+            mean_now = _sig.get('mean')
             return (market_type, side, entry_price, result, quantity, pos_side, place_ms, lp,
                     tick.bid, tick.ask, sprd_now, z_now, std_now, mean_now), None
         return None, result.error
@@ -2555,12 +2814,10 @@ async def _suite_close_position(pos_id: str):
     bid_at_close    = _close_tick.bid if _close_tick else None
     ask_at_close    = _close_tick.ask if _close_tick else None
     spread_at_close = round(_tf.mid - _ts.mid, 4) if (_ts and _tf) else None
-    zscore_at_close = round(engine.signal_generator.current_zscore, 4) \
-                      if engine.signal_generator else None
-    std_at_close    = round(engine.signal_generator.current_std,  4) \
-                      if engine.signal_generator else None
-    mean_at_close   = round(engine.signal_generator.current_mean, 4) \
-                      if engine.signal_generator else None
+    _sig = signal_engine.get_signal() or {}
+    zscore_at_close = _sig.get('zscore')
+    std_at_close    = _sig.get('std')
+    mean_at_close   = _sig.get('mean')
 
     # Cross-margin SPOT MARKET BUY (closing a SELL position) needs sz in USDT.
     tick = engine.spot_tick if market_type == "SPOT" else engine.futures_tick
@@ -3407,12 +3664,10 @@ def reset_trades_only():
     signals_deleted = db.clear_signal_log(asset=asset)
 
     # Clear SD touch events from signal generator memory but keep spread data
-    engine.signal_generator.sd_touch_events.clear()
-    engine.signal_generator.last_sd_level = 0.0
+    # (legacy SD-touch state removed with the old SignalGenerator)
 
     # Reset position state but keep spread history
     engine.state.current_position = "NONE"
-    engine.signal_generator.set_position("NONE")
     engine.open_trade = None
 
     logger.info("Trades/SD reset: trades=%d, sd_touches=%d, signals=%d (spread preserved)",

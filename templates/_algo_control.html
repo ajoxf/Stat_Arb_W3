@@ -1,0 +1,230 @@
+{#
+  THE one Algo on/off control. Included in the top bar of every page so there
+  is exactly one way to see and change whether the algo is running, and it
+  looks and behaves the same everywhere.
+
+  - State comes ONLY from the server (/api/algo/state), polled every 2 s, so
+    every open tab agrees within 2 s. The button never shows what it was asked
+    to do, only what the server says is true.
+  - Unreachable server -> "ALGO ?" (amber), never a stale ON/OFF.
+  - Start and Stop both ask for confirmation. Stop leaves an open position
+    open and unmanaged, and says so.
+  - The browser tab title is prefixed with the state.
+#}
+<span id="mode-ctl" class="badge mode-ctl mode-ctl-unknown" data-mode-badge
+      title="Trading mode, as the server reports it (checked every 2 s)">MODE ?</span>
+<button type="button" id="algo-ctl" class="btn btn-sm algo-ctl algo-ctl-unknown"
+        onclick="AlgoCtl.click()" title="Algo state, as the server reports it (checked every 2 s)">
+    <span class="algo-ctl-dot"></span>
+    <span id="algo-ctl-text">ALGO ?</span>
+</button>
+
+<div class="modal fade" id="algoCtlModal" tabindex="-1" aria-labelledby="algoCtlTitle" aria-modal="true" role="dialog">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header py-3" id="algoCtlHeader">
+                <h6 class="modal-title mb-0 fw-semibold" id="algoCtlTitle"></h6>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cancel"></button>
+            </div>
+            <div class="modal-body px-4 py-3" id="algoCtlBody" style="font-size:0.9rem;"></div>
+            <div class="modal-footer py-2">
+                <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-sm fw-semibold" id="algoCtlConfirm"></button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+    .algo-ctl { display: inline-flex; align-items: center; gap: 6px; font-weight: 700;
+                letter-spacing: 0.03em; border-width: 2px; min-width: 9.5rem; justify-content: center; }
+    .algo-ctl-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; background: currentColor; }
+    .algo-ctl-off     { color: #6c757d; border-color: #6c757d; background: transparent; }
+    .algo-ctl-on      { color: #fff; border-color: #198754; background: #198754; }
+    .algo-ctl-on-live { color: #fff; border-color: #dc3545; background: #dc3545; }
+    .algo-ctl-on .algo-ctl-dot, .algo-ctl-on-live .algo-ctl-dot { animation: algo-ctl-pulse 1.2s infinite; }
+    .algo-ctl-unknown { color: #000; border-color: #ffc107; background: #ffc107; }
+    .algo-ctl-busy    { opacity: 0.6; pointer-events: none; }
+    /* Red top stripe on EVERY page while the server says LIVE (set by AlgoCtl). */
+    body.mode-live::before { content: ''; display: block; position: fixed; top: 0; left: 0; right: 0;
+                             height: 3px; background: #dc3545; z-index: 9999; }
+    body.mode-live .navbar { border-bottom: 2px solid #dc3545 !important; }
+    .mode-ctl { font-size: 0.75rem; letter-spacing: 0.04em; padding: 0.4em 0.7em; }
+    .mode-ctl-live  { background: #dc3545 !important; color: #fff !important; }
+    .mode-ctl-demo  { background: #0dcaf0 !important; color: #000 !important; }
+    .mode-ctl-paper { background: #ffc107 !important; color: #000 !important; }
+    .mode-ctl-unknown { background: #6c757d !important; color: #fff !important; }
+    @keyframes algo-ctl-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.25; } }
+</style>
+
+<script>
+const AlgoCtl = (function () {
+    const MODE_LABEL = { live: 'LIVE', demo: 'DEMO', paper: 'PAPER' };
+    let state = null;          // last server answer, or null when unknown
+    let busy = false;
+    const baseTitle = document.title;
+
+    function notify(msg, kind) {
+        if (typeof showToast === 'function') return showToast(msg, kind);
+        alert(msg);
+    }
+
+    const MODE_HELP = {
+        live: 'LIVE — real orders are sent to OKX with real funds',
+        demo: 'DEMO — orders go to the OKX demo server (simulated fills)',
+        paper: 'PAPER — fills simulated locally: no orders leave this machine',
+    };
+
+    // Every mode display on the page reads the SAME server answer as the
+    // Algo button: [data-mode-badge] gets the label, [data-live-only] is
+    // shown only while the mode is LIVE.
+    function renderMode() {
+        const m = state ? state.mode : null;
+        const label = m ? (MODE_LABEL[m] || String(m).toUpperCase()) : 'MODE ?';
+        document.querySelectorAll('[data-mode-badge]').forEach(el => {
+            el.textContent = label;
+            el.classList.remove('mode-ctl-live', 'mode-ctl-demo', 'mode-ctl-paper', 'mode-ctl-unknown');
+            el.classList.add('badge', 'mode-ctl', 'mode-ctl-' + (m || 'unknown'));
+            el.title = m ? MODE_HELP[m] || label : 'Cannot reach the server — mode UNKNOWN';
+        });
+        document.body.classList.toggle('mode-live', m === 'live');
+        document.querySelectorAll('[data-live-only]').forEach(el => {
+            el.classList.toggle('d-none', m !== 'live');
+        });
+    }
+
+    function render() {
+        renderMode();
+        const btn = document.getElementById('algo-ctl');
+        const txt = document.getElementById('algo-ctl-text');
+        if (!btn || !txt) return;
+        btn.classList.remove('algo-ctl-off', 'algo-ctl-on', 'algo-ctl-on-live', 'algo-ctl-unknown');
+        btn.classList.toggle('algo-ctl-busy', busy);
+        let label, prefix;
+        if (state === null) {
+            btn.classList.add('algo-ctl-unknown');
+            label = 'ALGO ?';
+            prefix = '? ALGO';
+            btn.title = 'Cannot reach the server — the algo state is UNKNOWN. Do not assume it is off.';
+        } else if (state.running) {
+            const mode = MODE_LABEL[state.mode] || String(state.mode || '').toUpperCase();
+            btn.classList.add(state.mode === 'live' ? 'algo-ctl-on-live' : 'algo-ctl-on');
+            label = 'ALGO ON · ' + mode;
+            prefix = '● ALGO ON';
+            btn.title = 'The algo is RUNNING (' + mode + ', $' + (state.qty_usd || 0) + ' per trade). Click to stop it.';
+        } else {
+            btn.classList.add('algo-ctl-off');
+            label = 'ALGO OFF';
+            prefix = '○ ALGO OFF';
+            btn.title = state.algo_block
+                ? 'The algo is STOPPED and cannot start: ' + state.algo_block
+                : 'The algo is STOPPED — it will not open or close anything. Click to start it.';
+        }
+        txt.textContent = label;
+        document.title = prefix + ' · ' + baseTitle;
+    }
+
+    async function refresh() {
+        try {
+            const r = await fetch('/api/algo/state', { cache: 'no-store' });
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            state = await r.json();
+        } catch (e) {
+            state = null;
+        }
+        render();
+        return state;
+    }
+
+    function confirmModal(opts) {
+        const el = document.getElementById('algoCtlModal');
+        document.getElementById('algoCtlHeader').className = 'modal-header py-3 ' + opts.header;
+        document.getElementById('algoCtlTitle').textContent = opts.title;
+        document.getElementById('algoCtlBody').innerHTML = opts.body;
+        const ok = document.getElementById('algoCtlConfirm');
+        ok.className = 'btn btn-sm fw-semibold ' + opts.button;
+        ok.textContent = opts.confirm;
+        return new Promise(resolve => {
+            let answered = false;
+            const modal = bootstrap.Modal.getOrCreateInstance(el);
+            const onOk = () => { answered = true; modal.hide(); };
+            ok.addEventListener('click', onOk, { once: true });
+            el.addEventListener('hidden.bs.modal', () => {
+                ok.removeEventListener('click', onOk);
+                resolve(answered);
+            }, { once: true });
+            modal.show();
+        });
+    }
+
+    async function click() {
+        if (busy) return;
+        // Decide from the SERVER's current answer, not from what the button shows.
+        const s = await refresh();
+        if (s === null) {
+            notify('Cannot reach the server — algo state unknown. Nothing was changed.', 'danger');
+            return;
+        }
+        const mode = MODE_LABEL[s.mode] || String(s.mode || '').toUpperCase();
+        let ok;
+        if (!s.running) {
+            if (s.algo_block) {
+                notify('Algo cannot start: ' + s.algo_block, 'warning');
+                return;
+            }
+            const live = s.mode === 'live';
+            ok = await confirmModal({
+                header: live ? 'bg-danger text-white' : 'bg-success text-white',
+                title: live ? 'Start the algo — LIVE, REAL MONEY' : 'Start the algo — ' + mode,
+                body: (live
+                    ? '<p class="mb-2">The algo will send <strong>real orders to OKX</strong> on its own, '
+                      + 'entering and exiting the spread without asking.</p>'
+                    : '<p class="mb-2">The algo will enter and exit on its own in <strong>' + mode
+                      + '</strong> mode' + (s.mode === 'paper' ? ' — no orders leave this machine.' : ' — orders go to the OKX demo server.') + '</p>')
+                    + '<ul class="mb-0"><li>Size: <strong>$' + (s.qty_usd || 0) + '</strong> per trade</li>'
+                    + '<li>Check the entry threshold, the round-trip cost and the available margin first.</li></ul>',
+                confirm: live ? 'Start LIVE' : 'Start',
+                button: live ? 'btn-danger' : 'btn-success',
+            });
+        } else {
+            const pos = s.in_position && s.position;
+            ok = await confirmModal({
+                header: 'bg-secondary text-white',
+                title: 'Stop the algo',
+                body: '<p class="mb-2">The algo will stop opening and closing trades.</p>'
+                    + (pos
+                        ? '<p class="mb-0 text-danger fw-semibold">A ' + pos.direction.replace('_', ' ')
+                          + ' position (qty ' + Number(pos.qty).toFixed(6) + ') is OPEN. Stopping leaves it open and '
+                          + 'NO LONGER MANAGED — no stop, no target, no time-stop — until you close it '
+                          + 'or start the algo again.</p>'
+                        : '<p class="mb-0">There is no open position.</p>'),
+                confirm: 'Stop',
+                button: 'btn-dark',
+            });
+        }
+        if (!ok) return;
+        busy = true; render();
+        try {
+            const ep = s.running ? '/api/algo/stop' : '/api/algo/start';
+            const r = await fetch(ep, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({}) }).then(x => x.json());
+            if (r && r.success === false) {
+                notify('Algo NOT ' + (s.running ? 'stopped' : 'started') + ': ' + (r.error || 'refused'), 'danger');
+            }
+        } catch (e) {
+            notify('Algo request failed: ' + e + ' — check the state before assuming anything.', 'danger');
+        } finally {
+            busy = false;
+            await refresh();
+            if (state !== null) notify(state.running ? 'Algo is ON' : 'Algo is OFF',
+                                       state.running ? 'success' : 'secondary');
+        }
+    }
+
+    refresh();
+    setInterval(refresh, 2000);
+    // Coming back to a tab must never show an old state.
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
+    return { click, refresh, get state() { return state; } };
+})();
+</script>

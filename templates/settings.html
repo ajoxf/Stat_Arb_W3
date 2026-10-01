@@ -1,780 +1,435 @@
 {% extends "base.html" %}
-
-{% block title %}Settings - Nexus{% endblock %}
+{% block title %}Settings — Nexus{% endblock %}
 
 {% block content %}
-<div class="row justify-content-center">
-    <div class="col-lg-8">
-        <div class="card">
-            <div class="card-header">
-                <i class="bi bi-gear me-2"></i>Trading Configuration
-            </div>
+<h4 class="mb-3"><i class="bi bi-gear me-2"></i>Trading Settings
+    <small class="text-secondary" style="font-size:0.8rem;">— strategy changes apply on the next tick, no restart</small>
+</h4>
+
+<div class="row g-3">
+    <!-- ══ Column 1: Signal + Entry gates ══════════════════════════════════ -->
+    <div class="col-lg-4">
+        <div class="card mb-3">
+            <div class="card-header"><i class="bi bi-graph-up me-2"></i>Signal Parameters</div>
             <div class="card-body">
-                <form id="config-form">
-                    <!-- Asset Selection -->
-                    <div class="row mb-4">
-                        <div class="col-12">
-                            <h6 class="text-secondary mb-3">Asset Selection</h6>
-                        </div>
-                        <div class="col-md-4">
-                            <label class="form-label">Asset</label>
-                            <select class="form-select" id="asset" name="asset">
-                                {% for key, asset in assets.items() %}
-                                <option value="{{ key }}" {% if config.asset == key %}selected{% endif %}>
-                                    {{ key }} - {{ asset.name }}
-                                </option>
-                                {% endfor %}
-                            </select>
-                        </div>
-                        <div class="col-md-4">
-                            <label class="form-label">Spot Symbol</label>
-                            <input type="text" class="form-control" id="spot_symbol" name="spot_symbol" value="{{ config.spot_symbol }}">
-                        </div>
-                        <div class="col-md-4">
-                            <label class="form-label">Futures Symbol</label>
-                            <input type="text" class="form-control" id="futures_symbol" name="futures_symbol" value="{{ config.futures_symbol }}">
-                        </div>
+                <div class="row g-2">
+                    <div class="col-6">
+                        <label class="form-label">Collection window <span class="badge bg-secondary">min</span></label>
+                        <input type="number" step="1" class="form-control form-control-sm ap" id="window_minutes">
+                        <div class="form-text">Rolling lookback for mean / σ / z.</div>
                     </div>
-
-                    <hr class="my-4" style="border-color: var(--border-color);">
-
-                    <!-- Z-Score Thresholds -->
-                    <div class="row mb-4">
-                        <div class="col-12">
-                            <h6 class="text-secondary mb-3">Z-Score Thresholds</h6>
-                        </div>
-                        <div class="col-md-4">
-                            <label class="form-label">Entry Threshold</label>
-                            <input type="number" class="form-control" id="entry_threshold" name="entry_threshold" value="{{ config.entry_threshold }}" step="0.1" min="0.5" max="5">
-                            <small class="text-secondary">Entry at Z &ge; +/- this value</small>
-                        </div>
-                        <div class="col-md-4">
-                            <label class="form-label">Exit Threshold</label>
-                            <input type="number" class="form-control" id="exit_threshold" name="exit_threshold" value="{{ config.exit_threshold }}" step="0.1" min="0" max="3">
-                            <small class="text-secondary">Exit when Z returns to +/- this value</small>
-                        </div>
-                        <div class="col-md-4">
-                            <label class="form-label">Stop Loss Threshold</label>
-                            <input type="number" class="form-control" id="stop_loss_threshold" name="stop_loss_threshold" value="{{ config.stop_loss_threshold }}" step="0.1" min="2" max="10">
-                            <small class="text-secondary">Stop loss at Z &ge; +/- this value</small>
-                        </div>
+                    <div class="col-6">
+                        <label class="form-label">Warm-up <span class="badge bg-secondary">min</span></label>
+                        <input type="number" step="1" class="form-control form-control-sm ap" id="min_signal_minutes">
+                        <div class="form-text">Collect this much before ANY trade.</div>
                     </div>
-
-                    <hr class="my-4" style="border-color: var(--border-color);">
-
-                    <!-- Rolling Window -->
-                    <div class="row mb-4">
-                        <div class="col-12">
-                            <h6 class="text-secondary mb-3">Rolling Window Settings</h6>
-                        </div>
-                        <div class="col-md-6">
-                            <label class="form-label">Lookback Period</label>
-                            <input type="number" class="form-control" id="lookback_period" name="lookback_period" value="{{ config.lookback_period }}" min="20" max="100000">
-                            <small class="text-secondary">Number of ticks to collect before trading. Progress shown on dashboard.</small>
-                        </div>
-                        <div class="col-md-6">
-                            <label class="form-label">Stats Update Interval (seconds)</label>
-                            <select class="form-select" id="stats_update_interval" name="stats_update_interval">
-                                <option value="0" {% if config.stats_update_interval == 0 %}selected{% endif %}>Every tick (real-time)</option>
-                                <option value="60" {% if config.stats_update_interval == 60 %}selected{% endif %}>1 minute</option>
-                                <option value="300" {% if config.stats_update_interval == 300 %}selected{% endif %}>5 minutes</option>
-                                <option value="600" {% if config.stats_update_interval == 600 %}selected{% endif %}>10 minutes</option>
-                                <option value="900" {% if config.stats_update_interval == 900 %}selected{% endif %}>15 minutes</option>
-                                <option value="1800" {% if config.stats_update_interval == 1800 %}selected{% endif %}>30 minutes</option>
-                                <option value="3600" {% if config.stats_update_interval == 3600 %}selected{% endif %}>1 hour</option>
-                            </select>
-                            <small class="text-secondary">How often to recalculate mean/std (bands stay stable)</small>
-                        </div>
+                    <div class="col-6">
+                        <label class="form-label">Sample interval (s)</label>
+                        <input type="number" step="0.1" class="form-control form-control-sm ap" id="sample_interval_sec">
                     </div>
-
-                    <hr class="my-4" style="border-color: var(--border-color);">
-
-                    <!-- Filters -->
-                    <div class="row mb-4">
-                        <div class="col-12">
-                            <h6 class="text-secondary mb-3">Signal Filters</h6>
-                        </div>
-                        <div class="col-md-6">
-                            <div class="form-check form-switch mb-3">
-                                <input class="form-check-input" type="checkbox" id="hurst_enabled" name="hurst_enabled" {% if config.hurst_enabled %}checked{% endif %}>
-                                <label class="form-check-label" for="hurst_enabled">Enable Hurst Filter</label>
-                            </div>
-                            <label class="form-label">Hurst Threshold</label>
-                            <input type="number" class="form-control" id="hurst_threshold" name="hurst_threshold" value="{{ config.hurst_threshold }}" step="0.05" min="0.3" max="0.7">
-                            <small class="text-secondary">Block entries when Hurst &ge; this value (trending)</small>
-                        </div>
-                        <div class="col-md-6">
-                            <div class="form-check form-switch mb-3">
-                                <input class="form-check-input" type="checkbox" id="std_filter_enabled" name="std_filter_enabled" {% if config.std_filter_enabled %}checked{% endif %}>
-                                <label class="form-check-label" for="std_filter_enabled">Enable STD Filter</label>
-                            </div>
-                            <label class="form-label">Min STD Multiple</label>
-                            <input type="number" class="form-control" id="min_std_multiple" name="min_std_multiple" value="{{ config.min_std_multiple }}" step="0.1" min="1" max="5">
-                            <small class="text-secondary">STD must be &gt; costs * this multiple</small>
-                        </div>
+                    <div class="col-6">
+                        <label class="form-label">Stats update (s)</label>
+                        <input type="number" step="1" class="form-control form-control-sm ap" id="stats_update_interval_sec">
+                        <div class="form-text">Recompute mean/σ every N s so the bands stay steady. 0 = every tick.</div>
                     </div>
-
-                    <hr class="my-4" style="border-color: var(--border-color);">
-
-                    <!-- Self-Learning -->
-                    <div class="row mb-4">
-                        <div class="col-12">
-                            <h6 class="text-secondary mb-3">Self-Learning (AI Auto-Tune)</h6>
-                            <small class="text-secondary d-block mb-3">
-                                After every closed trade, Claude analyses the outcome and stores a structured learning.
-                                When <strong>Auto-Tune</strong> is on, it will automatically adjust parameters if
-                                3 or more consecutive analyses agree on the same change with &ge;70% confidence.
-                                Changes are clamped to safe corridors (max ±0.2 per adjustment).
-                            </small>
-                        </div>
-
-                        <!-- Claude API Key entry -->
-                        <div class="col-12 mb-3">
-                            <label class="form-label fw-semibold">
-                                Claude AI API Key
-                                <span id="anthropic-status-badge" class="badge ms-2 bg-secondary" style="font-size:0.65rem;">Checking...</span>
-                            </label>
-                            <div class="input-group">
-                                <input type="password" class="form-control" id="anthropic-key-input"
-                                    placeholder="sk-ant-api03-..." autocomplete="off">
-                                <button class="btn btn-outline-primary" type="button" id="anthropic-toggle-eye" title="Show/hide key">
-                                    <i class="bi bi-eye" id="anthropic-eye-icon"></i>
-                                </button>
-                                <button class="btn btn-primary" type="button" id="anthropic-save-btn">Save Key</button>
-                                <button class="btn btn-outline-secondary" type="button" id="anthropic-test-btn">Test Connection</button>
-                            </div>
-                            <small id="anthropic-key-hint" class="text-secondary">
-                                Get your key at <a href="https://console.anthropic.com/keys" target="_blank">console.anthropic.com/keys</a>.
-                                Saved to <code>.env</code> — persists across restarts.
-                            </small>
-                            <div id="anthropic-feedback" class="mt-1" style="font-size:0.82rem;display:none;"></div>
-                        </div>
-
-                        <div class="col-md-6">
-                            <div class="form-check form-switch mb-2">
-                                <input class="form-check-input" type="checkbox" id="auto_tune_enabled" name="auto_tune_enabled" {% if config.auto_tune_enabled %}checked{% endif %}>
-                                <label class="form-check-label fw-semibold" for="auto_tune_enabled">Enable Auto-Tune Parameters</label>
-                            </div>
-                            <small class="text-secondary">
-                                When disabled, Claude still analyses every trade and the Learning Log is updated —
-                                but no parameters are changed automatically.
-                            </small>
-                        </div>
-                        <div class="col-md-6 d-flex align-items-start gap-2 flex-wrap">
-                            <a href="/api/learning-log" target="_blank" class="btn btn-sm btn-outline-secondary">
-                                <i class="bi bi-list-ul me-1"></i>View Learning Log (JSON)
-                            </a>
-                            <a href="/api/learnings" target="_blank" class="btn btn-sm btn-outline-secondary">
-                                <i class="bi bi-lightbulb me-1"></i>View Learnings (JSON)
-                            </a>
-                        </div>
+                    <div class="col-4">
+                        <label class="form-label">Entry Z (σ)</label>
+                        <input type="number" step="0.1" class="form-control form-control-sm ap" id="entry_zscore">
                     </div>
-
-                    <hr class="my-4" style="border-color: var(--border-color);">
-
-                    <!-- Position Sizing -->
-                    <div class="row mb-4">
-                        <div class="col-12">
-                            <h6 class="text-secondary mb-3">Position Sizing</h6>
-                        </div>
-                        <div class="col-md-6">
-                            <label class="form-label">Position Size (USD)</label>
-                            <input type="number" class="form-control" id="position_size_usd" name="position_size_usd" value="{{ config.position_size_usd }}" step="100" min="100">
-                        </div>
-                        <div class="col-md-6">
-                            <label class="form-label">Max Position Size (USD)</label>
-                            <input type="number" class="form-control" id="max_position_size_usd" name="max_position_size_usd" value="{{ config.max_position_size_usd }}" step="100" min="100">
-                        </div>
+                    <div class="col-4">
+                        <label class="form-label">Exit Z (σ)</label>
+                        <input type="number" step="0.1" class="form-control form-control-sm ap" id="exit_zscore">
                     </div>
-
-                    <div class="row mb-4">
-                        <div class="col-12">
-                            <h6 class="text-secondary mb-3">Leverage Settings</h6>
-                            <small class="text-secondary d-block mb-3">Leverage multiplies both potential gains and losses. Use with caution.</small>
-                        </div>
-                        <div class="col-md-6">
-                            <label class="form-label">Spot Leverage</label>
-                            <select class="form-select" id="spot_leverage" name="spot_leverage">
-                                <option value="1" {% if config.spot_leverage == 1 %}selected{% endif %}>1x (No Margin)</option>
-                                <option value="2" {% if config.spot_leverage == 2 %}selected{% endif %}>2x</option>
-                                <option value="3" {% if config.spot_leverage == 3 %}selected{% endif %}>3x</option>
-                                <option value="5" {% if config.spot_leverage == 5 %}selected{% endif %}>5x</option>
-                                <option value="10" {% if config.spot_leverage == 10 %}selected{% endif %}>10x</option>
-                            </select>
-                            <small class="text-secondary">Margin trading for spot positions</small>
-                        </div>
-                        <div class="col-md-6">
-                            <label class="form-label">Futures Leverage</label>
-                            <select class="form-select" id="futures_leverage" name="futures_leverage">
-                                <option value="1" {% if config.futures_leverage == 1 %}selected{% endif %}>1x</option>
-                                <option value="2" {% if config.futures_leverage == 2 %}selected{% endif %}>2x</option>
-                                <option value="3" {% if config.futures_leverage == 3 %}selected{% endif %}>3x (recommended)</option>
-                                <option value="5" {% if config.futures_leverage == 5 %}selected{% endif %}>5x</option>
-                                <option value="10" {% if config.futures_leverage == 10 %}selected{% endif %}>10x</option>
-                                <option value="15" {% if config.futures_leverage == 15 %}selected{% endif %}>15x</option>
-                                <option value="20" {% if config.futures_leverage == 20 %}selected{% endif %}>20x</option>
-                                <option value="25" {% if config.futures_leverage == 25 %}selected{% endif %}>25x (max allowed)</option>
-                            </select>
-                            <small class="text-secondary">Futures leverage — engine hard-caps at 25x for safety</small>
-                        </div>
+                    <div class="col-4">
+                        <label class="form-label">Stop Z (σ)</label>
+                        <input type="number" step="0.1" class="form-control form-control-sm ap" id="stop_zscore">
                     </div>
-
-                    <div class="row mb-4">
-                        <div class="col-12">
-                            <h6 class="text-secondary mb-3">Fee Estimates (for STD Filter)</h6>
-                            <small class="text-secondary d-block mb-2">
-                                The STD Filter calculates the minimum spread required to profit after fees.
-                                Spot and Futures fees differ — set them separately for an accurate calculation.
-                            </small>
-                            <div class="alert alert-info py-2 px-3 mb-3" style="font-size:0.82rem;">
-                                <strong>Round-trip cost</strong> =
-                                Entry (Spot + Futures) + Exit (Spot + Futures)<br>
-                                <span id="fee-summary-text" class="text-muted">—</span>
-                            </div>
-                        </div>
-
-                        <!-- Spot Fees -->
-                        <div class="col-12 mb-2">
-                            <span class="badge bg-primary me-1">SPOT</span>
-                            <small class="text-secondary">OKX non-VIP: Maker 8 bps · Taker 10 bps &nbsp;|&nbsp; VIP1: Maker 4.5 bps · Taker 5 bps</small>
-                        </div>
-                        <div class="col-md-3">
-                            <label class="form-label">Spot Maker (bps)</label>
-                            <input type="number" class="form-control fee-input" id="spot_maker_fee_bps" name="spot_maker_fee_bps" value="{{ config.spot_maker_fee_bps }}" step="0.5" min="0" max="50" oninput="updateFeeSummary()">
-                            <small class="text-secondary">Limit orders on Spot</small>
-                        </div>
-                        <div class="col-md-3">
-                            <label class="form-label">Spot Taker (bps)</label>
-                            <input type="number" class="form-control fee-input" id="spot_taker_fee_bps" name="spot_taker_fee_bps" value="{{ config.spot_taker_fee_bps }}" step="0.5" min="0" max="50" oninput="updateFeeSummary()">
-                            <small class="text-secondary">Market orders on Spot</small>
-                        </div>
-
-                        <!-- Futures Fees -->
-                        <div class="col-12 mb-2 mt-3">
-                            <span class="badge bg-warning text-dark me-1">FUTURES</span>
-                            <small class="text-secondary">OKX non-VIP: Maker 2 bps · Taker 5 bps &nbsp;|&nbsp; VIP1: Maker 1 bps · Taker 3 bps</small>
-                        </div>
-                        <div class="col-md-3">
-                            <label class="form-label">Futures Maker (bps)</label>
-                            <input type="number" class="form-control fee-input" id="futures_maker_fee_bps" name="futures_maker_fee_bps" value="{{ config.futures_maker_fee_bps }}" step="0.5" min="0" max="50" oninput="updateFeeSummary()">
-                            <small class="text-secondary">Limit orders on Futures</small>
-                        </div>
-                        <div class="col-md-3">
-                            <label class="form-label">Futures Taker (bps)</label>
-                            <input type="number" class="form-control fee-input" id="futures_taker_fee_bps" name="futures_taker_fee_bps" value="{{ config.futures_taker_fee_bps }}" step="0.5" min="0" max="50" oninput="updateFeeSummary()">
-                            <small class="text-secondary">Market orders on Futures</small>
-                        </div>
-
-                        <!-- Slippage -->
-                        <div class="col-12 mb-2 mt-3">
-                            <span class="badge bg-secondary me-1">SLIPPAGE</span>
-                            <small class="text-secondary">Extra cost per leg even with LIMIT orders (queue position, amendment delays, market impact)</small>
-                        </div>
-                        <div class="col-md-3">
-                            <label class="form-label">Slippage per Leg (bps)</label>
-                            <input type="number" class="form-control fee-input" id="slippage_bps" name="slippage_bps" value="{{ config.slippage_bps }}" step="0.5" min="0" max="20" oninput="updateFeeSummary()">
-                            <small class="text-secondary">Applied to all 4 legs (×4 round-trip)</small>
-                        </div>
+                    <div class="col-6">
+                        <label class="form-label fw-semibold">Trade direction</label>
+                        <select class="form-select form-select-sm ap" id="trade_direction">
+                            <option value="both">Both</option>
+                            <option value="sell_only">High → Low only (Sell spread)</option>
+                            <option value="buy_only">Low → High only (Buy spread)</option>
+                        </select>
+                        <div class="form-text">Which side the algo may <strong>open</strong>. Sell = sell Spot at bid / buy Perp at ask when the sell price's z ≥ +entry. <strong>Exits are never restricted.</strong></div>
                     </div>
-
-                    <hr class="my-4" style="border-color: var(--border-color);">
-
-                    <!-- Trading Mode -->
-                    <div class="row mb-3">
-                        <div class="col-12">
-                            <h6 class="text-secondary mb-3">Trading Mode</h6>
-                        </div>
-                        <div class="col-md-6">
-                            <div class="form-check form-switch">
-                                <input class="form-check-input" type="checkbox" id="paper_trading" name="paper_trading" {% if config.paper_trading %}checked{% endif %} onchange="toggleLiveChecklist(this)">
-                                <label class="form-check-label" for="paper_trading">Paper Trading Mode</label>
-                            </div>
-                            <small class="text-secondary">Simulate trades without real orders</small>
-                        </div>
+                    <div class="col-6">
+                        <label class="form-label">Confirmation ticks</label>
+                        <input type="number" step="1" class="form-control form-control-sm ap" id="confirmation_ticks">
+                        <div class="form-text">Consecutive ticks beyond threshold before entry.</div>
                     </div>
-
-                    <!-- Live Trading Checklist (shown when Paper Trading is turned OFF) -->
-                    <div id="live-trading-checklist" class="alert alert-danger mb-3" style="display:{% if not config.paper_trading %}block{% else %}none{% endif %};">
-                        <h6 class="mb-2"><i class="bi bi-exclamation-octagon-fill me-2"></i>Live Trading Pre-Flight Checklist</h6>
-                        <ul class="mb-2" style="font-size:0.85rem;">
-                            <li>Use the <strong>OKX Server Mode</strong> toggle above to switch from Demo → Live</li>
-                            <li>Verify your OKX API key has <strong>Trade</strong> permissions (not read-only)</li>
-                            <li>Confirm <strong>position size</strong> and <strong>max position size</strong> below match your risk budget</li>
-                            <li>Confirm <strong>futures leverage</strong> is ≤ 5x for a new live account</li>
-                            <li>Set a <strong>stop-loss threshold</strong> (e.g. 3.5–4.0σ) — never disable it in live mode</li>
-                            <li>Hurst filter should remain <strong>enabled</strong> to avoid trending markets</li>
-                            <li>Monitor closely for the first 24 hours after going live</li>
-                        </ul>
-                        <small class="text-danger"><strong>Warning:</strong> Disabling Paper Trading sends real orders to the exchange. Confirm OKX_DEMO_MODE in your <code>.env</code> matches your intent.</small>
+                    <div class="col-6">
+                        <label class="form-label">Entry |z| cap</label>
+                        <input type="number" step="0.1" class="form-control form-control-sm ap" id="max_entry_zscore">
+                        <div class="form-text">Refuse entries deeper than this (regime-shift guard). 0 = off.</div>
                     </div>
-
-                    <hr class="my-4" style="border-color: var(--border-color);">
-
-                    <!-- Order Execution -->
-                    <div class="row mb-3">
-                        <div class="col-12">
-                            <h6 class="text-secondary mb-3">Order Execution</h6>
-                        </div>
-                        <div class="col-md-3">
-                            <label class="form-label">Entry Mode</label>
-                            <select class="form-select" id="entry_execution_mode" name="entry_execution_mode" onchange="updateLimitSettingsVisibility()">
-                                <option value="MARKET" {% if config.entry_execution_mode == 'MARKET' %}selected{% endif %}>Market</option>
-                                <option value="LIMIT" {% if config.entry_execution_mode == 'LIMIT' %}selected{% endif %}>Limit (Maker)</option>
-                            </select>
-                            <small class="text-secondary">Opening new positions</small>
-                        </div>
-                        <div class="col-md-3">
-                            <label class="form-label">Exit Mode</label>
-                            <select class="form-select" id="exit_execution_mode" name="exit_execution_mode" onchange="updateLimitSettingsVisibility()">
-                                <option value="MARKET" {% if config.exit_execution_mode == 'MARKET' %}selected{% endif %}>Market</option>
-                                <option value="LIMIT" {% if config.exit_execution_mode == 'LIMIT' %}selected{% endif %}>Limit (Maker)</option>
-                            </select>
-                            <small class="text-secondary">Closing positions</small>
-                        </div>
-                        <div class="col-md-3" id="limit-timeout-group">
-                            <label class="form-label">Limit Timeout (sec)</label>
-                            <input type="number" class="form-control" id="limit_order_timeout_sec" name="limit_order_timeout_sec" value="{{ config.limit_order_timeout_sec }}" min="5" max="300">
-                            <small class="text-secondary">Max wait for fill</small>
-                        </div>
-                        <div class="col-md-3" id="limit-offset-group">
-                            <label class="form-label">Price Offset (bps)</label>
-                            <input type="number" class="form-control" id="limit_order_price_offset_bps" name="limit_order_price_offset_bps" value="{{ config.limit_order_price_offset_bps }}" step="0.5" min="0" max="10">
-                            <small class="text-secondary">0 = passive, higher = faster</small>
-                        </div>
-                    </div>
-
-                    <div class="alert alert-info" id="limit-order-info" style="display: {% if config.entry_execution_mode == 'LIMIT' or config.exit_execution_mode == 'LIMIT' %}block{% else %}none{% endif %};">
-                        <i class="bi bi-info-circle me-2"></i>
-                        <strong>Limit Orders:</strong> Uses POST_ONLY (maker fees guaranteed).
-                        <strong>Recommended:</strong> Limit for entries (save fees), Market for exits (avoid slippage).
-                    </div>
-
-                    <hr class="my-4" style="border-color: var(--border-color);">
-
-                    <!-- Safety Settings -->
-                    <div class="row mb-4">
-                        <div class="col-12">
-                            <h6 class="text-secondary mb-3"><i class="bi bi-shield-check me-2"></i>Safety Settings</h6>
-                            <small class="text-secondary d-block mb-3">Prevents duplicate orders and runaway positions.</small>
-                        </div>
-                        <div class="col-md-6">
-                            <label class="form-label">Entry Cooldown (seconds)</label>
-                            <input type="number" class="form-control" id="entry_cooldown_seconds" name="entry_cooldown_seconds" value="{{ config.entry_cooldown_seconds }}" min="0" max="3600">
-                            <small class="text-secondary">Minimum wait time between trades (prevents rapid re-entry)</small>
-                        </div>
-                        <div class="col-md-6">
-                            <div class="form-check form-switch mt-4">
-                                <input class="form-check-input" type="checkbox" id="verify_exchange_position" name="verify_exchange_position" {% if config.verify_exchange_position %}checked{% endif %}>
-                                <label class="form-check-label" for="verify_exchange_position">Verify Exchange Position Before Entry</label>
-                            </div>
-                            <small class="text-secondary">Query exchange for existing positions before placing new orders</small>
-                        </div>
-                        <div class="col-md-6 mt-3">
-                            <label class="form-label">Orphan Leg Recovery Timeout (seconds)</label>
-                            <input type="number" class="form-control" id="orphan_recovery_timeout_sec" name="orphan_recovery_timeout_sec" value="{{ config.orphan_recovery_timeout_sec }}" min="10" max="300">
-                            <small class="text-secondary">
-                                When one leg fills and the other is cancelled, try to fill the missing leg as a <strong>maker</strong> order for this many seconds before falling back to market.
-                                Higher = more time to fill at maker rates. Lower = faster resolution but may use market orders.
-                            </small>
-                        </div>
-                        <div class="col-md-6 mt-3">
-                            <label class="form-label">Daily Loss Limit (USD)</label>
-                            <input type="number" class="form-control" id="daily_max_loss_usd" name="daily_max_loss_usd" value="{{ config.daily_max_loss_usd }}" step="10" min="0">
-                            <small class="text-secondary">Auto-disable algo if total losses exceed this amount in a UTC day. Set to <strong>0</strong> to disable.</small>
-                        </div>
-                    </div>
-
-                    <div class="d-flex justify-content-end gap-2">
-                        <button type="button" class="btn btn-outline-secondary" onclick="resetForm()">Reset</button>
-                        <button type="submit" class="btn btn-primary">
-                            <i class="bi bi-check-lg me-1"></i>Save Configuration
-                        </button>
-                    </div>
-                </form>
-
-                <hr class="my-4" style="border-color: var(--border-color);">
-
-                <!-- Telegram Notifications -->
-                <div class="mt-4" id="telegram-section">
-                    <h6 class="text-secondary mb-3"><i class="bi bi-telegram me-2"></i>Telegram Notifications</h6>
-                    <small class="text-secondary d-block mb-3">
-                        Receive real-time trade alerts and run interactive commands directly in Telegram.
-                        Create a bot via <strong>@BotFather</strong> and get your Chat ID from <strong>@userinfobot</strong>.
-                    </small>
-
-                    <div class="row mb-3">
-                        <div class="col-12">
-                            <div class="form-check form-switch mb-3">
-                                <input class="form-check-input" type="checkbox" id="tg_enabled" {% if config.telegram_enabled %}checked{% endif %}>
-                                <label class="form-check-label fw-semibold" for="tg_enabled">Enable Telegram Notifications</label>
-                            </div>
-                        </div>
-
-                        <div class="col-md-6">
-                            <label class="form-label">Bot Token</label>
-                            <input type="password" class="form-control" id="tg_token"
-                                   placeholder="123456789:ABCdefGHIjklMNOpqrsTUVwxyz"
-                                   value="{{ config.telegram_bot_token }}">
-                            <small class="text-secondary">From @BotFather → /newbot</small>
-                        </div>
-                        <div class="col-md-6">
-                            <label class="form-label">Chat ID</label>
-                            <input type="text" class="form-control" id="tg_chat_id"
-                                   placeholder="e.g. 123456789"
-                                   value="{{ config.telegram_chat_id }}">
-                            <small class="text-secondary">Your personal Telegram chat ID from @userinfobot</small>
-                        </div>
-                    </div>
-
-                    <div class="row mb-3">
-                        <div class="col-12">
-                            <label class="form-label text-secondary">Notification Types</label>
-                        </div>
-                        <div class="col-md-4">
-                            <div class="form-check form-switch">
-                                <input class="form-check-input" type="checkbox" id="tg_notify_trades" {% if config.telegram_notify_trades %}checked{% endif %}>
-                                <label class="form-check-label" for="tg_notify_trades">Trade Entry &amp; Exit</label>
-                            </div>
-                            <small class="text-secondary">Alert on every trade open/close</small>
-                        </div>
-                        <div class="col-md-4">
-                            <div class="form-check form-switch">
-                                <input class="form-check-input" type="checkbox" id="tg_notify_signals" {% if config.telegram_notify_signals %}checked{% endif %}>
-                                <label class="form-check-label" for="tg_notify_signals">Trading Signals</label>
-                            </div>
-                            <small class="text-secondary">Alert on LONG/SHORT/EXIT/STOP signals</small>
-                        </div>
-                        <div class="col-md-4">
-                            <div class="form-check form-switch">
-                                <input class="form-check-input" type="checkbox" id="tg_notify_errors" {% if config.telegram_notify_errors %}checked{% endif %}>
-                                <label class="form-check-label" for="tg_notify_errors">System Errors</label>
-                            </div>
-                            <small class="text-secondary">Alert on critical engine errors</small>
-                        </div>
-                    </div>
-
-                    <div class="alert alert-info py-2 px-3 mb-3" style="font-size:0.82rem;">
-                        <strong>Bot Commands</strong> (send to your bot once connected):<br>
-                        <code>/status</code> — engine &amp; signal status &nbsp;|&nbsp;
-                        <code>/positions</code> — open positions &nbsp;|&nbsp;
-                        <code>/trades</code> — recent trades<br>
-                        <code>/balance</code> — account balance &nbsp;|&nbsp;
-                        <code>/pnl</code> — P&amp;L summary &nbsp;|&nbsp;
-                        <code>/eod</code> — end-of-day report
-                    </div>
-
-                    <div id="tg-save-result" class="mb-3" style="display:none;"></div>
-
-                    <div class="d-flex gap-2">
-                        <button type="button" class="btn btn-primary" onclick="saveTelegramConfig()">
-                            <i class="bi bi-floppy me-1"></i>Save &amp; Test
-                        </button>
-                        <button type="button" class="btn btn-outline-secondary" onclick="saveTelegramConfig(false)">
-                            <i class="bi bi-floppy me-1"></i>Save Only
-                        </button>
-                    </div>
-                </div>
-
-                <hr class="my-4" style="border-color: var(--border-color);">
-
-                <!-- Manual Order Testing -->
-                <div class="mt-4">
-                    <h6 class="text-secondary mb-3"><i class="bi bi-tools me-2"></i>Manual Order Testing</h6>
-                    <small class="text-secondary d-block mb-3">Test order execution without waiting for signals. Uses current execution mode (Market/Limit).</small>
-
-                    <div class="row mb-3">
-                        <div class="col-md-4">
-                            <label class="form-label">Order Type</label>
-                            <select class="form-select" id="test_order_type">
-                                <optgroup label="Single Leg">
-                                    <option value="BUY_SPOT">Buy Spot</option>
-                                    <option value="SELL_SPOT">Sell Spot</option>
-                                    <option value="BUY_FUTURES">Buy Futures (Long)</option>
-                                    <option value="SELL_FUTURES">Sell Futures (Short)</option>
-                                </optgroup>
-                                <optgroup label="Spread (Both Legs)">
-                                    <option value="LONG_SPREAD">Buy Spot + Sell Futures</option>
-                                    <option value="SHORT_SPREAD">Sell Spot + Buy Futures</option>
-                                </optgroup>
-                            </select>
-                        </div>
-                        <div class="col-md-4">
-                            <label class="form-label">Test Size (USD)</label>
-                            <input type="number" class="form-control" id="test_size_usd" value="100" min="10" max="10000" step="10">
-                        </div>
-                        <div class="col-md-4">
-                            <label class="form-label">Action</label>
-                            <button type="button" class="btn btn-success w-100" id="btn-open-test" onclick="openTestOrder()">
-                                <i class="bi bi-play-fill me-1"></i>Execute Order
-                            </button>
-                        </div>
-                    </div>
-
-                    <!-- Open Positions -->
-                    <div class="card bg-dark mb-3" id="test-positions-card" style="display: none;">
-                        <div class="card-header py-2 d-flex justify-content-between align-items-center">
-                            <span><i class="bi bi-list-check me-2"></i>Open Test Positions</span>
-                            <button type="button" class="btn btn-outline-danger btn-sm" onclick="closeAllTestOrders()">
-                                <i class="bi bi-x-lg me-1"></i>Close All
-                            </button>
-                        </div>
-                        <div class="card-body py-2">
-                            <table class="table table-sm table-dark mb-0">
-                                <thead>
-                                    <tr>
-                                        <th>Type</th>
-                                        <th>Side</th>
-                                        <th>Qty</th>
-                                        <th>Entry Price</th>
-                                        <th>Current</th>
-                                        <th>P&L</th>
-                                        <th>Order ID</th>
-                                        <th></th>
-                                    </tr>
-                                </thead>
-                                <tbody id="test-positions-body">
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-
-                    <div class="alert alert-warning mt-3 mb-0">
-                        <i class="bi bi-exclamation-triangle me-2"></i>
-                        <strong>Warning:</strong> This places real orders on your exchange account. Use with caution.
-                    </div>
-
-                    <hr class="my-4" style="border-color: var(--border-color);">
-
-                    <!-- Full Test Suite -->
-                    <div class="mt-3">
-                        <h6 class="text-secondary mb-1"><i class="bi bi-clipboard2-check me-2"></i>Full Order Test Suite</h6>
-                        <small class="text-muted d-block mb-3">
-                            40 scenarios: 18 LIMIT (6 order types × 3 attempts) + 18 MARKET (same, forced)
-                            + 4 partial-fill recovery (one leg fills, other fails → market-close the filled leg).
-                            Click <strong>Run Full Test Suite</strong> to run all in sequence, or hit
-                            <strong>Run</strong> next to any row to execute a single scenario on demand.
-                            LIMIT scenarios are spaced ~20 s apart; MARKET ~5 s apart.
-                        </small>
-                        <div class="d-flex gap-2 mb-3 flex-wrap">
-                            <button type="button" class="btn btn-primary" id="btn-run-suite" onclick="startTestSuite()">
-                                <i class="bi bi-play-circle me-1"></i>Run Full Test Suite
-                            </button>
-                            <button type="button" class="btn btn-outline-danger d-none" id="btn-stop-suite" onclick="stopTestSuite()">
-                                <i class="bi bi-stop-circle me-1"></i>Stop Suite
-                            </button>
-                            <a href="/api/test-suite/download-csv" class="btn btn-outline-secondary d-none" id="btn-download-csv" download>
-                                <i class="bi bi-download me-1"></i>Download CSV
-                            </a>
-                            <!-- Shown only when flags are stuck (running=true but no row is active) -->
-                            <button type="button" class="btn btn-outline-warning d-none" id="btn-force-reset"
-                                    onclick="forceResetSuite()" title="Clear stuck running flags without restarting the server">
-                                <i class="bi bi-exclamation-triangle me-1"></i>Force Reset
-                            </button>
-                        </div>
-
-                        <!-- Scenario panel – visible immediately so Run buttons are always accessible -->
-                        <div id="suite-panel">
-                            <!-- Header row: counters + progress bar -->
-                            <div class="d-flex justify-content-between align-items-center mb-2">
-                                <div class="d-flex gap-3">
-                                    <span class="badge bg-secondary fs-6" id="suite-progress-badge">0 / 40</span>
-                                    <span class="badge bg-success fs-6" id="suite-pass-badge">0 passed</span>
-                                    <span class="badge bg-danger  fs-6" id="suite-fail-badge">0 failed</span>
-                                </div>
-                                <small class="text-muted" id="suite-mode-label"></small>
-                            </div>
-                            <div class="progress mb-3" style="height:6px;">
-                                <div class="progress-bar bg-success" id="suite-progress-bar"
-                                     role="progressbar" style="width:0%"></div>
-                            </div>
-
-                            <!-- Scenario table -->
-                            <div class="card bg-dark">
-                                <div class="card-body p-0" style="overflow-x:auto;">
-                                    <table class="table table-sm table-dark mb-0" style="font-size:0.78rem; min-width:900px;">
-                                        <thead>
-                                            <tr>
-                                                <th style="width:2rem;">#</th>
-                                                <th style="width:12rem;">Scenario</th>
-                                                <th style="width:5rem;">Mode</th>
-                                                <th style="width:5rem;">Type</th>
-                                                <th style="width:5rem;">Status</th>
-                                                <th style="min-width:34rem;">Detail</th>
-                                                <th style="width:4rem;"></th>
-                                            </tr>
-                                        </thead>
-                                        <tbody id="suite-tbody"></tbody>
-                                    </table>
-                                </div>
-                            </div>
-                        </div>
+                    <div class="col-6">
+                        <label class="form-label">Max entry z divergence</label>
+                        <input type="number" step="0.1" class="form-control form-control-sm ap" id="max_entry_z_divergence">
+                        <div class="form-text">Refuse if fill-time z moved more than this from decision z. 0 = off.</div>
                     </div>
                 </div>
             </div>
         </div>
 
-        <!-- API Keys Configuration -->
-        <div class="card mt-4">
-            <div class="card-header">
-                <i class="bi bi-key me-2"></i>OKX API Keys
-            </div>
+        <div class="card mb-3">
+            <div class="card-header"><i class="bi bi-funnel me-2"></i>Entry Quality Gates</div>
             <div class="card-body">
-                <!-- Permission Guide -->
-                <div class="alert alert-info mb-4">
-                    <h6 class="alert-heading"><i class="bi bi-shield-check me-2"></i>Required API Permissions</h6>
-                    <p class="mb-2">When creating your OKX API key, select <strong>only</strong> these permissions:</p>
-                    <div class="row">
-                        <div class="col-md-6">
-                            <div class="d-flex align-items-center mb-2">
-                                <span class="badge bg-success me-2"><i class="bi bi-check-lg"></i></span>
-                                <strong>Read</strong> - View account balances and positions
-                            </div>
-                            <div class="d-flex align-items-center mb-2">
-                                <span class="badge bg-success me-2"><i class="bi bi-check-lg"></i></span>
-                                <strong>Trade</strong> - Place and cancel orders
-                            </div>
-                        </div>
-                        <div class="col-md-6">
-                            <div class="d-flex align-items-center mb-2">
-                                <span class="badge bg-danger me-2"><i class="bi bi-x-lg"></i></span>
-                                <strong class="text-danger">Withdraw</strong> - DO NOT enable this!
-                            </div>
-                            <div class="d-flex align-items-center">
-                                <span class="badge bg-secondary me-2"><i class="bi bi-dash"></i></span>
-                                <span class="text-muted">Transfer - Not needed</span>
-                            </div>
-                        </div>
+                <div class="row g-2">
+                    <div class="col-6">
+                        <label class="form-label">Min edge multiple</label>
+                        <input type="number" step="0.1" class="form-control form-control-sm ap" id="min_edge_multiple">
+                        <div class="form-text">Expected capture must be ≥ this × round-trip cost. 0 = off.</div>
                     </div>
-                    <hr>
-                    <small class="text-muted">
-                        <i class="bi bi-lock me-1"></i>
-                        <strong>Security:</strong> With only Read + Trade permissions, your funds can never be withdrawn.
-                        The bot can only trade within your account.
-                    </small>
-                </div>
-
-                <!-- OKX Demo / Live Mode Toggle -->
-                <div class="mb-4">
-                    <div class="d-flex align-items-center gap-3 mb-1">
-                        <strong>OKX Server Mode:</strong>
-                        <span id="demo-mode-badge">
-                            {% if is_demo %}
-                            <span class="badge bg-warning text-dark"><i class="bi bi-cloud-slash me-1"></i>DEMO SERVER</span>
-                            {% else %}
-                            <span class="badge bg-danger"><i class="bi bi-cloud-fill me-1"></i>LIVE SERVER</span>
-                            {% endif %}
-                        </span>
-                        <div class="form-check form-switch mb-0">
-                            <input class="form-check-input" type="checkbox" id="demoModeSwitch"
-                                   {% if is_demo %}checked{% endif %}>
-                            <label class="form-check-label text-secondary" for="demoModeSwitch">Demo</label>
-                        </div>
-                        <span id="demo-mode-spinner" class="spinner-border spinner-border-sm text-secondary d-none" role="status"></span>
+                    <div class="col-6">
+                        <label class="form-label">Cost floor (× cost)</label>
+                        <input type="number" step="0.1" class="form-control form-control-sm ap" id="cost_floor_mult">
+                        <div class="form-text">Block if this × cost exceeds the plausible full reversion. 0 = off.</div>
                     </div>
-                    <small class="text-secondary d-block" id="demo-mode-desc">
-                        {% if is_demo %}
-                        Demo mode — orders go to the OKX demo exchange (simulated fills, no real money).
-                        {% else %}
-                        Live mode — orders execute against the real OKX exchange with real funds.
-                        {% endif %}
-                    </small>
-                </div>
-
-                <form id="api-keys-form">
-                    <div class="row mb-3">
-                        <div class="col-md-12">
-                            <label class="form-label">API Key</label>
-                            <input type="text" class="form-control font-monospace" id="okx_api_key" name="okx_api_key"
-                                   placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" autocomplete="off">
+                    <div class="col-6">
+                        <label class="form-label">Half-life min (s)</label>
+                        <input type="number" step="1" class="form-control form-control-sm ap" id="half_life_min_sec">
+                        <div class="form-text">Faster = noise. 0 = off.</div>
+                    </div>
+                    <div class="col-6">
+                        <label class="form-label">Half-life max (s)</label>
+                        <input type="number" step="1" class="form-control form-control-sm ap" id="half_life_max_sec">
+                        <div class="form-text">Slower won't revert inside the hold. 0 = off.</div>
+                    </div>
+                    <div class="col-12"><hr class="my-1"><small class="text-secondary fw-semibold">Probability filter (OU gambler's-ruin)</small></div>
+                    <div class="col-4 d-flex align-items-end">
+                        <div class="form-check form-switch">
+                            <input class="form-check-input ap" type="checkbox" id="enable_probability_filter">
+                            <label class="form-check-label" for="enable_probability_filter">Enabled</label>
                         </div>
                     </div>
-                    <div class="row mb-3">
-                        <div class="col-md-12">
-                            <label class="form-label">Secret Key</label>
-                            <div class="input-group">
-                                <input type="password" class="form-control font-monospace" id="okx_secret_key" name="okx_secret_key"
-                                       placeholder="Your secret key" autocomplete="off">
-                                <button class="btn btn-outline-secondary" type="button" onclick="toggleSecretVisibility()">
-                                    <i class="bi bi-eye" id="secret-toggle-icon"></i>
-                                </button>
-                            </div>
-                        </div>
+                    <div class="col-4">
+                        <label class="form-label">Min P(win)</label>
+                        <input type="number" step="0.05" class="form-control form-control-sm ap" id="min_win_probability">
                     </div>
-                    <div class="row mb-3">
-                        <div class="col-md-12">
-                            <label class="form-label">Passphrase</label>
-                            <div class="input-group">
-                                <input type="password" class="form-control font-monospace" id="okx_passphrase" name="okx_passphrase"
-                                       placeholder="Your API passphrase" autocomplete="off">
-                                <button class="btn btn-outline-secondary" type="button" onclick="togglePassphraseVisibility()">
-                                    <i class="bi bi-eye" id="passphrase-toggle-icon"></i>
-                                </button>
-                            </div>
-                            <small class="text-secondary">The passphrase you set when creating the API key on OKX</small>
-                        </div>
+                    <div class="col-4">
+                        <label class="form-label">Min EV ($)</label>
+                        <input type="number" step="1" class="form-control form-control-sm ap" id="min_expected_value">
                     </div>
-
-                    <!-- Connection Status -->
-                    <div class="card bg-dark mb-3" id="api-status-card" style="display: none;">
-                        <div class="card-body py-3">
-                            <div class="d-flex align-items-center justify-content-between">
-                                <div>
-                                    <span id="api-status-icon" class="me-2"></span>
-                                    <span id="api-status-text"></span>
-                                </div>
-                                <div id="api-status-details" class="text-muted small"></div>
-                            </div>
-                        </div>
+                    <div class="col-12"><hr class="my-1"><small class="text-secondary fw-semibold">Cooldowns</small></div>
+                    <div class="col-4">
+                        <label class="form-label">Cooldown (s)</label>
+                        <input type="number" step="10" class="form-control form-control-sm ap" id="cooldown">
                     </div>
-
-                    <div class="d-flex justify-content-between">
-                        <button type="button" class="btn btn-outline-info" onclick="testApiConnection()">
-                            <i class="bi bi-wifi me-1"></i>Test Connection
-                        </button>
-                        <button type="submit" class="btn btn-primary">
-                            <i class="bi bi-save me-1"></i>Save API Keys
-                        </button>
+                    <div class="col-4">
+                        <label class="form-label">Stop cooldown (s)</label>
+                        <input type="number" step="10" class="form-control form-control-sm ap" id="stop_cooldown">
                     </div>
-                </form>
-
-                <hr class="my-4" style="border-color: var(--border-color);">
-
-                <!-- How to Create API Key Guide -->
-                <div class="accordion" id="apiGuideAccordion">
-                    <div class="accordion-item bg-dark">
-                        <h2 class="accordion-header">
-                            <button class="accordion-button collapsed bg-dark text-light" type="button"
-                                    data-bs-toggle="collapse" data-bs-target="#apiGuideCollapse">
-                                <i class="bi bi-question-circle me-2"></i>How to Create OKX API Keys
-                            </button>
-                        </h2>
-                        <div id="apiGuideCollapse" class="accordion-collapse collapse" data-bs-parent="#apiGuideAccordion">
-                            <div class="accordion-body">
-                                <ol class="mb-0">
-                                    <li class="mb-2">Log in to your <a href="https://www.okx.com" target="_blank" class="text-info">OKX account</a></li>
-                                    <li class="mb-2">Go to <strong>Profile → API</strong> (or navigate to API management)</li>
-                                    <li class="mb-2">Click <strong>"Create API Key"</strong></li>
-                                    <li class="mb-2">Set a name (e.g., "Trading Bot")</li>
-                                    <li class="mb-2">Create a <strong>passphrase</strong> (you'll need this)</li>
-                                    <li class="mb-2">
-                                        Select permissions:
-                                        <ul class="mt-1">
-                                            <li><span class="text-success">✓</span> Read</li>
-                                            <li><span class="text-success">✓</span> Trade</li>
-                                            <li><span class="text-danger">✗</span> Withdraw (leave unchecked!)</li>
-                                        </ul>
-                                    </li>
-                                    <li class="mb-2">Complete verification (2FA, email, etc.)</li>
-                                    <li>Copy your <strong>API Key</strong>, <strong>Secret Key</strong>, and remember your <strong>Passphrase</strong></li>
-                                </ol>
-                                <div class="alert alert-warning mt-3 mb-0">
-                                    <i class="bi bi-exclamation-triangle me-2"></i>
-                                    <strong>Important:</strong> The Secret Key is only shown once! Save it securely.
-                                </div>
-                            </div>
+                    <div class="col-4 d-flex align-items-end">
+                        <div class="form-check form-switch">
+                            <input class="form-check-input ap" type="checkbox" id="z_reset_after_stop">
+                            <label class="form-check-label" for="z_reset_after_stop">z-reset after stop</label>
                         </div>
                     </div>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ══ Column 2: Exits + Risk + Regime ═════════════════════════════════ -->
+    <div class="col-lg-4">
+        <div class="card mb-3">
+            <div class="card-header"><i class="bi bi-cash-stack me-2"></i>Exits — profit after ALL costs</div>
+            <div class="card-body">
+                <div class="alert alert-secondary py-2 small mb-2">
+                    Net P&amp;L is marked on the executable closing spread minus the full round-trip
+                    cost, so <strong>net 0 IS break-even</strong>. The PRIMARY exit is the profit
+                    target: <strong>BE + Take-Profit % × margin</strong>. The z-reversion exit is
+                    secondary and never books a loss.
+                    Priority: $ stop → profit target → hard time-stop → max-hold → trailing → z-stop → z-reversion.
+                </div>
+                <div class="row g-2">
+                    <div class="col-6">
+                        <label class="form-label fw-semibold">Take Profit — BE + % of margin</label>
+                        <input type="number" step="0.1" class="form-control form-control-sm ap" id="tp_capital_pct">
+                        <div class="form-text">0.5 = close at break-even + 0.5% of the margin posted. 0 = off.</div>
+                    </div>
+                    <div class="col-6">
+                        <label class="form-label">Profit target ($, fixed)</label>
+                        <input type="number" step="1" class="form-control form-control-sm ap" id="profit_target_usd">
+                        <div class="form-text">Fallback when the %-form is 0.</div>
+                    </div>
+                    <div class="col-6">
+                        <label class="form-label">Target σ-fraction</label>
+                        <input type="number" step="0.05" class="form-control form-control-sm ap" id="profit_target_sigma_frac">
+                        <div class="form-text">frac × |entry z| × σ × qty. Overrides both when set. 0 = off.</div>
+                    </div>
+                    <div class="col-6">
+                        <label class="form-label">Stop — % of margin</label>
+                        <input type="number" step="0.1" class="form-control form-control-sm ap" id="stop_capital_pct">
+                        <div class="form-text">Exit when net ≤ −this % × margin.</div>
+                    </div>
+                    <div class="col-6">
+                        <label class="form-label">Stop ($, fixed)</label>
+                        <input type="number" step="1" class="form-control form-control-sm ap" id="dollar_stop_usd">
+                    </div>
+                    <div class="col-6">
+                        <label class="form-label">Stop RR (target ÷ RR)</label>
+                        <input type="number" step="0.05" class="form-control form-control-sm ap" id="stop_rr">
+                        <div class="form-text">Tighter of RR-stop and %-margin binds.</div>
+                    </div>
+                    <div class="col-12"><hr class="my-1"><small class="text-secondary fw-semibold">Reversion exit gate</small></div>
+                    <div class="col-6 d-flex align-items-end">
+                        <div class="form-check form-switch">
+                            <input class="form-check-input ap" type="checkbox" id="reversion_require_profit">
+                            <label class="form-check-label" for="reversion_require_profit">Reversion exit only after BE</label>
+                        </div>
+                    </div>
+                    <div class="col-6">
+                        <label class="form-label">Reversion floor ($ above BE)</label>
+                        <input type="number" step="1" class="form-control form-control-sm ap" id="reversion_gate_usd">
+                    </div>
+                    <div class="col-12"><hr class="my-1"><small class="text-secondary fw-semibold">Time &amp; trailing</small></div>
+                    <div class="col-4">
+                        <label class="form-label">Min hold (s)</label>
+                        <input type="number" step="1" class="form-control form-control-sm ap" id="min_hold_sec">
+                    </div>
+                    <div class="col-4">
+                        <label class="form-label">Max hold (× half-life)</label>
+                        <input type="number" step="0.5" class="form-control form-control-sm ap" id="time_stop_half_lives">
+                    </div>
+                    <div class="col-4">
+                        <label class="form-label">Hard stop (× max-hold)</label>
+                        <input type="number" step="0.5" class="form-control form-control-sm ap" id="hard_time_stop_mult">
+                        <div class="form-text">Close ANY trade past this. 0 = off.</div>
+                    </div>
+                    <div class="col-6">
+                        <label class="form-label">Trailing — pullback %</label>
+                        <input type="number" step="1" class="form-control form-control-sm ap" id="trailing_stop_pct">
+                        <div class="form-text">Exit when net falls this % from its peak. 0 = off.</div>
+                    </div>
+                    <div class="col-6">
+                        <label class="form-label">Trailing — floor (% of target)</label>
+                        <input type="number" step="1" class="form-control form-control-sm ap" id="trailing_stop_floor_pct">
+                        <div class="form-text">Arm only once peak ≥ this % of target. 0 = arm on first profit.</div>
+                    </div>
+                    <div class="col-6 d-flex align-items-end">
+                        <div class="form-check form-switch">
+                            <input class="form-check-input ap" type="checkbox" id="z_stop_exit_enabled">
+                            <label class="form-check-label" for="z_stop_exit_enabled">z-stop exit enabled</label>
+                        </div>
+                    </div>
+                    <div class="col-6 d-flex align-items-end">
+                        <div class="form-check form-switch">
+                            <input class="form-check-input ap" type="checkbox" id="max_hold_silent_when_losing">
+                            <label class="form-check-label" for="max_hold_silent_when_losing">Max-hold silent when losing</label>
+                        </div>
+                    </div>
+                    <div class="col-6">
+                        <label class="form-label">Max-hold z-progress gate (0–1)</label>
+                        <input type="number" step="0.05" class="form-control form-control-sm ap" id="max_hold_z_progress_min">
+                    </div>
+                    <div class="col-6">
+                        <label class="form-label">Max exit failures → halt</label>
+                        <input type="number" step="1" class="form-control form-control-sm ap" id="max_exit_failures">
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card mb-3">
+            <div class="card-header"><i class="bi bi-shield me-2"></i>Account Risk</div>
+            <div class="card-body">
+                <div class="row g-2">
+                    <div class="col-6">
+                        <label class="form-label">Daily max loss ($)</label>
+                        <input type="number" step="10" class="form-control form-control-sm ap" id="daily_max_loss_usd">
+                        <div class="form-text">Entries halt once day P&amp;L ≤ −this. 0 = off.</div>
+                    </div>
+                    <div class="col-6">
+                        <label class="form-label">Pause after N losses</label>
+                        <input type="number" step="1" class="form-control form-control-sm ap" id="loss_streak_pause_at">
+                    </div>
+                    <div class="col-6">
+                        <label class="form-label">Reduce size after N losses</label>
+                        <input type="number" step="1" class="form-control form-control-sm ap" id="loss_streak_reduce_at">
+                    </div>
+                    <div class="col-6">
+                        <label class="form-label">Reduce by (%)</label>
+                        <input type="number" step="5" class="form-control form-control-sm ap" id="loss_streak_reduce_pct">
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card mb-3">
+            <div class="card-header"><i class="bi bi-activity me-2"></i>Regime / Trend-Day Guard</div>
+            <div class="card-body">
+                <div class="row g-2">
+                    <div class="col-4 d-flex align-items-end">
+                        <div class="form-check form-switch">
+                            <input class="form-check-input ap" type="checkbox" id="regime_enabled">
+                            <label class="form-check-label" for="regime_enabled">Enabled</label>
+                        </div>
+                    </div>
+                    <div class="col-4 d-flex align-items-end">
+                        <div class="form-check form-switch">
+                            <input class="form-check-input ap" type="checkbox" id="regime_halt_on_trending">
+                            <label class="form-check-label" for="regime_halt_on_trending">Halt day on TRENDING</label>
+                        </div>
+                    </div>
+                    <div class="col-4 d-flex align-items-end">
+                        <div class="form-check form-switch">
+                            <input class="form-check-input ap" type="checkbox" id="regime_trend_direction_filter">
+                            <label class="form-check-label" for="regime_trend_direction_filter">Trend-direction filter</label>
+                        </div>
+                    </div>
+                    <div class="col-3">
+                        <label class="form-label">Window</label>
+                        <input type="number" step="10" class="form-control form-control-sm ap" id="regime_window_samples">
+                    </div>
+                    <div class="col-3">
+                        <label class="form-label">VR lag</label>
+                        <input type="number" step="1" class="form-control form-control-sm ap" id="regime_vr_lag">
+                    </div>
+                    <div class="col-3">
+                        <label class="form-label">ER max</label>
+                        <input type="number" step="0.05" class="form-control form-control-sm ap" id="regime_efficiency_ratio_max">
+                    </div>
+                    <div class="col-3">
+                        <label class="form-label">ZC min</label>
+                        <input type="number" step="1" class="form-control form-control-sm ap" id="regime_min_zero_crossings">
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="d-grid mb-3">
+            <button class="btn btn-primary" onclick="saveAlgoParams()">
+                <i class="bi bi-save me-1"></i>Save Strategy Settings (applies next tick)
+            </button>
+        </div>
+    </div>
+
+    <!-- ══ Column 3: Account & Execution (TradingConfig) ═══════════════════ -->
+    <div class="col-lg-4">
+        <div class="card mb-3">
+            <div class="card-header"><i class="bi bi-toggles me-2"></i>Mode</div>
+            <div class="card-body">
+                <div class="d-flex align-items-center justify-content-between mb-2">
+                    <div>
+                        <div class="fw-semibold">Paper trading</div>
+                        <div class="form-text">Fills simulated locally — no orders leave this machine.</div>
+                    </div>
+                    <div class="form-check form-switch">
+                        <input class="form-check-input tc" type="checkbox" id="paper_trading" style="transform: scale(1.3);">
+                    </div>
+                </div>
+                <hr class="my-2">
+                <div class="d-flex align-items-center justify-content-between">
+                    <div>
+                        <div class="fw-semibold">OKX server: <span data-mode-badge class="badge mode-ctl mode-ctl-unknown">MODE ?</span></div>
+                        <div class="form-text">Demo = simulated exchange. Live = REAL MONEY.</div>
+                    </div>
+                    <div class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" id="demo-mode-switch" style="transform: scale(1.3);"
+                               title="ON = OKX demo server, OFF = LIVE server">
+                    </div>
+                </div>
+                <div class="form-text mt-1">Switching restarts the engine connection (a few seconds).</div>
+            </div>
+        </div>
+
+        <div class="card mb-3">
+            <div class="card-header"><i class="bi bi-rulers me-2"></i>Pair &amp; Sizing</div>
+            <div class="card-body">
+                <div class="row g-2">
+                    <div class="col-6">
+                        <label class="form-label">Spot symbol (Leg A)</label>
+                        <input type="text" class="form-control form-control-sm tc" id="spot_symbol">
+                    </div>
+                    <div class="col-6">
+                        <label class="form-label">Perp symbol (Leg B)</label>
+                        <input type="text" class="form-control form-control-sm tc" id="futures_symbol">
+                    </div>
+                    <div class="col-6">
+                        <label class="form-label">Position size ($ notional)</label>
+                        <input type="number" step="100" class="form-control form-control-sm tc" id="position_size_usd">
+                    </div>
+                    <div class="col-6">
+                        <label class="form-label">Max position size ($)</label>
+                        <input type="number" step="100" class="form-control form-control-sm tc" id="max_position_size_usd">
+                    </div>
+                    <div class="col-6">
+                        <label class="form-label">Spot leverage (×)</label>
+                        <input type="number" step="1" class="form-control form-control-sm tc" id="spot_leverage">
+                    </div>
+                    <div class="col-6">
+                        <label class="form-label">Perp leverage (×)</label>
+                        <input type="number" step="1" class="form-control form-control-sm tc" id="futures_leverage">
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card mb-3">
+            <div class="card-header"><i class="bi bi-cash-coin me-2"></i>Fees &amp; Execution</div>
+            <div class="card-body">
+                <div class="row g-2">
+                    <div class="col-3">
+                        <label class="form-label">Spot maker</label>
+                        <input type="number" step="0.5" class="form-control form-control-sm tc" id="spot_maker_fee_bps">
+                    </div>
+                    <div class="col-3">
+                        <label class="form-label">Spot taker</label>
+                        <input type="number" step="0.5" class="form-control form-control-sm tc" id="spot_taker_fee_bps">
+                    </div>
+                    <div class="col-3">
+                        <label class="form-label">Perp maker</label>
+                        <input type="number" step="0.5" class="form-control form-control-sm tc" id="futures_maker_fee_bps">
+                    </div>
+                    <div class="col-3">
+                        <label class="form-label">Perp taker</label>
+                        <input type="number" step="0.5" class="form-control form-control-sm tc" id="futures_taker_fee_bps">
+                    </div>
+                    <div class="col-12"><div class="form-text">All in bps of notional, per leg, one way.</div></div>
+                    <div class="col-4">
+                        <label class="form-label">Slippage (bps/leg)</label>
+                        <input type="number" step="0.5" class="form-control form-control-sm tc" id="slippage_bps">
+                    </div>
+                    <div class="col-4">
+                        <label class="form-label">Entry orders</label>
+                        <select class="form-select form-select-sm tc" id="entry_execution_mode">
+                            <option value="LIMIT">LIMIT (maker)</option>
+                            <option value="MARKET">MARKET (taker)</option>
+                        </select>
+                    </div>
+                    <div class="col-4">
+                        <label class="form-label">Exit orders</label>
+                        <select class="form-select form-select-sm tc" id="exit_execution_mode">
+                            <option value="LIMIT">LIMIT (maker)</option>
+                            <option value="MARKET">MARKET (taker)</option>
+                        </select>
+                    </div>
+                    <div class="col-6">
+                        <label class="form-label">Limit order timeout (s)</label>
+                        <input type="number" step="5" class="form-control form-control-sm tc" id="limit_order_timeout_sec">
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="d-grid mb-3">
+            <button class="btn btn-outline-primary" onclick="saveTradingConfig()">
+                <i class="bi bi-save me-1"></i>Save Account &amp; Execution
+            </button>
+        </div>
+
+        <div class="card mb-3">
+            <div class="card-header"><i class="bi bi-list-check me-2"></i>Go-Live Checklist</div>
+            <div class="card-body small">
+                <ol class="mb-0 ps-3">
+                    <li>Run on <strong>DEMO</strong> until the journal shows net-positive closes.</li>
+                    <li>Check <strong>Filters &amp; Edge</strong> on the dashboard: edge multiple must be ≥ required — if the round-trip cost dwarfs the expected capture, the algo will (correctly) never trade.</li>
+                    <li>Set Take-Profit %, Stop % and Daily max loss.</li>
+                    <li>Flip the OKX server toggle to LIVE (red stripe appears on every page).</li>
+                    <li>Start the algo from the navbar button — it confirms size and mode first.</li>
+                </ol>
             </div>
         </div>
     </div>
@@ -783,710 +438,94 @@
 
 {% block scripts %}
 <script>
-    // Asset symbol mapping
-    const assetSymbols = {
-        {% for key, asset in assets.items() %}
-        '{{ key }}': {
-            spot: '{{ asset.okx_spot }}',
-            futures: '{{ asset.okx_futures }}'
-        },
-        {% endfor %}
-    };
-
-    // Update symbols when asset changes
-    document.getElementById('asset').addEventListener('change', function() {
-        const asset = this.value;
-        if (assetSymbols[asset]) {
-            document.getElementById('spot_symbol').value = assetSymbols[asset].spot;
-            document.getElementById('futures_symbol').value = assetSymbols[asset].futures;
-        }
+// ── Strategy params (algo_params JSON store) ────────────────────────────────
+async function loadAlgoParams() {
+    const r = await fetch('/api/algo-params', {cache: 'no-store'}).then(x => x.json());
+    const p = r.params || {};
+    document.querySelectorAll('.ap').forEach(el => {
+        const k = el.id;
+        if (!(k in p)) return;
+        if (el.type === 'checkbox') el.checked = !!p[k];
+        else el.value = p[k];
     });
+}
 
-    // Show/hide live trading checklist when paper trading toggle changes
-    function toggleLiveChecklist(checkbox) {
-        const checklist = document.getElementById('live-trading-checklist');
-        if (checklist) {
-            checklist.style.display = checkbox.checked ? 'none' : 'block';
-        }
-    }
-
-    // Toggle limit order settings visibility based on entry/exit modes
-    function updateLimitSettingsVisibility() {
-        const entryMode = document.getElementById('entry_execution_mode').value;
-        const exitMode = document.getElementById('exit_execution_mode').value;
-        const anyLimit = entryMode === 'LIMIT' || exitMode === 'LIMIT';
-        document.getElementById('limit-timeout-group').style.opacity = anyLimit ? '1' : '0.5';
-        document.getElementById('limit-offset-group').style.opacity = anyLimit ? '1' : '0.5';
-        document.getElementById('limit_order_timeout_sec').disabled = !anyLimit;
-        document.getElementById('limit_order_price_offset_bps').disabled = !anyLimit;
-        document.getElementById('limit-order-info').style.display = anyLimit ? 'block' : 'none';
-        updateFeeSummary();
-    }
-
-    // Live fee round-trip summary
-    function updateFeeSummary() {
-        const spotMaker  = parseFloat(document.getElementById('spot_maker_fee_bps').value) || 0;
-        const spotTaker  = parseFloat(document.getElementById('spot_taker_fee_bps').value) || 0;
-        const futMaker   = parseFloat(document.getElementById('futures_maker_fee_bps').value) || 0;
-        const futTaker   = parseFloat(document.getElementById('futures_taker_fee_bps').value) || 0;
-        const slippage   = parseFloat(document.getElementById('slippage_bps').value) || 0;
-
-        const entryMode = document.getElementById('entry_execution_mode').value;
-        const exitMode  = document.getElementById('exit_execution_mode').value;
-
-        // LIMIT uses maker rates, MARKET uses taker rates
-        const spotEntryFee = entryMode === 'LIMIT' ? spotMaker : spotTaker;
-        const futEntryFee  = entryMode === 'LIMIT' ? futMaker  : futTaker;
-        const entryCost    = spotEntryFee + futEntryFee;
-
-        const spotExitFee = exitMode === 'LIMIT' ? spotMaker : spotTaker;
-        const futExitFee  = exitMode === 'LIMIT' ? futMaker  : futTaker;
-        const exitCost    = spotExitFee + futExitFee;
-
-        const totalSlippage = slippage * 4;  // 4 legs
-        const totalCost  = entryCost + exitCost + totalSlippage;
-        const entryLabel = entryMode === 'LIMIT' ? 'maker' : 'taker';
-        const exitLabel  = exitMode  === 'LIMIT' ? 'maker' : 'taker';
-
-        document.getElementById('fee-summary-text').textContent =
-            `Entry (${entryLabel}): ${entryCost} bps  ·  ` +
-            `Exit (${exitLabel}): ${exitCost} bps  ·  ` +
-            `Slippage (4 legs): ${totalSlippage} bps  ·  ` +
-            `Total: ${totalCost} bps (${(totalCost / 100).toFixed(3)}%)`;
-    }
-
-    updateLimitSettingsVisibility(); // Initial state (also calls updateFeeSummary)
-
-    // Form submission
-    document.getElementById('config-form').addEventListener('submit', function(e) {
-        e.preventDefault();
-
-        const formData = {
-            asset: document.getElementById('asset').value,
-            spot_symbol: document.getElementById('spot_symbol').value,
-            futures_symbol: document.getElementById('futures_symbol').value,
-            entry_threshold: parseFloat(document.getElementById('entry_threshold').value),
-            exit_threshold: parseFloat(document.getElementById('exit_threshold').value),
-            stop_loss_threshold: parseFloat(document.getElementById('stop_loss_threshold').value),
-            lookback_period: parseInt(document.getElementById('lookback_period').value),
-            stats_update_interval: parseInt(document.getElementById('stats_update_interval').value),
-            hurst_enabled: document.getElementById('hurst_enabled').checked,
-            hurst_threshold: parseFloat(document.getElementById('hurst_threshold').value),
-            std_filter_enabled: document.getElementById('std_filter_enabled').checked,
-            min_std_multiple: parseFloat(document.getElementById('min_std_multiple').value),
-            position_size_usd: parseFloat(document.getElementById('position_size_usd').value),
-            max_position_size_usd: parseFloat(document.getElementById('max_position_size_usd').value),
-            spot_leverage: parseInt(document.getElementById('spot_leverage').value),
-            futures_leverage: parseInt(document.getElementById('futures_leverage').value),
-            spot_maker_fee_bps: parseFloat(document.getElementById('spot_maker_fee_bps').value),
-            spot_taker_fee_bps: parseFloat(document.getElementById('spot_taker_fee_bps').value),
-            futures_maker_fee_bps: parseFloat(document.getElementById('futures_maker_fee_bps').value),
-            futures_taker_fee_bps: parseFloat(document.getElementById('futures_taker_fee_bps').value),
-            slippage_bps: parseFloat(document.getElementById('slippage_bps').value),
-            auto_tune_enabled: document.getElementById('auto_tune_enabled').checked,
-            paper_trading: document.getElementById('paper_trading').checked,
-            entry_execution_mode: document.getElementById('entry_execution_mode').value,
-            exit_execution_mode: document.getElementById('exit_execution_mode').value,
-            limit_order_timeout_sec: parseInt(document.getElementById('limit_order_timeout_sec').value),
-            limit_order_price_offset_bps: parseFloat(document.getElementById('limit_order_price_offset_bps').value),
-            entry_cooldown_seconds: parseInt(document.getElementById('entry_cooldown_seconds').value),
-            verify_exchange_position: document.getElementById('verify_exchange_position').checked,
-            orphan_recovery_timeout_sec: parseInt(document.getElementById('orphan_recovery_timeout_sec').value),
-            daily_max_loss_usd: parseFloat(document.getElementById('daily_max_loss_usd').value) || 0,
-        };
-
-        fetch('/api/config', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify(formData)
-        })
-        .then(response => response.json())
-        .then(data => {
-            if (data.success) {
-                showToast('Configuration saved successfully', 'success');
-            } else {
-                showToast('Error: ' + (data.error || 'Unknown error'), 'danger');
-            }
-        })
-        .catch(error => {
-            console.error('Error:', error);
-            showToast('Error: ' + error.message, 'danger');
-        });
+async function saveAlgoParams() {
+    const out = {};
+    document.querySelectorAll('.ap').forEach(el => {
+        const k = el.id;
+        if (el.type === 'checkbox') out[k] = el.checked;
+        else if (el.tagName === 'SELECT') out[k] = el.value;
+        else out[k] = parseFloat(el.value);
     });
+    const r = await fetch('/api/algo-params', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(out)
+    }).then(x => x.json());
+    showToast(r.success ? 'Strategy settings saved — live on the next tick'
+                        : 'Save failed: ' + (r.error || ''), r.success ? 'success' : 'danger');
+}
 
-    // ========== Telegram ==========
-    function saveTelegramConfig(doTest = true) {
-        const enabled   = document.getElementById('tg_enabled').checked;
-        const token     = document.getElementById('tg_token').value.trim();
-        const chatId    = document.getElementById('tg_chat_id').value.trim();
-        const trades    = document.getElementById('tg_notify_trades').checked;
-        const signals   = document.getElementById('tg_notify_signals').checked;
-        const errors    = document.getElementById('tg_notify_errors').checked;
-
-        const resultEl = document.getElementById('tg-save-result');
-        resultEl.style.display = 'block';
-        resultEl.className = 'alert alert-info py-2 px-3 mb-3';
-        resultEl.textContent = doTest ? 'Saving and sending test message…' : 'Saving…';
-
-        fetch('/api/telegram/config', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                telegram_enabled: enabled,
-                telegram_bot_token: token,
-                telegram_chat_id: chatId,
-                telegram_notify_trades: trades,
-                telegram_notify_signals: signals,
-                telegram_notify_errors: errors,
-            })
-        })
-        .then(r => r.json())
-        .then(data => {
-            if (!data.success) {
-                resultEl.className = 'alert alert-danger py-2 px-3 mb-3';
-                resultEl.textContent = 'Save failed: ' + (data.error || 'Unknown error');
-                return;
-            }
-            if (!doTest) {
-                resultEl.className = 'alert alert-success py-2 px-3 mb-3';
-                resultEl.textContent = 'Settings saved.';
-                return;
-            }
-            // Send test message
-            return fetch('/api/telegram/test', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ token: token, chat_id: chatId })
-            })
-            .then(r => r.json())
-            .then(td => {
-                if (td.success) {
-                    resultEl.className = 'alert alert-success py-2 px-3 mb-3';
-                    resultEl.textContent = 'Settings saved. Test message sent successfully!';
-                } else {
-                    resultEl.className = 'alert alert-warning py-2 px-3 mb-3';
-                    resultEl.textContent = 'Settings saved, but test message failed: ' + (td.error || 'Check token and chat ID');
-                }
-            });
-        })
-        .catch(err => {
-            resultEl.className = 'alert alert-danger py-2 px-3 mb-3';
-            resultEl.textContent = 'Error: ' + err.message;
-        });
-    }
-
-    function resetForm() {
-        fetch('/api/config')
-            .then(response => response.json())
-            .then(config => {
-                document.getElementById('asset').value = config.asset;
-                document.getElementById('spot_symbol').value = config.spot_symbol;
-                document.getElementById('futures_symbol').value = config.futures_symbol;
-                document.getElementById('entry_threshold').value = config.entry_threshold;
-                document.getElementById('exit_threshold').value = config.exit_threshold;
-                document.getElementById('stop_loss_threshold').value = config.stop_loss_threshold;
-                document.getElementById('lookback_period').value = config.lookback_period;
-                document.getElementById('stats_update_interval').value = config.stats_update_interval;
-                document.getElementById('hurst_enabled').checked = config.hurst_enabled;
-                document.getElementById('hurst_threshold').value = config.hurst_threshold;
-                document.getElementById('std_filter_enabled').checked = config.std_filter_enabled;
-                document.getElementById('min_std_multiple').value = config.min_std_multiple;
-                document.getElementById('position_size_usd').value = config.position_size_usd;
-                document.getElementById('max_position_size_usd').value = config.max_position_size_usd;
-                document.getElementById('spot_leverage').value = config.spot_leverage || 1;
-                document.getElementById('futures_leverage').value = config.futures_leverage || 1;
-                document.getElementById('spot_maker_fee_bps').value = config.spot_maker_fee_bps || 8.0;
-                document.getElementById('spot_taker_fee_bps').value = config.spot_taker_fee_bps || 10.0;
-                document.getElementById('futures_maker_fee_bps').value = config.futures_maker_fee_bps || 2.0;
-                document.getElementById('futures_taker_fee_bps').value = config.futures_taker_fee_bps || 5.0;
-                document.getElementById('slippage_bps').value = config.slippage_bps ?? 3.0;
-                document.getElementById('auto_tune_enabled').checked = config.auto_tune_enabled || false;
-                document.getElementById('paper_trading').checked = config.paper_trading;
-                document.getElementById('entry_execution_mode').value = config.entry_execution_mode || 'LIMIT';
-                document.getElementById('exit_execution_mode').value = config.exit_execution_mode || 'MARKET';
-                document.getElementById('limit_order_timeout_sec').value = config.limit_order_timeout_sec;
-                document.getElementById('limit_order_price_offset_bps').value = config.limit_order_price_offset_bps;
-                document.getElementById('entry_cooldown_seconds').value = config.entry_cooldown_seconds || 60;
-                document.getElementById('verify_exchange_position').checked = config.verify_exchange_position !== false;
-                document.getElementById('orphan_recovery_timeout_sec').value = config.orphan_recovery_timeout_sec || 60;
-                document.getElementById('daily_max_loss_usd').value = config.daily_max_loss_usd || 0;
-                updateLimitSettingsVisibility();
-                updateFeeSummary();
-            });
-    }
-
-    // ========== Manual Order Testing ==========
-    let testOrderInterval = null;
-
-    function openTestOrder() {
-        const orderType = document.getElementById('test_order_type').value;
-        const sizeUsd = parseFloat(document.getElementById('test_size_usd').value);
-
-        document.getElementById('btn-open-test').disabled = true;
-        document.getElementById('btn-open-test').innerHTML = '<i class="bi bi-hourglass-split me-1"></i>Executing...';
-
-        fetch('/api/test-order/open', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({
-                order_type: orderType,
-                size_usd: sizeUsd
-            })
-        })
-        .then(response => response.json())
-        .then(data => {
-            document.getElementById('btn-open-test').disabled = false;
-            document.getElementById('btn-open-test').innerHTML = '<i class="bi bi-play-fill me-1"></i>Execute Order';
-
-            if (data.success) {
-                showToast(`Order executed: ${orderType}`, 'success');
-                fetchTestOrderStatus();
-            } else {
-                showToast(`Error: ${data.error}`, 'danger');
-            }
-        })
-        .catch(error => {
-            console.error('Error:', error);
-            showToast('Error executing order', 'danger');
-            document.getElementById('btn-open-test').disabled = false;
-            document.getElementById('btn-open-test').innerHTML = '<i class="bi bi-play-fill me-1"></i>Execute Order';
-        });
-    }
-
-    function closeTestOrder(positionId) {
-        fetch('/api/test-order/close', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ position_id: positionId })
-        })
-        .then(response => response.json())
-        .then(data => {
-            if (data.success) {
-                showToast(`Position closed. P&L: $${data.pnl_usd?.toFixed(2) || '0.00'}`, 'success');
-                fetchTestOrderStatus();
-            } else {
-                showToast(`Error: ${data.error}`, 'danger');
-            }
-        })
-        .catch(error => {
-            console.error('Error:', error);
-            showToast('Error closing position', 'danger');
-        });
-    }
-
-    function closeAllTestOrders() {
-        fetch('/api/test-order/close-all', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'}
-        })
-        .then(response => response.json())
-        .then(data => {
-            if (data.success) {
-                showToast(`All positions closed. Total P&L: $${data.total_pnl?.toFixed(2) || '0.00'}`, 'success');
-                fetchTestOrderStatus();
-            } else {
-                showToast(`Error: ${data.error}`, 'danger');
-            }
-        })
-        .catch(error => {
-            console.error('Error:', error);
-            showToast('Error closing positions', 'danger');
-        });
-    }
-
-    function updateTestPositionsTable(positions) {
-        const tbody = document.getElementById('test-positions-body');
-        const card = document.getElementById('test-positions-card');
-
-        if (!positions || positions.length === 0) {
-            card.style.display = 'none';
-            return;
-        }
-
-        card.style.display = 'block';
-        tbody.innerHTML = '';
-
-        positions.forEach(pos => {
-            const pnlClass = pos.unrealized_pnl >= 0 ? 'text-success' : 'text-danger';
-            const sideClass = pos.side === 'BUY' ? 'text-success' : 'text-danger';
-
-            const row = document.createElement('tr');
-            row.innerHTML = `
-                <td>${pos.market_type}</td>
-                <td class="${sideClass}">${pos.side}</td>
-                <td>${pos.quantity?.toFixed(6) || '-'}</td>
-                <td>$${pos.entry_price?.toFixed(2) || '-'}</td>
-                <td>$${pos.current_price?.toFixed(2) || '-'}</td>
-                <td class="${pnlClass}">$${pos.unrealized_pnl?.toFixed(2) || '0.00'}</td>
-                <td><code class="small">${pos.order_id || '-'}</code></td>
-                <td>
-                    <button class="btn btn-outline-danger btn-sm py-0 px-1" onclick="closeTestOrder('${pos.id}')">
-                        <i class="bi bi-x"></i>
-                    </button>
-                </td>
-            `;
-            tbody.appendChild(row);
-        });
-    }
-
-    function startTestOrderPolling() {
-        stopTestOrderPolling();
-        testOrderInterval = setInterval(fetchTestOrderStatus, 1000);
-    }
-
-    function stopTestOrderPolling() {
-        if (testOrderInterval) {
-            clearInterval(testOrderInterval);
-            testOrderInterval = null;
-        }
-    }
-
-    function fetchTestOrderStatus() {
-        fetch('/api/test-order/status')
-            .then(response => response.json())
-            .then(data => {
-                updateTestPositionsTable(data.positions || []);
-                if (data.positions && data.positions.length > 0) {
-                    startTestOrderPolling();
-                } else {
-                    stopTestOrderPolling();
-                }
-            })
-            .catch(error => console.error('Error fetching test order status:', error));
-    }
-
-    // Check for existing test positions on page load
-    document.addEventListener('DOMContentLoaded', function() {
-        fetchTestOrderStatus();
-        fetchSuiteStatus();   // Restore state if suite was already running
+// ── TradingConfig (account & execution) ─────────────────────────────────────
+let _tcFull = null;
+async function loadTradingConfig() {
+    _tcFull = await fetch('/api/config', {cache: 'no-store'}).then(x => x.json());
+    document.querySelectorAll('.tc').forEach(el => {
+        const k = el.id;
+        if (!(k in _tcFull)) return;
+        if (el.type === 'checkbox') el.checked = !!_tcFull[k];
+        else el.value = _tcFull[k];
     });
+}
 
-    // ─────────────────────────────────────────────────────────────────
-    // Full Test Suite
-    // ─────────────────────────────────────────────────────────────────
-
-    // Status badge colours per scenario state
-    const SUITE_BADGE = {
-        pending:   '<span class="badge bg-secondary">pending</span>',
-        running:   '<span class="badge bg-warning text-dark"><span class="spinner-border spinner-border-sm me-1"></span>running</span>',
-        pass:      '<span class="badge bg-success">pass</span>',
-        fail:      '<span class="badge bg-danger">fail</span>',
-        cancelled: '<span class="badge bg-secondary">cancelled</span>',
-    };
-
-    // Order-type label colours
-    const TYPE_BADGE = {
-        BUY_SPOT:     '<span class="badge bg-primary" style="font-size:0.7rem;">BUY_SPOT</span>',
-        SELL_SPOT:    '<span class="badge bg-warning text-dark" style="font-size:0.7rem;">SELL_SPOT</span>',
-        BUY_FUTURES:  '<span class="badge bg-info text-dark" style="font-size:0.7rem;">BUY_FUT</span>',
-        SELL_FUTURES: '<span class="badge bg-orange" style="font-size:0.7rem;background:#fd7e14;">SELL_FUT</span>',
-        LONG_SPREAD:  '<span class="badge" style="font-size:0.7rem;background:#6f42c1;color:#fff;">LONG_SPR</span>',
-        SHORT_SPREAD: '<span class="badge" style="font-size:0.7rem;background:#d63384;color:#fff;">SHORT_SPR</span>',
-    };
-
-    function renderSuiteTable(state) {
-        const tbody = document.getElementById('suite-tbody');
-        if (!tbody) return;
-        tbody.innerHTML = '';
-        const anyRunning = state.running || state.single_running;
-
-        // Convert "  |  " separators to line breaks; HTML-escape the rest
-        function detailHtml(text) {
-            if (!text) return '';
-            const esc = text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-            return esc.split('  |  ').map(part => `<span>${part}</span>`).join('<br>');
-        }
-        (state.scenarios || []).forEach((s, i) => {
-            const tr = document.createElement('tr');
-            if (s.status === 'running') tr.classList.add('table-warning');
-            else if (s.status === 'pass')  tr.classList.add('table-success', 'opacity-75');
-            else if (s.status === 'fail')  tr.classList.add('table-danger',  'opacity-75');
-
-            const cancelTag = s.cancel_test
-                ? '<span class="badge bg-secondary ms-1" style="font-size:0.65rem;">cancel</span>'
-                : '';
-
-            // Run button: disabled while full suite or single scenario is active
-            const btnDisabled = anyRunning ? ' disabled' : '';
-            const btnSpinner  = (s.status === 'running' && state.single_running)
-                ? '<span class="spinner-border spinner-border-sm me-1" style="width:.6rem;height:.6rem;"></span>'
-                : '';
-
-            tr.innerHTML = `
-                <td class="text-muted">${i + 1}</td>
-                <td>${s.label}${cancelTag}</td>
-                <td><span class="badge bg-dark border" style="font-size:0.7rem;">${s.mode || ''}</span></td>
-                <td>${TYPE_BADGE[s.order_type] || s.order_type}</td>
-                <td>${SUITE_BADGE[s.status] || s.status}</td>
-                <td class="text-muted small" style="line-height:1.6;">${detailHtml(s.detail)}</td>
-                <td><button class="btn btn-sm btn-outline-primary py-0 px-2"
-                            style="font-size:0.7rem;"
-                            onclick="runSingleScenario('${s.id}')"${btnDisabled}>${btnSpinner}Run</button></td>
-            `;
-            tbody.appendChild(tr);
-        });
-    }
-
-    function applySuiteState(state) {
-        if (!state) return;
-        const total      = state.total || 40;
-        const current    = state.current || 0;
-        const pct        = Math.round((current / total) * 100);
-        const anyRunning = state.running || state.single_running;
-
-        document.getElementById('suite-progress-badge').textContent = `${current} / ${total}`;
-        document.getElementById('suite-pass-badge').textContent     = `${state.pass || 0} passed`;
-        document.getElementById('suite-fail-badge').textContent     = `${state.fail || 0} failed`;
-        document.getElementById('suite-progress-bar').style.width   = `${pct}%`;
-
-        let modeLabel = state.order_mode ? `Mode: ${state.order_mode}  |  ` : '';
-        if (state.running)        modeLabel += 'suite running…';
-        else if (state.single_running) modeLabel += 'scenario running…';
-        else if (current > 0 || (state.scenarios && state.scenarios.some(s => s.status !== 'pending')))
-                                  modeLabel += 'complete';
-        document.getElementById('suite-mode-label').textContent = modeLabel;
-
-        const hasResults  = (state.scenarios && state.scenarios.some(s => s.status !== 'pending'));
-        const hasActiveRow = (state.scenarios && state.scenarios.some(s => s.status === 'running'));
-        // Stuck = flags say running but no row is actually active (crashed coroutine)
-        const isStuck     = anyRunning && !hasActiveRow;
-
-        document.getElementById('btn-run-suite').classList.toggle('d-none',    state.running || isStuck);
-        document.getElementById('btn-stop-suite').classList.toggle('d-none',   !state.running || isStuck);
-        document.getElementById('btn-download-csv').classList.toggle('d-none',  anyRunning || !hasResults);
-        document.getElementById('btn-force-reset').classList.toggle('d-none',  !isStuck);
-
-        renderSuiteTable(state);
-
-        // Scroll the currently running row into view
-        const rows = document.querySelectorAll('#suite-tbody tr');
-        rows.forEach(r => { if (r.classList.contains('table-warning')) r.scrollIntoView({block: 'nearest'}); });
-    }
-
-    function startTestSuite() {
-        fetch('/api/test-suite/start', { method: 'POST' })
-            .then(r => r.json())
-            .then(data => {
-                if (data.success) {
-                    showToast('Test suite started – 36 scenarios will run automatically', 'success');
-                } else {
-                    showToast('Could not start suite: ' + data.error, 'danger');
-                }
-            })
-            .catch(e => showToast('Error: ' + e, 'danger'));
-    }
-
-    function stopTestSuite() {
-        fetch('/api/test-suite/stop', { method: 'POST' })
-            .then(r => r.json())
-            .then(() => showToast('Stop signal sent – current scenario will finish before stopping', 'warning'));
-    }
-
-    function forceResetSuite() {
-        fetch('/api/test-suite/reset', { method: 'POST' })
-            .then(r => r.json())
-            .then(data => {
-                if (data.success) showToast('Suite flags cleared – you can now start a new run', 'success');
-                else showToast('Reset failed: ' + data.error, 'danger');
-            })
-            .catch(e => showToast('Error: ' + e, 'danger'));
-    }
-
-    function runSingleScenario(scenarioId) {
-        fetch('/api/test-suite/run-scenario', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({scenario_id: scenarioId}),
-        })
-        .then(r => r.json())
-        .then(data => {
-            if (data.success) {
-                showToast(`Running scenario ${scenarioId}…`, 'success');
-            } else {
-                showToast('Cannot run scenario: ' + data.error, 'danger');
-            }
-        })
-        .catch(e => showToast('Error: ' + e, 'danger'));
-    }
-
-    // Fetch current status on load so the table (and Run buttons) are visible immediately
-    function fetchSuiteStatus() {
-        fetch('/api/test-suite/status')
-            .then(r => r.json())
-            .then(data => { if (data) applySuiteState(data); })
-            .catch(() => {});
-    }
-
-    // Live updates via WebSocket  (socket is initialised in base.html)
-    document.addEventListener('DOMContentLoaded', function() {
-        fetchSuiteStatus();   // populate table immediately on page load
-        if (typeof socket !== 'undefined') {
-            socket.on('test_suite_update', function(data) {
-                applySuiteState(data);
-            });
-        }
+async function saveTradingConfig() {
+    const out = Object.assign({}, _tcFull || {});
+    document.querySelectorAll('.tc').forEach(el => {
+        const k = el.id;
+        if (el.type === 'checkbox') out[k] = el.checked;
+        else if (el.tagName === 'SELECT' || el.type === 'text') out[k] = el.value;
+        else out[k] = parseFloat(el.value);
     });
+    const r = await fetch('/api/config', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(out)
+    }).then(x => x.json());
+    showToast(r.success ? 'Account & execution settings saved'
+                        : 'Save failed: ' + (r.error || ''), r.success ? 'success' : 'danger');
+    if (r.success) _tcFull = r.config;
+}
 
-    // ── Anthropic API Key Management ──────────────────────────────────────────
-    (function() {
-        const badge   = document.getElementById('anthropic-status-badge');
-        const input   = document.getElementById('anthropic-key-input');
-        const saveBtn = document.getElementById('anthropic-save-btn');
-        const testBtn = document.getElementById('anthropic-test-btn');
-        const feedback = document.getElementById('anthropic-feedback');
-        const eyeBtn  = document.getElementById('anthropic-toggle-eye');
-        const eyeIcon = document.getElementById('anthropic-eye-icon');
+// ── Demo / Live server toggle ───────────────────────────────────────────────
+const demoSwitch = document.getElementById('demo-mode-switch');
+fetch('/api/algo/state').then(r => r.json()).then(s => {
+    demoSwitch.checked = s.mode !== 'live';
+}).catch(() => {});
 
-        function setFeedback(msg, type) {
-            feedback.textContent = msg;
-            feedback.className = 'mt-1 text-' + type;
-            feedback.style.display = 'block';
-        }
+demoSwitch.addEventListener('change', async function () {
+    const toDemo = this.checked;
+    if (!toDemo) {
+        const ok = confirm('⚠️ SWITCH TO LIVE OKX SERVER\n\nReal orders, real funds. The engine reconnects to the LIVE server.\n\nProceed?');
+        if (!ok) { this.checked = true; return; }
+    }
+    this.disabled = true;
+    try {
+        const r = await fetch('/api/engine/set-demo-mode', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({demo: toDemo})
+        }).then(x => x.json());
+        showToast(r.success ? ('Switched to ' + (toDemo ? 'DEMO' : 'LIVE') + ' server')
+                            : 'Switch failed: ' + (r.error || ''), r.success ? 'success' : 'danger');
+        if (!r.success) this.checked = !toDemo;
+        if (typeof AlgoCtl !== 'undefined') AlgoCtl.refresh();
+    } catch (e) {
+        showToast('Switch failed: ' + e, 'danger');
+        this.checked = !toDemo;
+    } finally {
+        this.disabled = false;
+    }
+});
 
-        function setBadge(configured, preview) {
-            if (configured) {
-                badge.className = 'badge ms-2 bg-success';
-                badge.textContent = 'Connected — ' + preview;
-            } else {
-                badge.className = 'badge ms-2 bg-danger';
-                badge.textContent = 'Not Configured';
-            }
-        }
-
-        // Check current status on page load
-        fetch('/api/anthropic/status')
-            .then(r => r.json())
-            .then(d => setBadge(d.configured, d.preview))
-            .catch(() => { badge.className = 'badge ms-2 bg-secondary'; badge.textContent = 'Unknown'; });
-
-        // Show/hide key toggle
-        eyeBtn.addEventListener('click', function() {
-            if (input.type === 'password') {
-                input.type = 'text';
-                eyeIcon.className = 'bi bi-eye-slash';
-            } else {
-                input.type = 'password';
-                eyeIcon.className = 'bi bi-eye';
-            }
-        });
-
-        function fetchWithTimeout(url, opts, timeoutMs) {
-            const controller = new AbortController();
-            const id = setTimeout(() => controller.abort(), timeoutMs);
-            return fetch(url, {...opts, signal: controller.signal})
-                .finally(() => clearTimeout(id));
-        }
-
-        // Save key
-        saveBtn.addEventListener('click', function() {
-            const key = input.value.trim();
-            if (!key) { setFeedback('Please paste your API key first.', 'warning'); return; }
-            saveBtn.disabled = true;
-            saveBtn.textContent = 'Saving...';
-            feedback.style.display = 'none';
-            fetchWithTimeout('/api/anthropic/key', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({key})
-            }, 10000)
-            .then(r => {
-                if (!r.ok && r.headers.get('content-type') && !r.headers.get('content-type').includes('json')) {
-                    throw new Error('Server error ' + r.status);
-                }
-                return r.json();
-            })
-            .then(d => {
-                if (d.success) {
-                    setFeedback('Key saved and active — no restart needed.', 'success');
-                    setBadge(true, d.preview);
-                    input.value = '';
-                } else {
-                    setFeedback('Error: ' + d.error, 'danger');
-                }
-            })
-            .catch(err => setFeedback(err.name === 'AbortError' ? 'Request timed out. Is the app running?' : ('Error: ' + err.message), 'danger'))
-            .finally(() => { saveBtn.disabled = false; saveBtn.textContent = 'Save Key'; });
-        });
-
-        // Test connection
-        testBtn.addEventListener('click', function() {
-            testBtn.disabled = true;
-            testBtn.textContent = 'Testing...';
-            setFeedback('Sending test request to Claude API...', 'secondary');
-            fetchWithTimeout('/api/anthropic/test', {method: 'POST'}, 30000)
-            .then(r => r.json())
-            .then(d => {
-                if (d.success) {
-                    setFeedback('Connection successful! API is working correctly.', 'success');
-                    setBadge(true, badge.textContent.replace('Connected — ', ''));
-                } else {
-                    setFeedback('Test failed: ' + d.error, 'danger');
-                    badge.className = 'badge ms-2 bg-danger';
-                    badge.textContent = 'Connection Failed';
-                }
-            })
-            .catch(err => setFeedback(err.name === 'AbortError' ? 'Test timed out (30s). Check network or API status.' : ('Error: ' + err.message), 'danger'))
-            .finally(() => { testBtn.disabled = false; testBtn.textContent = 'Test Connection'; });
-        });
-    })();
-
-    // Demo / Live mode toggle
-    (function() {
-        const toggle = document.getElementById('demoModeSwitch');
-        const badge = document.getElementById('demo-mode-badge');
-        const desc = document.getElementById('demo-mode-desc');
-        const spinner = document.getElementById('demo-mode-spinner');
-
-        toggle.addEventListener('change', function() {
-            const enableDemo = this.checked;
-
-            if (!enableDemo) {
-                const ok = confirm(
-                    '⚠️  Switch to LIVE SERVER?\n\n' +
-                    'This reconnects the engine to the real OKX exchange.\n' +
-                    'Ensure your API key has Trade permission and Paper Trading\n' +
-                    'is still ON if you do not want real orders placed.\n\n' +
-                    'Continue?'
-                );
-                if (!ok) {
-                    this.checked = true;
-                    return;
-                }
-            }
-
-            toggle.disabled = true;
-            spinner.classList.remove('d-none');
-
-            fetch('/api/engine/set-demo-mode', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({demo: enableDemo})
-            })
-            .then(r => r.json())
-            .then(data => {
-                if (data.success) {
-                    if (enableDemo) {
-                        badge.innerHTML = '<span class="badge bg-warning text-dark"><i class="bi bi-cloud-slash me-1"></i>DEMO SERVER</span>';
-                        desc.textContent = 'Demo mode — orders go to the OKX demo exchange (simulated fills, no real money).';
-                    } else {
-                        badge.innerHTML = '<span class="badge bg-danger"><i class="bi bi-cloud-fill me-1"></i>LIVE SERVER</span>';
-                        desc.textContent = 'Live mode — orders execute against the real OKX exchange with real funds.';
-                    }
-                    showToast('Switched to ' + (enableDemo ? 'Demo' : 'Live') + ' server — engine restarted', 'success');
-                } else {
-                    toggle.checked = !enableDemo;
-                    showToast('Failed to switch mode: ' + (data.error || 'unknown error'), 'danger');
-                }
-            })
-            .catch(err => {
-                toggle.checked = !enableDemo;
-                showToast('Error switching mode: ' + err.message, 'danger');
-            })
-            .finally(() => {
-                toggle.disabled = false;
-                spinner.classList.add('d-none');
-            });
-        });
-    })();
+loadAlgoParams();
+loadTradingConfig();
 </script>
 {% endblock %}

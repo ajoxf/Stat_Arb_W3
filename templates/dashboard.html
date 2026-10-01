@@ -1,171 +1,29 @@
 {% extends "base.html" %}
 
-{% block title %}Dashboard - Nexus{% endblock %}
+{% block title %}Dashboard — Nexus{% endblock %}
 
 {% block content %}
-<!-- Top Account Bar - Full Width -->
-<div class="card mb-3 account-card" id="account-card">
-    <div class="card-body py-2">
-        <div class="row align-items-center">
-            <div class="col-md-2">
-                <div class="d-flex align-items-center">
-                    <i class="bi bi-bank me-2 text-primary"></i>
-                    <div>
-                        <small class="text-secondary">Exchange</small>
-                        <div class="fw-bold" id="exchange-name">OKX</div>
-                    </div>
-                </div>
-            </div>
-            <div class="col-md-2">
-                <div class="d-flex align-items-center">
-                    <i class="bi bi-person-badge me-2"></i>
-                    <div>
-                        <small class="text-secondary">UID</small>
-                        <div class="fw-bold font-monospace" id="account-uid">-</div>
-                    </div>
-                </div>
-            </div>
-            <div class="col-md-2">
-                <div class="d-flex align-items-center">
-                    <i class="bi bi-wallet2 me-2 text-success"></i>
-                    <div>
-                        <small class="text-secondary">Equity</small>
-                        <div class="fw-bold" id="account-balance">$0.00</div>
-                    </div>
-                </div>
-            </div>
-            <div class="col-md-2">
-                <div class="d-flex align-items-center">
-                    <i class="bi bi-cash-stack me-2"></i>
-                    <div>
-                        <small class="text-secondary">Available</small>
-                        <div class="fw-bold" id="available-balance">$0.00</div>
-                    </div>
-                </div>
-            </div>
-            <div class="col-md-2">
-                <div class="d-flex align-items-center">
-                    <i class="bi bi-graph-up-arrow me-2"></i>
-                    <div>
-                        <small class="text-secondary">Unrealized P&L</small>
-                        <div class="fw-bold pnl-value" id="daily-pnl">$0.00</div>
-                        <small class="text-muted" id="account-last-updated" style="font-size:0.65rem;">—</small>
-                    </div>
-                </div>
-            </div>
-            <div class="col-md-2">
-                <div class="d-flex align-items-center">
-                    <i class="bi bi-shield-check me-2"></i>
-                    <div>
-                        <small class="text-secondary">Margin Health</small>
-                        <span id="margin-health-badge" class="badge bg-secondary">N/A</span>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-</div>
-
-<!-- Live Trading Warning Banner (only shown when actually trading real money) -->
-{% if not config.paper_trading and not is_demo %}
-<div class="alert mb-3" id="live-trading-banner" style="background:#1a0000;border:2px solid #dc3545;color:#fff;">
-    <div class="d-flex align-items-center">
-        <i class="bi bi-exclamation-octagon-fill me-2 text-danger" style="font-size:1.4rem;"></i>
-        <div>
-            <strong class="text-danger">LIVE TRADING — REAL FUNDS AT RISK</strong>
-            <div style="font-size:0.82rem;color:#ccc;">
-                Orders execute against real markets. Verify position size, leverage, and stop-loss before enabling the algo.
-            </div>
-        </div>
-    </div>
-</div>
-{% endif %}
-
-<!-- Orphaned Spot Warning Banner -->
-<div class="alert alert-warning mb-3 d-none" id="orphan-warning">
-    <div class="d-flex align-items-center justify-content-between">
-        <div>
-            <i class="bi bi-exclamation-triangle-fill me-2"></i>
-            <strong>Orphaned Spot Position Detected!</strong>
-            <span id="orphan-details">You have BTC in your spot wallet without an active position.</span>
-            <small class="text-muted ms-2" id="orphan-detected-at" style="font-size:0.75rem;"></small>
-        </div>
-        <div>
-            <button class="btn btn-warning btn-sm me-2" onclick="closeOrphanedSpot(event)">
-                <i class="bi bi-cash-coin me-1"></i>Sell to USDT
-            </button>
-            <button class="btn btn-outline-secondary btn-sm" onclick="dismissOrphanWarning()">
-                <i class="bi bi-x"></i>
-            </button>
-        </div>
-    </div>
-</div>
-
-<!-- Exchange Position Mismatch Warning Banner -->
-<div class="alert alert-danger mb-3 d-none" id="exchange-position-warning">
-    <div class="d-flex align-items-center justify-content-between">
-        <div>
-            <i class="bi bi-exclamation-octagon-fill me-2"></i>
-            <strong>Exchange Position Mismatch!</strong>
-            <span id="exchange-position-details"></span>
-            <small class="text-muted ms-2" id="mismatch-detected-at" style="font-size:0.75rem;"></small>
-        </div>
-        <div id="exchange-position-actions">
-            <!-- Buttons added dynamically based on mismatch type -->
-        </div>
-    </div>
-</div>
-
-<!-- Trading Status Banner -->
-<div class="card mb-3" id="trading-status-card">
-    <div class="card-body py-2">
-        <div class="d-flex align-items-center justify-content-between">
-            <div class="d-flex align-items-center">
-                <span id="trading-status-icon" class="me-2" style="font-size: 1.2rem;">
-                    <i class="bi bi-hourglass-split text-warning"></i>
-                </span>
-                <div>
-                    <div id="trading-status-text" class="fw-bold">Collecting Data...</div>
-                    <small id="trading-status-detail" class="text-secondary">Waiting for lookback period</small>
-                </div>
-            </div>
-            <div class="d-flex align-items-center flex-grow-1 mx-4">
-                <div class="progress flex-grow-1" style="height: 20px;">
-                    <div class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar"
-                         id="trading-progress-bar" style="width: 0%;">
-                        <span id="trading-progress-text" style="font-size: 0.75rem;">0%</span>
-                    </div>
-                </div>
-            </div>
-            <div class="text-end">
-                <div id="data-count-display" class="fw-bold font-monospace">0 / {{ config.lookback_period }}</div>
-                <small class="text-secondary">data points</small>
-            </div>
-        </div>
-    </div>
-</div>
-
 <div class="row g-3">
-    <!-- Left Column: Prices and Signal -->
+    <!-- ── Left column: prices, signal & position, charts ─────────────────── -->
     <div class="col-lg-5">
-        <!-- Price Cards Row -->
+        <!-- Leg price cards -->
         <div class="row g-2 mb-3">
             <div class="col-6">
                 <div class="card h-100">
                     <div class="card-header py-1 d-flex justify-content-between align-items-center">
-                        <small><i class="bi bi-currency-exchange me-1"></i>Spot</small>
-                        <span class="badge bg-primary" style="font-size: 0.65rem;" id="spot-symbol">{{ config.spot_symbol }}</span>
+                        <small><i class="bi bi-currency-exchange me-1"></i>Leg A — Spot</small>
+                        <span class="badge bg-primary" style="font-size: 0.65rem;">{{ config.spot_symbol }}</span>
                     </div>
                     <div class="card-body py-2 text-center">
-                        <div class="price-large price-neutral" id="spot-last">-</div>
+                        <div class="fs-4 fw-bold font-monospace" id="leg-a-last">—</div>
                         <div class="row">
                             <div class="col-6">
-                                <small class="text-secondary" style="font-size: 0.7rem;">Bid</small>
-                                <div class="text-success" style="font-size: 0.85rem;" id="spot-bid">-</div>
+                                <small class="text-secondary" style="font-size:0.7rem;">Bid</small>
+                                <div class="text-success font-monospace" style="font-size:0.85rem;" id="leg-a-bid">—</div>
                             </div>
                             <div class="col-6">
-                                <small class="text-secondary" style="font-size: 0.7rem;">Ask</small>
-                                <div class="text-danger" style="font-size: 0.85rem;" id="spot-ask">-</div>
+                                <small class="text-secondary" style="font-size:0.7rem;">Ask</small>
+                                <div class="text-danger font-monospace" style="font-size:0.85rem;" id="leg-a-ask">—</div>
                             </div>
                         </div>
                     </div>
@@ -174,19 +32,19 @@
             <div class="col-6">
                 <div class="card h-100">
                     <div class="card-header py-1 d-flex justify-content-between align-items-center">
-                        <small><i class="bi bi-bar-chart me-1"></i>Futures</small>
-                        <span class="badge bg-warning text-dark" style="font-size: 0.65rem;" id="futures-symbol">{{ config.futures_symbol }}</span>
+                        <small><i class="bi bi-bar-chart me-1"></i>Leg B — Perp</small>
+                        <span class="badge bg-warning text-dark" style="font-size: 0.65rem;">{{ config.futures_symbol }}</span>
                     </div>
                     <div class="card-body py-2 text-center">
-                        <div class="price-large price-neutral" id="futures-last">-</div>
+                        <div class="fs-4 fw-bold font-monospace" id="leg-b-last">—</div>
                         <div class="row">
                             <div class="col-6">
-                                <small class="text-secondary" style="font-size: 0.7rem;">Bid</small>
-                                <div class="text-success" style="font-size: 0.85rem;" id="futures-bid">-</div>
+                                <small class="text-secondary" style="font-size:0.7rem;">Bid</small>
+                                <div class="text-success font-monospace" style="font-size:0.85rem;" id="leg-b-bid">—</div>
                             </div>
                             <div class="col-6">
-                                <small class="text-secondary" style="font-size: 0.7rem;">Ask</small>
-                                <div class="text-danger" style="font-size: 0.85rem;" id="futures-ask">-</div>
+                                <small class="text-secondary" style="font-size:0.7rem;">Ask</small>
+                                <div class="text-danger font-monospace" style="font-size:0.85rem;" id="leg-b-ask">—</div>
                             </div>
                         </div>
                     </div>
@@ -194,538 +52,228 @@
             </div>
         </div>
 
-        <!-- Signal & Position Combined -->
+        <!-- Signal & Position -->
         <div class="card mb-3">
             <div class="card-header py-2 d-flex justify-content-between align-items-center">
-                <span><i class="bi bi-lightning me-2"></i>Signal & Position</span>
-                <button class="btn btn-sm btn-outline-warning py-0" id="close-position-btn" onclick="closePosition()" style="display: none; font-size: 0.75rem;">
-                    <i class="bi bi-x-circle"></i> Close
+                <span><i class="bi bi-lightning me-2"></i>Signal &amp; Position</span>
+                <button class="btn btn-sm btn-danger py-0" id="close-btn" onclick="closePosition()"
+                        style="font-size:0.75rem; display:none;"
+                        title="Close the open position NOW through the shared order path.">
+                    <i class="bi bi-x-octagon"></i> Close Position
                 </button>
             </div>
             <div class="card-body py-2">
                 <div class="row align-items-center">
                     <div class="col-4 text-center">
-                        <div class="metric-value" style="font-size: 2rem;" id="current-zscore">0.00</div>
-                        <div class="metric-label">Z-Score</div>
+                        <div id="sell-spread-tile" class="p-2 rounded" style="border: 2px solid transparent;"
+                             title="What SELLING the spread gets NOW: sell Spot at its bid, buy Perp at its ask. The algo SHORTS the spread when this price's z reaches +entry, and closes a LONG here.">
+                            <div class="text-secondary mb-1" style="font-size:0.68rem; letter-spacing:0.04em;">
+                                <strong>SELL SPREAD</strong> <span>Bid A − Ask B</span></div>
+                            <div class="font-monospace fw-bold text-danger" id="sell-spread-value" style="font-size:1.7rem; line-height:1.1;">&mdash;</div>
+                            <div class="mt-2 pt-1" style="border-top:1px solid #ddd;">
+                                <div class="text-secondary" style="font-size:0.6rem; letter-spacing:0.04em;">Z-SCORE</div>
+                                <div class="font-monospace fw-bold" id="sell-spread-z" style="font-size:1.4rem; line-height:1.1;">&mdash;</div>
+                                <div class="text-secondary font-monospace" id="sell-spread-entry" style="font-size:0.65rem;"></div>
+                            </div>
+                            <div class="text-secondary" style="font-size:0.6rem;">short entry · long exit</div>
+                        </div>
                     </div>
                     <div class="col-4 text-center">
-                        <div class="price-large" id="spread-value" style="font-size: 1.5rem;">0.00</div>
-                        <div class="metric-label">Spread</div>
+                        <div id="buy-spread-tile" class="p-2 rounded" style="border: 2px solid transparent;"
+                             title="What BUYING the spread costs NOW: buy Spot at its ask, sell Perp at its bid. The algo goes LONG the spread when this price's z reaches −entry, and closes a SHORT here.">
+                            <div class="text-secondary mb-1" style="font-size:0.68rem; letter-spacing:0.04em;">
+                                <strong>BUY SPREAD</strong> <span>Ask A − Bid B</span></div>
+                            <div class="font-monospace fw-bold text-success" id="buy-spread-value" style="font-size:1.7rem; line-height:1.1;">&mdash;</div>
+                            <div class="mt-2 pt-1" style="border-top:1px solid #ddd;">
+                                <div class="text-secondary" style="font-size:0.6rem; letter-spacing:0.04em;">Z-SCORE</div>
+                                <div class="font-monospace fw-bold" id="buy-spread-z" style="font-size:1.4rem; line-height:1.1;">&mdash;</div>
+                                <div class="text-secondary font-monospace" id="buy-spread-entry" style="font-size:0.65rem;"></div>
+                            </div>
+                            <div class="text-secondary" style="font-size:0.6rem;">long entry · short exit</div>
+                        </div>
                     </div>
                     <div class="col-4 text-center">
-                        <div class="d-flex align-items-center justify-content-center gap-2">
-                            <div id="position-badge" class="badge bg-secondary" style="font-size: 1.2rem; padding: 0.4rem 0.8rem;">
-                                FLAT
-                            </div>
-                            <div class="dropdown">
-                                <button class="btn btn-sm btn-outline-secondary py-0 px-1" type="button" data-bs-toggle="dropdown" title="Sync Position">
-                                    <i class="bi bi-arrow-repeat"></i>
-                                </button>
-                                <ul class="dropdown-menu dropdown-menu-end">
-                                    <li><a class="dropdown-item" href="#" onclick="syncPosition('recover'); return false;"><i class="bi bi-download me-2"></i>Recover from DB</a></li>
-                                    <li><a class="dropdown-item text-danger" href="#" onclick="syncPosition('clear'); return false;"><i class="bi bi-x-circle me-2"></i>Clear Position</a></li>
-                                </ul>
-                            </div>
-                        </div>
-                        <div id="sl-cooldown-indicator" style="display:none; margin-top:4px;">
-                            <span class="badge bg-warning" style="font-size:0.65rem;">SL COOLDOWN <span id="sl-cooldown-secs">0</span>s</span>
-                        </div>
-                        <div class="metric-label mt-1">Position</div>
+                        <div id="position-badge" class="badge bg-secondary" style="font-size:1.1rem; padding:0.4rem 0.8rem;">FLAT</div>
+                        <div class="text-secondary mt-1" style="font-size:0.7rem;">Position <span id="position-owner" class="badge bg-light text-dark" style="font-size:0.6rem;"></span></div>
+                        <div id="position-pnl" class="font-monospace fw-bold mt-1" style="font-size:1.2rem;"></div>
                     </div>
                 </div>
-                <div id="position-details" class="mt-2 pt-2" style="display: none; border-top: 1px solid var(--border-color); font-size: 0.78rem;">
+
+                <!-- Open position detail -->
+                <div id="position-details" class="mt-2 pt-2" style="display:none; border-top:1px solid #ddd; font-size:0.78rem;">
                     <div class="row mb-1">
-                        <div class="col-6">
-                            <span class="text-secondary">Entry Z:</span>
-                            <span id="position-entry-z">-</span>
-                        </div>
-                        <div class="col-6">
-                            <span class="text-secondary">P&L:</span>
-                            <span id="position-pnl">-</span>
-                        </div>
+                        <div class="col-4"><span class="text-secondary">Entry spread:</span> <span id="pd-entry" class="font-monospace">—</span></div>
+                        <div class="col-4"><span class="text-secondary">Δ spread:</span> <span id="pd-delta" class="font-monospace">—</span></div>
+                        <div class="col-4"><span class="text-secondary">Held:</span> <span id="pd-held" class="font-monospace">—</span></div>
                     </div>
                     <div class="row mb-1">
-                        <div class="col-6">
-                            <span class="text-secondary">Spot Entry:</span>
-                            <span id="position-entry-spot">-</span>
-                        </div>
-                        <div class="col-6">
-                            <span class="text-secondary">Fut Entry:</span>
-                            <span id="position-entry-futures">-</span>
-                        </div>
+                        <div class="col-4"><span class="text-secondary">Break-even:</span> <span id="pd-be" class="font-monospace">—</span></div>
+                        <div class="col-4"><span class="text-secondary">Take profit:</span> <span id="pd-tp" class="font-monospace text-success">—</span></div>
+                        <div class="col-4"><span class="text-secondary">Stop:</span> <span id="pd-sl" class="font-monospace text-danger">—</span></div>
                     </div>
                     <div class="row">
-                        <div class="col-6">
-                            <span class="text-secondary">Age:</span>
-                            <span id="position-age" class="font-monospace">-</span>
-                        </div>
-                        <div class="col-6">
-                            <span class="text-secondary">Size:</span>
-                            <span id="position-notional">-</span>
-                        </div>
+                        <div class="col-4"><span class="text-secondary">Peak P&amp;L:</span> <span id="pd-peak" class="font-monospace">—</span></div>
+                        <div class="col-4"><span class="text-secondary">Qty:</span> <span id="pd-qty" class="font-monospace">—</span></div>
+                        <div class="col-4"><span class="text-secondary">Notional:</span> <span id="pd-notional" class="font-monospace">—</span></div>
                     </div>
                 </div>
-            </div>
-        </div>
 
-        <!-- Z-Score Chart -->
-        <div class="card mb-3">
-            <div class="card-header py-1">
-                <small><i class="bi bi-activity me-2"></i>Z-Score History</small>
-            </div>
-            <div class="card-body py-2">
-                <canvas id="zscoreChart" height="140"></canvas>
-            </div>
-        </div>
-
-        <!-- Spread Chart -->
-        <div class="card mb-3">
-            <div class="card-header py-1">
-                <small><i class="bi bi-graph-up me-2"></i>Spread History</small>
-            </div>
-            <div class="card-body py-2">
-                <canvas id="spreadChart" height="100"></canvas>
-            </div>
-        </div>
-    </div>
-
-    <!-- Middle Column: Statistics and Filters -->
-    <div class="col-lg-4">
-        <!-- Statistics & Regime Combined -->
-        <div class="card mb-3">
-            <div class="card-header py-1">
-                <small><i class="bi bi-calculator me-2"></i>Statistics & Regime</small>
-            </div>
-            <div class="card-body py-2">
-                <div class="row g-1 mb-2">
-                    <div class="col-3">
-                        <div class="text-center p-1" style="background: var(--bg-tertiary); border-radius: 4px;">
-                            <div class="fw-bold text-primary" style="font-size: 0.9rem;" id="spread-mean">0.00</div>
-                            <div style="font-size: 0.65rem;" class="text-secondary">Mean</div>
-                        </div>
-                    </div>
-                    <div class="col-3">
-                        <div class="text-center p-1" style="background: var(--bg-tertiary); border-radius: 4px;">
-                            <div class="fw-bold text-danger" style="font-size: 0.9rem;" id="spread-std">0.00</div>
-                            <div style="font-size: 0.65rem;" class="text-secondary">Std Dev</div>
-                        </div>
-                    </div>
-                    <div class="col-3">
-                        <div class="text-center p-1" style="background: var(--bg-tertiary); border-radius: 4px;">
-                            <div class="fw-bold" style="font-size: 0.9rem;" id="hurst-value">0.50</div>
-                            <div style="font-size: 0.65rem;" class="text-secondary">Hurst</div>
-                        </div>
-                    </div>
-                    <div class="col-3">
-                        <div class="text-center p-1" style="background: var(--bg-tertiary); border-radius: 4px;">
-                            <div class="fw-bold" style="font-size: 0.9rem;" id="regime-display">-</div>
-                            <div style="font-size: 0.65rem;" class="text-secondary">Regime</div>
-                        </div>
-                    </div>
-                </div>
-                <!-- Half-Life row -->
-                <div class="row g-1 mb-2">
-                    <div class="col-6">
-                        <div class="text-center p-1" style="background: var(--bg-tertiary); border-radius: 4px;">
-                            <div class="fw-bold" style="font-size: 0.9rem;" id="half-life-value">—</div>
-                            <div style="font-size: 0.65rem;" class="text-secondary">Half-Life (periods)</div>
-                        </div>
-                    </div>
-                    <div class="col-6">
-                        <div class="text-center p-1" style="background: var(--bg-tertiary); border-radius: 4px;">
-                            <div class="fw-bold text-warning" style="font-size: 0.9rem;" id="suggested-lookback-value">—</div>
-                            <div style="font-size: 0.65rem;" class="text-secondary">Suggested Lookback</div>
-                        </div>
-                    </div>
-                </div>
-                <!-- Data Collection Progress -->
-                <div class="d-flex align-items-center" style="font-size: 0.75rem;">
-                    <span class="text-secondary me-2">Data:</span>
-                    <div class="progress flex-grow-1 me-2" style="height: 6px;">
-                        <div class="progress-bar bg-success" role="progressbar" id="collection-progress" style="width: 0%"></div>
-                    </div>
-                    <span id="data-points" class="text-secondary">0</span>/<span class="text-secondary">{{ config.lookback_period }}</span>
-                    <span class="ms-2 text-secondary">(<span id="collection-percent">0</span>%)</span>
-                </div>
-            </div>
-        </div>
-
-        <!-- Filter Status -->
-        <div class="card mb-3">
-            <div class="card-header py-1 d-flex justify-content-between align-items-center">
-                <small><i class="bi bi-funnel me-2"></i>Filters</small>
-                <button class="btn btn-sm btn-outline-secondary py-0" onclick="clearSDTouches()" title="Reset SD Touch History" style="font-size: 0.65rem;">
-                    <i class="bi bi-arrow-counterclockwise"></i>
-                </button>
-            </div>
-            <div class="card-body py-2" style="font-size: 0.8rem;">
-                <div class="row g-1 mb-2">
-                    <div class="col-3 text-center">
-                        <span id="hurst-status" class="badge bg-secondary" style="font-size: 0.65rem;">-</span>
-                        <div style="font-size: 0.6rem;" class="text-secondary">Hurst</div>
-                    </div>
-                    <div class="col-3 text-center">
-                        <span id="std-status" class="badge bg-secondary" style="font-size: 0.65rem;">-</span>
-                        <div style="font-size: 0.6rem;" class="text-secondary">STD</div>
-                    </div>
-                    <div class="col-3 text-center">
-                        <span id="regime-filter-status" class="badge bg-secondary" style="font-size: 0.65rem;">-</span>
-                        <div style="font-size: 0.6rem;" class="text-secondary">Regime</div>
-                    </div>
-                    <div class="col-3 text-center">
-                        <span id="data-ready-status" class="badge bg-secondary" style="font-size: 0.65rem;">-</span>
-                        <div style="font-size: 0.6rem;" class="text-secondary">Ready</div>
-                    </div>
-                </div>
-                <div class="p-2" style="background: var(--bg-tertiary); border-radius: 4px; font-size: 0.75rem;">
-                    <div class="d-flex justify-content-between">
-                        <span class="text-secondary">Vol/Cost Ratio:</span>
-                        <span id="std-ratio-value" class="fw-bold">-</span>
-                        <span class="text-secondary">/ req:</span>
-                        <span id="std-ratio-required">-</span>
-                    </div>
-                    <div class="d-flex justify-content-between mt-1">
-                        <span class="text-secondary">Round-trip cost:</span>
-                        <span id="round-trip-total" class="fw-bold">-</span>
-                    </div>
-                    <div id="round-trip-breakdown" class="text-secondary mt-1" style="font-size: 0.65rem;">
-                        entry + exit + slippage
-                    </div>
-                    <div id="std-explanation" class="text-secondary mt-1" style="font-size: 0.65rem;">
-                        Spread std must exceed round-trip cost
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Blocked Signal Indicator -->
-        <div id="blocked-signal-card" class="card mb-3" style="display: none;">
-            <div class="card-header py-1">
-                <small><i class="bi bi-slash-circle me-2 text-secondary"></i>Last Signal Blocked</small>
-            </div>
-            <div class="card-body py-2" style="font-size: 0.75rem;">
-                <div class="d-flex justify-content-between mb-1">
-                    <span class="text-secondary">Signal:</span>
-                    <span id="blocked-signal-type" class="fw-bold">-</span>
-                </div>
-                <div class="d-flex justify-content-between mb-1">
-                    <span class="text-secondary">Z-Score:</span>
-                    <span id="blocked-signal-zscore">-</span>
-                </div>
-                <div class="d-flex justify-content-between mb-1">
-                    <span class="text-secondary">Time:</span>
-                    <span id="blocked-signal-time" style="font-size: 0.65rem;">-</span>
-                </div>
-                <div class="mt-2 p-2" style="background: rgba(108, 117, 125, 0.1); border-radius: 4px;">
-                    <span class="text-secondary" id="blocked-signal-reason">-</span>
-                </div>
-            </div>
-        </div>
-
-        <!-- Active Orders -->
-        <div class="card mb-3">
-            <div class="card-header py-1 d-flex justify-content-between align-items-center">
-                <small><i class="bi bi-hourglass-split me-2"></i>Active Orders</small>
-                <span id="execution-mode-badge" class="badge bg-success" style="font-size: 0.65rem;" title="Entry / Exit execution mode">LIMIT / LIMIT</span>
-            </div>
-            <div class="card-body p-2">
-                <div id="no-active-orders" class="text-center text-secondary py-1">
-                    <small>No active orders</small>
-                </div>
-                <div id="active-orders-content" style="display: none; font-size: 0.75rem;">
-                    <div class="row g-1">
-                        <div class="col-6">
-                            <div class="p-1" style="background: var(--bg-tertiary); border-radius: 4px;">
-                                <div class="d-flex justify-content-between">
-                                    <span class="fw-bold">Spot</span>
-                                    <span id="spot-leg-status" class="badge bg-secondary" style="font-size: 0.6rem;">-</span>
-                                </div>
-                                <div id="spot-leg-side" class="text-secondary">-</div>
-                                <div id="spot-leg-price">-</div>
-                            </div>
-                        </div>
-                        <div class="col-6">
-                            <div class="p-1" style="background: var(--bg-tertiary); border-radius: 4px;">
-                                <div class="d-flex justify-content-between">
-                                    <span class="fw-bold">Futures</span>
-                                    <span id="futures-leg-status" class="badge bg-secondary" style="font-size: 0.6rem;">-</span>
-                                </div>
-                                <div id="futures-leg-side" class="text-secondary">-</div>
-                                <div id="futures-leg-price">-</div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- AI Insights (observations + manual-apply recs) -->
-        <div class="card mb-3" id="ai-insights-card">
-            <div class="card-header py-1 d-flex justify-content-between align-items-center">
-                <small><i class="bi bi-lightbulb-fill me-1" style="color:#ffc107;"></i>AI Insights</small>
-                <span id="insights-count" class="badge bg-secondary" data-count="0" style="font-size:0.65rem;">0 pending</span>
-            </div>
-            <div class="card-body p-0">
-                <div id="insights-list" style="max-height:150px;overflow-y:auto;font-size:0.72rem;padding:6px 10px;">
-                    <div class="text-secondary text-center py-2" style="font-size:0.7rem;">No insights yet — fires after first closed trade</div>
-                </div>
-            </div>
-        </div>
-
-        <!-- AI Learning Log (auto-applied changes) -->
-        <div class="card mb-3" id="learning-log-card">
-            <div class="card-header py-1 d-flex justify-content-between align-items-center">
-                <small><i class="bi bi-cpu me-1"></i>Auto-Tune Log</small>
-                <div class="d-flex gap-1 align-items-center">
-                    <span id="health-score-badge" class="badge bg-secondary" style="font-size:0.62rem;">Health —</span>
-                    <span id="auto-tune-badge" class="badge bg-secondary" style="font-size:0.62rem;">Auto-Tune OFF</span>
-                </div>
-            </div>
-            <div class="card-body p-0">
-                <div id="learning-log-list" style="max-height:140px;overflow-y:auto;font-size:0.72rem;padding:6px 10px;">
-                    <div class="text-secondary text-center py-2">No changes yet</div>
-                </div>
-            </div>
-        </div>
-
-        <div class="card">
-            <div class="card-header py-1 d-flex justify-content-between align-items-center">
-                <small><i class="bi bi-journal-text me-2"></i>Recent Trades</small>
-                <div>
-                    <a href="/api/trades/csv" class="btn btn-sm btn-outline-success py-0 me-1" style="font-size: 0.65rem;" title="Download CSV">
-                        <i class="bi bi-download"></i>
-                    </a>
-                    <button class="btn btn-sm btn-outline-danger py-0 me-1" onclick="clearTrades()" title="Clear" style="font-size: 0.65rem;">
-                        <i class="bi bi-trash"></i>
+                <!-- Manual trading (locked out while the algo is ON) -->
+                <div id="manual-trade-row" class="mt-2 pt-2 d-flex gap-2 justify-content-center" style="border-top:1px solid #ddd;">
+                    <button class="btn btn-sm btn-outline-danger" id="manual-sell-btn"
+                            onclick="manualTrade('SHORT_SPREAD')"
+                            title="MANUAL: sell the spread (sell Spot at bid, buy Perp at ask). Refused while the algo is ON.">
+                        <i class="bi bi-arrow-down-right"></i> Sell Spread
                     </button>
-                    <a href="/analysis" class="btn btn-sm btn-outline-secondary py-0" style="font-size: 0.65rem;">All</a>
-                </div>
-            </div>
-            <div class="card-body p-0">
-                <div class="table-responsive" style="max-height: 200px; overflow-y: auto;">
-                    <table class="table table-sm table-striped table-hover mb-0" style="font-size: 0.75rem;">
-                        <thead class="sticky-top" style="background: var(--bg-secondary);">
-                            <tr>
-                                <th>Time</th>
-                                <th>Type</th>
-                                <th>Z</th>
-                                <th>Spot</th>
-                                <th>Futures</th>
-                                <th>P&L</th>
-                            </tr>
-                        </thead>
-                        <tbody id="trades-table">
-                            <tr>
-                                <td colspan="6" class="text-center text-secondary">No trades</td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Right Column: Account & Config -->
-    <div class="col-lg-3">
-        <!-- Account & Margin Details -->
-        <div class="card mb-3">
-            <div class="card-header py-1">
-                <small><i class="bi bi-bank me-2"></i>Margin Details</small>
-            </div>
-            <div class="card-body py-2" style="font-size: 0.8rem;">
-                <div class="row g-1 mb-2">
-                    <div class="col-6">
-                        <div class="text-center p-1" style="background: var(--bg-tertiary); border-radius: 4px;">
-                            <div id="account-equity" class="fw-bold">$0.00</div>
-                            <div style="font-size: 0.65rem;" class="text-secondary">Equity</div>
-                        </div>
-                    </div>
-                    <div class="col-6">
-                        <div class="text-center p-1" style="background: var(--bg-tertiary); border-radius: 4px;">
-                            <div id="account-available" class="fw-bold">$0.00</div>
-                            <div style="font-size: 0.65rem;" class="text-secondary">Available</div>
-                        </div>
-                    </div>
-                </div>
-                <div class="d-flex justify-content-between mb-1">
-                    <span class="text-secondary">IMR:</span>
-                    <span id="margin-imr">$0.00</span>
-                </div>
-                <div class="d-flex justify-content-between mb-1">
-                    <span class="text-secondary">MMR:</span>
-                    <span id="margin-mmr">$0.00</span>
-                </div>
-                <div class="d-flex justify-content-between mb-1">
-                    <span class="text-secondary">Margin Ratio:</span>
-                    <span id="margin-ratio">0%</span>
-                </div>
-                <div class="d-flex justify-content-between mb-1">
-                    <span class="text-secondary">Mark Price:</span>
-                    <span id="mark-price">-</span>
-                </div>
-                <div class="d-flex justify-content-between">
-                    <span class="text-secondary">Liq. Price:</span>
-                    <span id="liq-price" class="text-danger">-</span>
-                </div>
-            </div>
-        </div>
-
-        <!-- Position Margin Breakdown -->
-        <div class="card mb-3" id="position-margin-card" style="display: none;">
-            <div class="card-header py-1">
-                <small><i class="bi bi-calculator me-2"></i>Position Margin</small>
-            </div>
-            <div class="card-body py-1" style="font-size: 0.75rem;">
-                <table class="table table-sm mb-0" style="font-size: 0.7rem;">
-                    <thead>
-                        <tr class="text-secondary">
-                            <th style="padding: 2px;">Leg</th>
-                            <th style="padding: 2px;" class="text-end">Value</th>
-                            <th style="padding: 2px;" class="text-center">Lev</th>
-                            <th style="padding: 2px;" class="text-end">Margin</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <tr>
-                            <td style="padding: 2px;">Spot</td>
-                            <td style="padding: 2px;" class="text-end" id="spot-position-value">-</td>
-                            <td style="padding: 2px;" class="text-center" id="pos-spot-leverage">1x</td>
-                            <td style="padding: 2px;" class="text-end" id="spot-margin-used">-</td>
-                        </tr>
-                        <tr>
-                            <td style="padding: 2px;">Futures</td>
-                            <td style="padding: 2px;" class="text-end" id="futures-position-value">-</td>
-                            <td style="padding: 2px;" class="text-center" id="pos-futures-leverage">1x</td>
-                            <td style="padding: 2px;" class="text-end" id="futures-margin-used">-</td>
-                        </tr>
-                        <tr style="border-top: 1px solid var(--border-color);">
-                            <td style="padding: 2px;" colspan="3"><strong>Total Margin</strong></td>
-                            <td style="padding: 2px;" class="text-end"><strong id="total-margin-used">-</strong></td>
-                        </tr>
-                    </tbody>
-                </table>
-                <div id="leverage-warning" class="text-warning mt-1" style="font-size: 0.65rem; display: none;">
-                    <i class="bi bi-exclamation-triangle"></i> <span id="leverage-warning-text"></span>
-                </div>
-            </div>
-        </div>
-
-        <!-- Trading Config -->
-        <div class="card mb-3">
-            <div class="card-header py-1">
-                <small><i class="bi bi-gear me-2"></i>Config</small>
-            </div>
-            <div class="card-body py-2" style="font-size: 0.8rem;">
-                <div class="d-flex justify-content-between mb-1">
-                    <span class="text-secondary">Mode:</span>
-                    <span id="paper-mode" class="badge {% if config.paper_trading %}bg-warning{% elif is_demo %}bg-info{% else %}bg-danger{% endif %}" style="font-size: 0.7rem;">
-                        {% if config.paper_trading %}PAPER{% elif is_demo %}DEMO SERVER{% else %}LIVE{% endif %}
+                    <button class="btn btn-sm btn-outline-success" id="manual-buy-btn"
+                            onclick="manualTrade('LONG_SPREAD')"
+                            title="MANUAL: buy the spread (buy Spot at ask, sell Perp at bid). Refused while the algo is ON.">
+                        <i class="bi bi-arrow-up-right"></i> Buy Spread
+                    </button>
+                    <span id="manual-lock-note" class="text-secondary align-self-center" style="font-size:0.7rem; display:none;">
+                        <i class="bi bi-lock"></i> Algo is ON — manual orders locked
                     </span>
                 </div>
-                <div class="d-flex justify-content-between mb-1">
-                    <span class="text-secondary">Asset:</span>
-                    <span class="badge bg-primary" style="font-size: 0.7rem;">{{ config.asset }}</span>
-                </div>
-                <div class="d-flex justify-content-between mb-1">
-                    <span class="text-secondary">Size:</span>
-                    <span>${{ config.position_size_usd }}</span>
-                </div>
-                <div class="d-flex justify-content-between mb-1">
-                    <span class="text-secondary">Entry:</span>
-                    <span>&plusmn;{{ config.entry_threshold }}</span>
-                </div>
-                <div class="d-flex justify-content-between mb-1">
-                    <span class="text-secondary">Exit:</span>
-                    <span>&plusmn;{{ config.exit_threshold }}</span>
-                </div>
-                <div class="d-flex justify-content-between mb-1">
-                    <span class="text-secondary">Stop:</span>
-                    <span>&plusmn;{{ config.stop_loss_threshold }}</span>
-                </div>
-                <div class="d-flex justify-content-between mb-1">
-                    <span class="text-secondary">Spot Lev:</span>
-                    <span id="spot-leverage">{{ config.spot_leverage }}x</span>
-                </div>
-                <div class="d-flex justify-content-between">
-                    <span class="text-secondary">Fut Lev:</span>
-                    <span id="futures-leverage">{{ config.futures_leverage }}x</span>
-                </div>
             </div>
         </div>
 
-        <!-- VIP Level Badge -->
+        <!-- Z-Score chart -->
         <div class="card mb-3">
-            <div class="card-body py-2 text-center">
-                <small class="text-secondary">VIP Level</small>
-                <div id="account-level" class="badge bg-info mt-1">-</div>
-            </div>
+            <div class="card-header py-1"><small><i class="bi bi-activity me-2"></i>Z-Score History</small></div>
+            <div class="card-body py-2"><canvas id="zscoreChart" height="130"></canvas></div>
         </div>
 
-        <!-- Reset Controls -->
-        <div class="card">
-            <div class="card-header py-1">
-                <small><i class="bi bi-arrow-counterclockwise me-2"></i>Reset</small>
+        <!-- Spread chart -->
+        <div class="card mb-3">
+            <div class="card-header py-1"><small><i class="bi bi-graph-up me-2"></i>Spread History <span class="text-secondary">(Spot − Perp)</span></small></div>
+            <div class="card-body py-2"><canvas id="spreadChart" height="100"></canvas></div>
+        </div>
+    </div>
+
+    <!-- ── Middle column: algo status, statistics, filters ────────────────── -->
+    <div class="col-lg-4">
+        <!-- Algo status: THE live "what is it doing / why not" line -->
+        <div class="card mb-3">
+            <div class="card-header py-1 d-flex justify-content-between align-items-center">
+                <small><i class="bi bi-robot me-2"></i>Algo Status</small>
+                <span id="algo-cooldown" class="badge bg-warning text-dark" style="font-size:0.62rem; display:none;"></span>
             </div>
             <div class="card-body py-2">
-                <div class="d-grid gap-1">
-                    <button class="btn btn-outline-secondary btn-sm py-1" onclick="resetTradesOnly()" style="font-size: 0.75rem;" title="Reset trades and SD analysis, keep spread data">
-                        <i class="bi bi-journal-x me-1"></i>Reset Trades/SD
-                    </button>
-                    <button class="btn btn-outline-warning btn-sm py-1" onclick="resetSpreadHistory()" style="font-size: 0.75rem;">
-                        <i class="bi bi-graph-down me-1"></i>Reset Spread
-                    </button>
-                    <button class="btn btn-outline-danger btn-sm py-1" onclick="resetAll()" style="font-size: 0.75rem;">
-                        <i class="bi bi-trash me-1"></i>Reset All
-                    </button>
+                <div id="algo-status-line" class="font-monospace" style="font-size:0.85rem;">—</div>
+                <div id="algo-exit-health" class="text-danger mt-1" style="font-size:0.72rem; display:none;"></div>
+            </div>
+        </div>
+
+        <!-- Last Signal Blocked -->
+        <div class="card mb-3" id="blocked-card" style="display:none; border-left: 3px solid #ffc107;">
+            <div class="card-header py-1"><small><i class="bi bi-sign-stop me-2"></i>Last Signal Blocked</small></div>
+            <div class="card-body py-2" style="font-size:0.78rem;">
+                <div><span class="badge" id="blocked-side">—</span>
+                     <span class="font-monospace" id="blocked-z"></span>
+                     <span class="text-secondary" id="blocked-time" style="font-size:0.68rem;"></span></div>
+                <div class="text-secondary mt-1" id="blocked-reason"></div>
+            </div>
+        </div>
+
+        <!-- Statistics & Regime -->
+        <div class="card mb-3">
+            <div class="card-header py-1"><small><i class="bi bi-calculator me-2"></i>Statistics &amp; Regime</small></div>
+            <div class="card-body py-2" style="font-size:0.78rem;">
+                <div class="row mb-1">
+                    <div class="col-4"><span class="text-secondary">Mean:</span> <span id="st-mean" class="font-monospace">—</span></div>
+                    <div class="col-4"><span class="text-secondary">σ:</span> <span id="st-std" class="font-monospace">—</span></div>
+                    <div class="col-4"><span class="text-secondary">Mid z:</span> <span id="st-z" class="font-monospace">—</span></div>
+                </div>
+                <div class="row mb-1">
+                    <div class="col-4"><span class="text-secondary">Half-life:</span> <span id="st-hl" class="font-monospace">—</span></div>
+                    <div class="col-4"><span class="text-secondary">Samples:</span> <span id="st-samples" class="font-monospace">—</span></div>
+                    <div class="col-4"><span class="text-secondary">Rate:</span> <span id="st-rate" class="font-monospace">—</span>/min</div>
+                </div>
+                <div class="row mb-1">
+                    <div class="col-8">
+                        <span class="text-secondary">Warm-up:</span>
+                        <div class="progress mt-1" style="height: 6px;">
+                            <div class="progress-bar" id="st-warmup-bar" style="width: 0%"></div>
+                        </div>
+                        <small class="text-secondary" id="st-warmup-text" style="font-size:0.65rem;"></small>
+                    </div>
+                    <div class="col-4 text-end">
+                        <span class="badge bg-secondary" id="st-regime">—</span>
+                        <div class="text-secondary" id="st-regime-detail" style="font-size:0.62rem;"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Filters & Edge (the pre-trade economics the live gate uses) -->
+        <div class="card mb-3">
+            <div class="card-header py-1"><small><i class="bi bi-funnel me-2"></i>Filters &amp; Edge</small></div>
+            <div class="card-body py-2" style="font-size:0.78rem;">
+                <div class="d-flex justify-content-between mb-1">
+                    <span class="text-secondary">Round-trip cost:</span>
+                    <span class="font-monospace"><span id="ed-cost">—</span> <span class="text-secondary" id="ed-cost-bps"></span></span>
+                </div>
+                <div class="d-flex justify-content-between mb-1">
+                    <span class="text-secondary">Expected capture @ entry z:</span>
+                    <span class="font-monospace" id="ed-capture">—</span>
+                </div>
+                <div class="d-flex justify-content-between mb-1">
+                    <span class="text-secondary">Edge multiple <span id="ed-min" style="font-size:0.65rem;"></span>:</span>
+                    <span class="font-monospace fw-bold" id="ed-mult">—</span>
+                </div>
+                <div class="d-flex justify-content-between mb-1">
+                    <span class="text-secondary">Win probability (OU):</span>
+                    <span class="font-monospace" id="ed-pwin">—</span>
+                </div>
+                <hr class="my-1">
+                <div class="d-flex justify-content-between mb-1">
+                    <span class="text-secondary">Margin at risk:</span>
+                    <span class="font-monospace" id="ed-margin">—</span>
+                </div>
+                <div class="d-flex justify-content-between mb-1">
+                    <span class="text-secondary">Profit target (BE + %margin):</span>
+                    <span class="font-monospace text-success" id="ed-target">—</span>
+                </div>
+                <div class="d-flex justify-content-between">
+                    <span class="text-secondary">Execution:</span>
+                    <span class="font-monospace" id="ed-mode">—</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Z-excursion counters -->
+        <div class="card mb-3">
+            <div class="card-header py-1 d-flex justify-content-between align-items-center">
+                <small><i class="bi bi-arrows-expand me-2"></i>Z Excursions</small>
+                <button class="btn btn-sm btn-outline-secondary py-0" style="font-size:0.65rem;" onclick="resetExcursions()">Reset</button>
+            </div>
+            <div class="card-body py-2" style="font-size:0.78rem;">
+                <div class="row text-center">
+                    <div class="col-3"><div class="text-secondary" style="font-size:0.65rem;">±2σ</div><div class="font-monospace" id="ex-2">—</div></div>
+                    <div class="col-3"><div class="text-secondary" style="font-size:0.65rem;">±3σ</div><div class="font-monospace" id="ex-3">—</div></div>
+                    <div class="col-3"><div class="text-secondary" style="font-size:0.65rem;">Reversions</div><div class="font-monospace" id="ex-rev">—</div></div>
+                    <div class="col-3"><div class="text-secondary" style="font-size:0.65rem;">Max |z|</div><div class="font-monospace" id="ex-max">—</div></div>
                 </div>
             </div>
         </div>
     </div>
-</div>
 
-<!-- Exchange Order Log (full width) -->
-<div class="row mt-3">
-    <div class="col-12">
-        <div class="card">
+    <!-- ── Right column: journal ──────────────────────────────────────────── -->
+    <div class="col-lg-3">
+        <div class="card mb-3">
             <div class="card-header py-1 d-flex justify-content-between align-items-center">
-                <small><i class="bi bi-receipt me-2"></i>Exchange Order Log <span class="badge bg-secondary ms-1" id="exchange-order-badge">OKX</span></small>
-                <div>
-                    <a href="/api/exchange-orders/csv" class="btn btn-sm btn-outline-success py-0 me-1" style="font-size: 0.65rem;" title="Download CSV">
-                        <i class="bi bi-download"></i> CSV
-                    </a>
-                    <button class="btn btn-sm btn-outline-secondary py-0" onclick="refreshExchangeOrders()" style="font-size: 0.65rem;">
-                        <i class="bi bi-arrow-clockwise"></i> Refresh
-                    </button>
-                </div>
+                <small><i class="bi bi-journal-text me-2"></i>Trade Journal</small>
+                <span class="text-secondary" style="font-size:0.65rem;">spread fills</span>
             </div>
-            <div class="card-body p-0">
-                <div class="table-responsive" style="max-height: 280px; overflow-y: auto;">
-                    <table class="table table-sm table-striped table-hover mb-0" style="font-size: 0.72rem;">
-                        <thead class="sticky-top" style="background: var(--bg-secondary);">
-                            <tr>
-                                <th>Time</th>
-                                <th>Symbol</th>
-                                <th>Type</th>
-                                <th>Side</th>
-                                <th>Pos Side</th>
-                                <th>Order Type</th>
-                                <th>Qty</th>
-                                <th>Fill Qty</th>
-                                <th>Fill Price</th>
-                                <th>Leverage</th>
-                                <th>Fee</th>
-                                <th>P&L</th>
-                                <th>Status</th>
-                                <th>Order ID</th>
-                            </tr>
-                        </thead>
-                        <tbody id="exchange-orders-table">
-                            <tr>
-                                <td colspan="14" class="text-center text-secondary py-3">Click Refresh to load exchange orders</td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
+            <div class="card-body p-0" style="max-height: 70vh; overflow-y: auto;">
+                <table class="table table-sm mb-0" style="font-size:0.72rem;">
+                    <thead><tr>
+                        <th>Time</th><th>Event</th><th>Dir</th><th>Src</th><th class="text-end">Net $</th>
+                    </tr></thead>
+                    <tbody id="journal-body">
+                        <tr><td colspan="5" class="text-center text-secondary py-3">No trades yet</td></tr>
+                    </tbody>
+                </table>
             </div>
         </div>
     </div>
@@ -734,1658 +282,276 @@
 
 {% block scripts %}
 <script>
-    // Chart configurations
-    const chartOptions = {
-        responsive: true,
-        maintainAspectRatio: false,
-        animation: false,
-        plugins: {
-            legend: { display: false }
-        },
-        scales: {
-            x: {
-                display: false,
-                grid: { display: false }
-            },
-            y: {
-                grid: { color: 'rgba(0, 0, 0, 0.1)' },
-                ticks: { color: '#212529', font: { size: 10 } }
-            }
-        }
-    };
+// ─── polling: /api/signal (1s) + /api/signal/series (3s) + /api/journal (10s)
+let ENTRY_Z = 2.5, STOP_Z = 4.0;
 
-    // Z-Score Chart
-    const zscoreCtx = document.getElementById('zscoreChart').getContext('2d');
-    const zscoreChart = new Chart(zscoreCtx, {
-        type: 'line',
-        data: {
-            labels: [],
-            datasets: [
-                {
-                    label: 'Z-Score',
-                    data: [],
-                    borderColor: '#0d6efd',
-                    borderWidth: 2,
-                    fill: false,
-                    tension: 0.1,
-                    pointRadius: 0
-                },
-                {
-                    label: '+Entry',
-                    data: [],
-                    borderColor: '#198754',
-                    borderWidth: 2,
-                    borderDash: [5, 5],
-                    fill: false,
-                    pointRadius: 0
-                },
-                {
-                    label: '-Entry',
-                    data: [],
-                    borderColor: '#198754',
-                    borderWidth: 2,
-                    borderDash: [5, 5],
-                    fill: false,
-                    pointRadius: 0
-                },
-                {
-                    label: '+Exit',
-                    data: [],
-                    borderColor: '#dc3545',
-                    borderWidth: 1,
-                    borderDash: [2, 2],
-                    fill: false,
-                    pointRadius: 0
-                },
-                {
-                    label: '-Exit',
-                    data: [],
-                    borderColor: '#dc3545',
-                    borderWidth: 1,
-                    borderDash: [2, 2],
-                    fill: false,
-                    pointRadius: 0
-                }
-            ]
-        },
-        options: {
-            ...chartOptions,
-            scales: {
-                ...chartOptions.scales,
-                y: {
-                    ...chartOptions.scales.y,
-                    min: -5,
-                    max: 5
-                }
-            }
-        }
-    });
+function fmt(x, d = 2) {
+    return (x === null || x === undefined || Number.isNaN(x)) ? '—' : Number(x).toFixed(d);
+}
 
-    // Spread Chart
-    const spreadCtx = document.getElementById('spreadChart').getContext('2d');
-    const spreadChart = new Chart(spreadCtx, {
-        type: 'line',
-        data: {
-            labels: [],
-            datasets: [{
-                label: 'Spread',
-                data: [],
-                borderColor: '#6f42c1',
-                borderWidth: 2,
-                fill: false,
-                tension: 0.1,
-                pointRadius: 0
-            }]
-        },
-        options: chartOptions
-    });
+function fmtUsd(x, d = 2) {
+    return (x === null || x === undefined) ? '—' : '$' + Number(x).toFixed(d);
+}
 
-    // Configuration values
-    const entryThreshold = {{ config.entry_threshold }};
-    const exitThreshold = {{ config.exit_threshold }};
+async function pollSignal() {
+    let data;
+    try {
+        data = await fetch('/api/signal', {cache: 'no-store'}).then(r => r.json());
+    } catch (e) { return; }
+    ENTRY_Z = data.entry_zscore || ENTRY_Z;
+    STOP_Z = data.stop_zscore || STOP_Z;
 
-    // Data storage
-    let zscoreHistory = [];
-    let spreadHistory = [];
-    const maxDataPoints = 100;
+    // Legs
+    document.getElementById('leg-a-last').textContent = fmt(data.leg_a);
+    document.getElementById('leg-a-bid').textContent = fmt(data.bid_a);
+    document.getElementById('leg-a-ask').textContent = fmt(data.ask_a);
+    document.getElementById('leg-b-last').textContent = fmt(data.leg_b);
+    document.getElementById('leg-b-bid').textContent = fmt(data.bid_b);
+    document.getElementById('leg-b-ask').textContent = fmt(data.ask_b);
 
-    // Track last update time for fallback polling
-    let lastUpdateTime = Date.now();
-    const UPDATE_INTERVAL = 300;
+    // Sell / Buy spread tiles — each on its own executable z.
+    renderSide('sell', data.sell_spread, data.z_sell,
+               data.z_sell != null && data.z_sell >= ENTRY_Z, '+');
+    renderSide('buy', data.buy_spread, data.z_buy,
+               data.z_buy != null && data.z_buy <= -ENTRY_Z, '−');
 
-    // Position margin tracking
-    let currentPosition = {
-        type: 'NONE',
-        quantity: 0,
-        entrySpotPrice: 0,
-        entryFuturesPrice: 0,
-        notionalUsd: 0
-    };
-    // Open trade detail (from API status or trade socket event)
-    let currentOpenTrade = null;
-    // Configured leverage (from settings)
-    const configuredSpotLeverage = {{ config.spot_leverage }};
-    const configuredFuturesLeverage = {{ config.futures_leverage }};
-    // Actual leverage (from exchange) - updated from API
-    let actualSpotLeverage = 1;  // Spot on OKX is typically 1x (cash)
-    let actualFuturesLeverage = {{ config.futures_leverage }};  // Will be updated from API
+    // Statistics
+    document.getElementById('st-mean').textContent = fmt(data.mean);
+    document.getElementById('st-std').textContent = fmt(data.std, 3);
+    document.getElementById('st-z').textContent = fmt(data.zscore);
+    document.getElementById('st-hl').textContent = data.half_life_sec ? fmt(data.half_life_sec, 0) + 's' : '—';
+    document.getElementById('st-samples').textContent = data.samples ?? '—';
+    document.getElementById('st-rate').textContent = data.quote_rate_per_min ?? '—';
+    const have = data.history_sec || 0, need = data.min_history_sec || 1;
+    const pct = Math.min(100, have / need * 100);
+    const bar = document.getElementById('st-warmup-bar');
+    bar.style.width = pct + '%';
+    bar.className = 'progress-bar ' + (data.ready ? 'bg-success' : 'bg-warning');
+    document.getElementById('st-warmup-text').textContent =
+        data.ready ? 'ready' : (have / 60).toFixed(1) + ' / ' + (need / 60).toFixed(0) + ' min'
+        + (data.sample_status ? ' · ' + data.sample_status : '');
+    const regime = data.regime || '—';
+    const regimeEl = document.getElementById('st-regime');
+    regimeEl.textContent = regime;
+    regimeEl.className = 'badge ' + (regime === 'TRENDING' ? 'bg-danger' : regime === 'RANGE' ? 'bg-success' : 'bg-secondary');
+    const rd = data.regime_detail || {};
+    document.getElementById('st-regime-detail').textContent =
+        rd.efficiency_ratio != null ? ('ER ' + rd.efficiency_ratio + ' · ZC ' + rd.zero_crossings + ' · VR ' + rd.variance_ratio) : '';
 
-    // Socket event handlers
-    socket.on('tick', function(data) {
-        updatePrices(data.spot, data.futures);
-        lastUpdateTime = Date.now();
-    });
+    // Edge panel
+    const ed = data.edge || {};
+    document.getElementById('ed-cost').textContent = fmtUsd(ed.round_trip_cost_usd);
+    document.getElementById('ed-cost-bps').textContent = ed.round_trip_cost_bps != null ? '(' + ed.round_trip_cost_bps + ' bps)' : '';
+    document.getElementById('ed-capture').textContent = fmtUsd(ed.expected_capture_usd);
+    document.getElementById('ed-min').textContent = ed.min_edge_multiple ? '(need ≥ ' + ed.min_edge_multiple + '×)' : '';
+    const multEl = document.getElementById('ed-mult');
+    multEl.textContent = ed.edge_multiple != null ? ed.edge_multiple + '×' : '—';
+    multEl.className = 'font-monospace fw-bold ' + (ed.edge_ok ? 'text-success' : 'text-danger');
+    const pf = (data.algo || {}).pf_metrics || {};
+    document.getElementById('ed-pwin').textContent =
+        pf.win_probability != null ? (pf.win_probability * 100).toFixed(0) + '%' : '—';
+    document.getElementById('ed-margin').textContent = fmtUsd(ed.margin_usd, 0);
+    document.getElementById('ed-target').textContent =
+        ed.profit_target_usd != null ? 'BE + ' + fmtUsd(ed.profit_target_usd) : '—';
+    document.getElementById('ed-mode').textContent =
+        (ed.entry_mode || '—') + ' in / ' + (ed.exit_mode || '—') + ' out';
 
-    socket.on('signal', function(data) {
-        updateSignal(data);
-        updateCharts(data);
-        lastUpdateTime = Date.now();
-    });
+    // Algo status + cooldown + exit health
+    const al = data.algo || {};
+    document.getElementById('algo-status-line').textContent = al.status || '—';
+    const cd = document.getElementById('algo-cooldown');
+    if (al.cooldown_s > 0) { cd.textContent = 'cooldown ' + al.cooldown_s.toFixed(0) + 's'; cd.style.display = ''; }
+    else cd.style.display = 'none';
+    const eh = document.getElementById('algo-exit-health');
+    if (al.exit_halted) { eh.textContent = '⚠ EXIT HALTED after ' + al.exit_failures + ' failures — close manually'; eh.style.display = ''; }
+    else if (al.exit_failures > 0) { eh.textContent = 'exit failures: ' + al.exit_failures + (al.exit_retry_s > 0 ? ' · retry in ' + al.exit_retry_s.toFixed(0) + 's' : ''); eh.style.display = ''; }
+    else eh.style.display = 'none';
 
-    socket.on('trade', function(data) {
-        addTradeToTable(data);
-        showToast(`Trade ${data.is_open ? 'opened' : 'closed'}: ${data.position_type}`, 'info');
+    renderBlocked(al.last_blocked_signal);
+    renderPosition(data, al);
+}
 
-        // Update position margin tracking
-        if (data.is_open) {
-            currentPosition = {
-                type: data.position_type,
-                quantity: data.quantity || 0,
-                entrySpotPrice: data.entry_spot_price || 0,
-                entryFuturesPrice: data.entry_futures_price || 0,
-                notionalUsd: data.notional_usd || 0
-            };
-            currentOpenTrade = data;
-            updateMarginDisplay(currentPosition.entrySpotPrice, currentPosition.entryFuturesPrice);
-        } else {
-            // Position closed
-            currentPosition = { type: 'NONE', quantity: 0, entrySpotPrice: 0, entryFuturesPrice: 0, notionalUsd: 0 };
-            currentOpenTrade = null;
-            updateMarginDisplay(0, 0);
-        }
-        updatePosition(data.is_open ? data.position_type : 'NONE');
-    });
+function renderSide(side, spread, z, firing, sign) {
+    document.getElementById(side + '-spread-value').textContent = fmt(spread);
+    const zEl = document.getElementById(side + '-spread-z');
+    zEl.textContent = fmt(z);
+    zEl.className = 'font-monospace fw-bold ' + (firing ? 'text-warning' : '');
+    document.getElementById(side + '-spread-entry').textContent = 'entry at ' + sign + ENTRY_Z.toFixed(1);
+    document.getElementById(side + '-spread-tile').style.borderColor = firing ? '#ffc107' : 'transparent';
+}
 
-    // ══════════════════════════════════════════════════════════════════
-    // AI LEARNING SYSTEM
-    // ══════════════════════════════════════════════════════════════════
+let _lastBlockedKey = null;
+function renderBlocked(b) {
+    const card = document.getElementById('blocked-card');
+    if (!b) { card.style.display = 'none'; _lastBlockedKey = null; return; }
+    const key = b.timestamp + '|' + b.reason;
+    if (key === _lastBlockedKey) return;
+    _lastBlockedKey = key;
+    card.style.display = '';
+    const sideEl = document.getElementById('blocked-side');
+    sideEl.textContent = b.would_be_signal || '—';
+    sideEl.className = 'badge ' + (b.would_be_signal === 'LONG' ? 'bg-success' : 'bg-danger');
+    document.getElementById('blocked-z').textContent = b.zscore != null ? 'z ' + fmt(b.zscore) : '';
+    document.getElementById('blocked-time').textContent = b.timestamp ? new Date(b.timestamp).toLocaleTimeString() : '';
+    document.getElementById('blocked-reason').textContent = b.reason || '';
+}
 
-    // ── Socket events ─────────────────────────────────────────────────
+function renderPosition(data, al) {
+    const op = data.open_position;
+    const badge = document.getElementById('position-badge');
+    const owner = document.getElementById('position-owner');
+    const pnl = document.getElementById('position-pnl');
+    const details = document.getElementById('position-details');
+    const closeBtn = document.getElementById('close-btn');
+    const manualRow = document.getElementById('manual-trade-row');
+    const algoOn = al.running;
 
-    socket.on('trade_analysis', function(data) {
-        const a = data.analysis || {};
-        // Update health score badge
-        if (a.health_score != null) updateHealthScore(a.health_score);
-        // Add summary to auto-tune log
-        addTuneLogEntry({
-            timestamp: data.timestamp,
-            trade_id: data.trade_id,
-            text: `💡 ${a.summary || 'Analysis complete'}`,
-            sub: `health=${a.health_score ?? '—'}/100  ·  conf=${a.confidence_score ?? '—'}/10`,
-            colour: '#0dcaf0',
-        });
-        showToast(`AI analysis: ${a.summary || 'see Learning Log'}`, 'info');
-    });
+    // Manual buttons: locked while the algo is ON; hidden while in position.
+    document.getElementById('manual-sell-btn').style.display = (algoOn || op) ? 'none' : '';
+    document.getElementById('manual-buy-btn').style.display = (algoOn || op) ? 'none' : '';
+    document.getElementById('manual-lock-note').style.display = algoOn ? '' : 'none';
+    manualRow.style.display = (op && !algoOn) ? 'none' : '';
 
-    socket.on('auto_tune', function(data) {
-        const actionType = data.action_type || 'CHANGE';
-        const isCircuit = actionType === 'CIRCUIT_BREAKER';
-        const icon = isCircuit ? '🔴' : '⚙';
-        const colour = isCircuit ? '#dc3545' : '#ffc107';
-        const label = isCircuit ? 'Circuit breaker' : 'Auto-tuned';
-        addTuneLogEntry({
-            timestamp: data.timestamp,
-            text: `${icon} ${label}: ${data.param}  ${_fmt(data.old_value)} → ${_fmt(data.new_value)}`,
-            sub: `conf ${(data.avg_confidence * 100).toFixed(0)}%  ·  ${data.rationale}`,
-            colour,
-        });
-        const toast_type = isCircuit ? 'danger' : 'warning';
-        showToast(`${label}: ${data.param} → ${_fmt(data.new_value)}`, toast_type);
-    });
-
-    socket.on('ai_insight', function(data) {
-        prependInsight({
-            id: null,   // new — no DB id yet until page reload
-            timestamp: data.timestamp,
-            insight_type: data.insight_type || 'OBSERVATION',
-            param: data.param,
-            confidence: data.confidence,
-            rationale: data.rationale,
-            status: 'pending',
-        });
-        const badge = document.getElementById('insights-count');
-        if (badge) {
-            const n = parseInt(badge.dataset.count || '0') + 1;
-            badge.dataset.count = n;
-            badge.textContent = `${n} pending`;
-            badge.className = 'badge bg-warning text-dark';
-        }
-        showToast('New AI insight — check Insights panel', 'info');
-    });
-
-    // ── Auto-Tune Log helpers ─────────────────────────────────────────
-
-    function addTuneLogEntry({ timestamp, trade_id, text, sub, colour }) {
-        const list = document.getElementById('learning-log-list');
-        list.querySelector('.text-secondary.text-center')?.remove();
-        const ts = timestamp ? timestamp.substring(0, 16).replace('T', ' ') : '';
-        const row = document.createElement('div');
-        row.style.cssText = 'padding:3px 0;border-bottom:1px solid rgba(255,255,255,0.06);';
-        row.innerHTML =
-            `<div><span style="color:${colour || '#aaa'};margin-right:5px;">●</span>` +
-            `<span style="opacity:0.45;font-size:0.65rem;">${ts}</span>` +
-            (trade_id ? `<span style="opacity:0.4;font-size:0.65rem;"> #${trade_id}</span>` : '') +
-            ` <span>${text}</span></div>` +
-            (sub ? `<div style="padding-left:14px;opacity:0.55;font-size:0.67rem;">${sub}</div>` : '');
-        list.insertBefore(row, list.firstChild);
+    if (!op) {
+        badge.textContent = 'FLAT';
+        badge.className = 'badge bg-secondary';
+        owner.textContent = '';
+        pnl.textContent = '';
+        details.style.display = 'none';
+        closeBtn.style.display = 'none';
+        return;
     }
-
-    // ── AI Insights helpers ───────────────────────────────────────────
-
-    function prependInsight(item) {
-        const list = document.getElementById('insights-list');
-        list.querySelector('.text-secondary.text-center')?.remove();
-        const el = buildInsightEl(item);
-        if (el) list.insertBefore(el, list.firstChild);
-    }
-
-    function buildInsightEl(item) {
-        if (!item) return null;
-        const ts  = item.timestamp ? item.timestamp.substring(0, 16).replace('T', ' ') : '';
-        const typeMap = {
-            FILTER_TOGGLE:        ['bg-primary',            'FILTER'],
-            POSITION_SIZE_CHANGE: ['bg-warning text-dark',  'POSITION'],
-            OBSERVATION:          ['bg-secondary',           'OBSERVE'],
-        };
-        const [badgeCls, label] = typeMap[item.insight_type] || ['bg-secondary', item.insight_type];
-        const canApply = item.id && (item.insight_type === 'FILTER_TOGGLE');
-        const conf = item.confidence ? ` · conf ${(item.confidence * 100).toFixed(0)}%` : '';
-        const param = item.param && item.param !== 'observation' ? `<strong>${item.param}</strong>: ` : '';
-
-        const div = document.createElement('div');
-        div.className = 'insight-item';
-        div.dataset.id = item.id || '';
-        div.style.cssText = 'padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.07);';
-        div.innerHTML = `
-            <div class="d-flex justify-content-between align-items-start gap-1">
-                <div style="flex:1;min-width:0;font-size:0.71rem;">
-                    <span class="badge ${badgeCls} me-1" style="font-size:0.58rem;">${label}</span>
-                    <span style="opacity:0.4;font-size:0.63rem;">${ts}</span>
-                    <div style="margin-top:2px;">${param}${item.rationale}
-                        <span style="opacity:0.45;font-size:0.65rem;">${conf}</span>
-                    </div>
-                </div>
-                <div style="white-space:nowrap;margin-left:4px;display:flex;gap:3px;">
-                    ${canApply ? `<button class="btn btn-xs py-0 btn-outline-success" style="font-size:0.58rem;" onclick="applyInsight(${item.id}, this)">Apply</button>` : ''}
-                    ${item.id ? `<button class="btn btn-xs py-0 btn-outline-secondary" style="font-size:0.58rem;" onclick="dismissInsight(${item.id}, this)">✕</button>` : ''}
-                </div>
-            </div>`;
-        return div;
-    }
-
-    function applyInsight(id, btn) {
-        btn.disabled = true;
-        btn.textContent = '…';
-        fetch(`/api/ai-insights/${id}/apply`, { method: 'POST' })
-            .then(r => r.json())
-            .then(data => {
-                if (data.success) {
-                    document.querySelector(`.insight-item[data-id="${id}"]`)?.remove();
-                    adjustInsightCount(-1);
-                    showToast(`Applied: ${data.param} → ${data.new_value}`, 'success');
-                } else {
-                    btn.disabled = false; btn.textContent = 'Apply';
-                    showToast('Apply failed: ' + (data.error || '?'), 'danger');
-                }
-            }).catch(() => { btn.disabled = false; btn.textContent = 'Apply'; });
-    }
-
-    function dismissInsight(id, btn) {
-        btn.disabled = true;
-        fetch(`/api/ai-insights/${id}/dismiss`, { method: 'DELETE' })
-            .then(r => r.json())
-            .then(data => {
-                if (data.success) {
-                    document.querySelector(`.insight-item[data-id="${id}"]`)?.remove();
-                    adjustInsightCount(-1);
-                }
-            }).catch(() => {});
-    }
-
-    function adjustInsightCount(delta) {
-        const badge = document.getElementById('insights-count');
-        if (!badge) return;
-        const n = Math.max(0, parseInt(badge.dataset.count || '0') + delta);
-        badge.dataset.count = n;
-        badge.textContent = `${n} pending`;
-        badge.className = n > 0 ? 'badge bg-warning text-dark' : 'badge bg-secondary';
-    }
-
-    // ── Health score badge ────────────────────────────────────────────
-
-    function updateHealthScore(score) {
-        const badge = document.getElementById('health-score-badge');
-        if (!badge) return;
-        let cls = 'bg-success';
-        if (score < 40)      cls = 'bg-danger';
-        else if (score < 60) cls = 'bg-warning text-dark';
-        else if (score < 80) cls = 'bg-info text-dark';
-        badge.textContent = `Health ${score}/100`;
-        badge.className = `badge ${cls}`;
-    }
-
-    // ── Auto-tune badge ───────────────────────────────────────────────
-
-    function updateAutoTuneBadge(cfg) {
-        const badge = document.getElementById('auto-tune-badge');
-        if (!badge) return;
-        if (cfg && cfg.auto_tune_enabled) {
-            badge.textContent = 'Auto-Tune ON';
-            badge.className = 'badge bg-warning text-dark';
-        } else {
-            badge.textContent = 'Auto-Tune OFF';
-            badge.className = 'badge bg-secondary';
-        }
-    }
-
-    // ── Format helper ─────────────────────────────────────────────────
-
-    function _fmt(v) {
-        if (v === null || v === undefined) return '—';
-        if (typeof v === 'boolean') return v ? 'ON' : 'OFF';
-        const n = parseFloat(v);
-        return isNaN(n) ? String(v) : (Number.isInteger(n) ? String(n) : n.toFixed(4).replace(/\.?0+$/, ''));
-    }
-
-    // ── Page load: hydrate both panels ───────────────────────────────
-
-    function loadLearningLog() {
-        fetch('/api/learning-log?limit=15').then(r => r.json()).then(log => {
-            log.slice().reverse().forEach(l => {
-                const isCircuit = !l.learning_ids || JSON.parse(l.learning_ids || '[]').length === 0;
-                addTuneLogEntry({
-                    timestamp: l.timestamp,
-                    text: `${isCircuit ? '🔴' : '⚙'} ${l.param}  ${_fmt(l.old_value)} → ${_fmt(l.new_value)}`,
-                    sub: `conf ${((l.avg_confidence||0)*100).toFixed(0)}%  ·  ${l.rationale || ''}`,
-                    colour: isCircuit ? '#dc3545' : '#ffc107',
-                });
-            });
-        }).catch(() => {});
-    }
-
-    function loadInsights() {
-        fetch('/api/ai-insights?status=pending&limit=20').then(r => r.json()).then(items => {
-            const list = document.getElementById('insights-list');
-            if (items.length === 0) return;
-            list.innerHTML = '';
-            items.forEach(item => {
-                const el = buildInsightEl(item);
-                if (el) list.appendChild(el);
-            });
-            document.getElementById('insights-count').dataset.count = items.length;
-            document.getElementById('insights-count').textContent = `${items.length} pending`;
-            if (items.length > 0) {
-                document.getElementById('insights-count').className = 'badge bg-warning text-dark';
-            }
-        }).catch(() => {});
-    }
-
-    loadLearningLog();
-    loadInsights();
-    fetch('/api/config').then(r => r.json()).then(cfg => updateAutoTuneBadge(cfg)).catch(() => {});
-    // ══════════════════════════════════════════════════════════════════
-
-    // Fallback polling
-    setInterval(function() {
-        if (Date.now() - lastUpdateTime > 500) {
-            fetch('/api/engine/status')
-                .then(response => response.json())
-                .then(data => {
-                    if (data.spot_tick) {
-                        updatePrices(data.spot_tick, data.futures_tick);
-                    }
-                    if (data.signal) {
-                        updateSignal(data.signal);
-                        updateCharts(data.signal);
-                    }
-                    // Sync open trade details for position detail panel
-                    currentOpenTrade = data.open_trade || null;
-                    updatePosition(data.position || 'NONE');
-                    // Update stop-loss cooldown indicator
-                    const cooldownIndicator = document.getElementById('sl-cooldown-indicator');
-                    const cooldownSecs = document.getElementById('sl-cooldown-secs');
-                    const remaining = data.sl_cooldown_remaining || 0;
-                    if (cooldownIndicator && cooldownSecs) {
-                        if (remaining > 0) {
-                            cooldownSecs.textContent = remaining;
-                            cooldownIndicator.style.display = 'block';
-                        } else {
-                            cooldownIndicator.style.display = 'none';
-                        }
-                    }
-                    lastUpdateTime = Date.now();
-                })
-                .catch(err => console.log('Polling error:', err));
-        }
-    }, UPDATE_INTERVAL);
-
-    let prevSpotPrice = null;
-    let prevFuturesPrice = null;
-
-    function updatePrices(spot, futures) {
-        if (spot) {
-            updatePriceWithColor('spot-bid', spot.bid, 'neutral');
-            updatePriceWithColor('spot-last', spot.last, prevSpotPrice === null ? 'neutral' : spot.last > prevSpotPrice ? 'up' : spot.last < prevSpotPrice ? 'down' : 'neutral');
-            updatePriceWithColor('spot-ask', spot.ask, 'neutral');
-            prevSpotPrice = spot.last;
-        }
-        if (futures) {
-            updatePriceWithColor('futures-bid', futures.bid, 'neutral');
-            updatePriceWithColor('futures-last', futures.last, prevFuturesPrice === null ? 'neutral' : futures.last > prevFuturesPrice ? 'up' : futures.last < prevFuturesPrice ? 'down' : 'neutral');
-            updatePriceWithColor('futures-ask', futures.ask, 'neutral');
-            prevFuturesPrice = futures.last;
-        }
-
-        if (spot && futures) {
-            const spread = futures.last - spot.last;
-            const spreadEl = document.getElementById('spread-value');
-            if (spreadEl) {
-                spreadEl.classList.remove('price-up', 'price-down', 'price-neutral');
-                spreadEl.classList.add(spread > 0 ? 'price-up' : spread < 0 ? 'price-down' : 'price-neutral');
-            }
-
-            // Update margin display if we have a position
-            if (currentPosition.type !== 'NONE' && currentPosition.quantity > 0) {
-                updateMarginDisplay(spot.last, futures.last);
-            }
-        }
-    }
-
-    function updateMarginDisplay(spotPrice, futuresPrice) {
-        const card = document.getElementById('position-margin-card');
-
-        if (currentPosition.type === 'NONE' || currentPosition.quantity <= 0 || !spotPrice || !futuresPrice) {
-            card.style.display = 'none';
-            return;
-        }
-
-        card.style.display = 'block';
-
-        // Calculate position values based on current prices
-        const qty = currentPosition.quantity;
-        const spotValue = qty * spotPrice;
-        const futuresValue = qty * futuresPrice;
-
-        // Calculate margin used with ACTUAL exchange leverage (not configured)
-        const spotMargin = spotValue / actualSpotLeverage;
-        const futuresMargin = futuresValue / actualFuturesLeverage;
-        const totalMargin = spotMargin + futuresMargin;
-
-        // Update display with actual leverage from exchange
-        document.getElementById('spot-position-value').textContent = '$' + spotValue.toFixed(2);
-        document.getElementById('pos-spot-leverage').textContent = actualSpotLeverage + 'x';
-        document.getElementById('spot-margin-used').textContent = '$' + spotMargin.toFixed(2);
-
-        document.getElementById('futures-position-value').textContent = '$' + futuresValue.toFixed(2);
-        document.getElementById('pos-futures-leverage').textContent = actualFuturesLeverage + 'x';
-        document.getElementById('futures-margin-used').textContent = '$' + futuresMargin.toFixed(2);
-
-        document.getElementById('total-margin-used').textContent = '$' + totalMargin.toFixed(2);
-
-        // Show leverage source indicator and warning if mismatch
-        const warningEl = document.getElementById('leverage-warning');
-        const warningText = document.getElementById('leverage-warning-text');
-        let messages = [];
-
-        // Show source of leverage data
-        const spotSource = window.spotLeverageSource || 'cash';
-        const futSource = window.futuresLeverageSource || 'configured';
-
-        // Add warning if actual differs from configured
-        // For spot: Show warning if from exchange (margin position) and differs
-        if (actualSpotLeverage !== configuredSpotLeverage && spotSource === 'exchange') {
-            messages.push(`Spot: ${actualSpotLeverage}x (exchange) vs ${configuredSpotLeverage}x (configured)`);
-        }
-        // For futures: Show warning if from exchange and differs from configured
-        if (actualFuturesLeverage !== configuredFuturesLeverage && futSource === 'exchange') {
-            messages.push(`Futures: ${actualFuturesLeverage}x (exchange) vs ${configuredFuturesLeverage}x (configured)`);
-        }
-
-        // Show info about leverage source
-        if (messages.length === 0) {
-            const sourceInfo = [];
-            // Spot: 'cash' = no leverage (1x), 'configured' = from settings, 'exchange' = from position
-            if (spotSource === 'cash') {
-                sourceInfo.push(`Spot: 1x (cash)`);
-            } else if (spotSource === 'configured') {
-                sourceInfo.push(`Spot: ${actualSpotLeverage}x (settings)`);
-            }
-            // Futures: show source
-            if (futSource === 'configured') {
-                sourceInfo.push(`Futures: ${actualFuturesLeverage}x (settings)`);
-            } else if (futSource === 'exchange') {
-                sourceInfo.push(`Futures: ${actualFuturesLeverage}x (exchange)`);
-            }
-            if (sourceInfo.length > 0) {
-                warningText.innerHTML = '<i class="bi bi-info-circle"></i> ' + sourceInfo.join(', ');
-                warningEl.style.display = 'block';
-                warningEl.classList.remove('text-warning');
-                warningEl.classList.add('text-secondary');
-                return;
-            }
-        }
-
-        if (messages.length > 0) {
-            warningText.innerHTML = '<i class="bi bi-exclamation-triangle"></i> ' + messages.join(', ');
-            warningEl.style.display = 'block';
-            warningEl.classList.remove('text-secondary');
-            warningEl.classList.add('text-warning');
-        } else {
-            warningEl.style.display = 'none';
-        }
-    }
-
-    function updatePriceWithColor(elementId, value, direction) {
-        const el = document.getElementById(elementId);
-        if (el && value) {
-            const newValue = formatPrice(value, getDecimals(value));
-            if (el.textContent !== newValue) {
-                el.textContent = newValue;
-                el.classList.remove('price-up', 'price-down', 'price-neutral');
-                if (direction === 'up') {
-                    el.classList.add('price-up');
-                } else if (direction === 'down') {
-                    el.classList.add('price-down');
-                } else {
-                    el.classList.add('price-neutral');
-                }
-                el.classList.add('flash');
-                setTimeout(() => el.classList.remove('flash'), 300);
-            }
-        }
-    }
-
-    function updatePrice(elementId, value) {
-        updatePriceWithColor(elementId, value, 'neutral');
-    }
-
-    function getDecimals(value) {
-        if (value >= 1000) return 2;
-        if (value >= 1) return 4;
-        return 6;
-    }
-
-    function updateSignal(data) {
-        const zscore = data.zscore || 0;
-        const zscoreEl = document.getElementById('current-zscore');
-        zscoreEl.textContent = zscore.toFixed(4);
-        zscoreEl.className = 'metric-value ' + (zscore > 0.5 ? 'zscore-positive' : zscore < -0.5 ? 'zscore-negative' : 'zscore-neutral');
-
-        const spread = data.spread || 0;
-        const spreadEl = document.getElementById('spread-value');
-        spreadEl.textContent = spread.toFixed(2);
-        spreadEl.classList.remove('price-up', 'price-down', 'price-neutral');
-        spreadEl.classList.add(spread > 0 ? 'price-up' : spread < 0 ? 'price-down' : 'price-neutral');
-
-        const meanEl = document.getElementById('spread-mean');
-        if (meanEl) meanEl.textContent = (data.spread_mean || 0).toFixed(2);
-        document.getElementById('spread-std').textContent = (data.spread_std || 0).toFixed(2);
-
-        const hurst = data.hurst || 0.5;
-        const hurstEl = document.getElementById('hurst-value');
-        hurstEl.textContent = hurst.toFixed(4);
-        hurstEl.classList.remove('price-up', 'price-down', 'price-neutral');
-        hurstEl.classList.add(hurst < 0.5 ? 'price-up' : hurst > 0.5 ? 'price-down' : 'price-neutral');
-
-        // Half-Life and Suggested Lookback
-        const hlEl = document.getElementById('half-life-value');
-        const slEl = document.getElementById('suggested-lookback-value');
-        if (hlEl) {
-            const hl = data.half_life;
-            if (hl != null) {
-                hlEl.textContent = hl.toFixed(1);
-                hlEl.className = 'fw-bold ' + (hl < 50 ? 'price-up' : hl < 200 ? 'text-warning' : 'price-down');
-            } else {
-                hlEl.textContent = '—';
-                hlEl.className = 'fw-bold text-secondary';
-            }
-        }
-        if (slEl) {
-            const sl = data.suggested_lookback;
-            slEl.textContent = sl != null ? sl + ' pts' : '—';
-        }
-
-        const regimeDisplayEl = document.getElementById('regime-display');
-        if (regimeDisplayEl) {
-            const regime = data.regime || 'UNKNOWN';
-            if (regime === 'COLLECTING') {
-                regimeDisplayEl.textContent = 'Collect';
-                regimeDisplayEl.className = 'fw-bold text-warning';
-            } else if (regime === 'MEAN_REVERTING') {
-                regimeDisplayEl.textContent = 'MR';
-                regimeDisplayEl.className = 'fw-bold price-up';
-            } else if (regime === 'TRENDING') {
-                regimeDisplayEl.textContent = 'Trend';
-                regimeDisplayEl.className = 'fw-bold price-down';
-            } else {
-                regimeDisplayEl.textContent = regime;
-                regimeDisplayEl.className = 'fw-bold';
-            }
-        }
-
-        const dataPoints = data.data_points || 0;
-        const lookback = data.lookback || {{ config.lookback_period }};
-        document.getElementById('data-points').textContent = dataPoints;
-
-        const progressPercent = Math.min(100, (dataPoints / lookback) * 100);
-        const progressEl = document.getElementById('collection-progress');
-        const percentEl = document.getElementById('collection-percent');
-        if (progressEl) {
-            progressEl.style.width = progressPercent + '%';
-            progressEl.className = 'progress-bar ' + (progressPercent >= 100 ? 'bg-success' : 'bg-warning');
-        }
-        if (percentEl) percentEl.textContent = Math.round(progressPercent);
-
-        // Update Trading Status Banner
-        updateTradingStatus(dataPoints, lookback, data.data_ready, data.hurst_ok, data.std_filter_ok);
-
-        updateFilterStatus('hurst-status', data.hurst_ok, data.hurst);
-        updateFilterStatus('std-status', data.std_filter_ok);
-
-        const stdRatioValue = document.getElementById('std-ratio-value');
-        const stdRatioRequired = document.getElementById('std-ratio-required');
-        const stdExplanation = document.getElementById('std-explanation');
-        if (stdRatioValue && stdRatioRequired) {
-            const hasRatio = data.std_ratio !== null && data.std_ratio !== undefined;
-            const hasRequired = data.std_ratio_required !== null && data.std_ratio_required !== undefined;
-
-            if (hasRatio) {
-                stdRatioValue.textContent = data.std_ratio.toFixed(2) + 'x';
-                const meetsRequirement = hasRequired && data.std_ratio >= data.std_ratio_required;
-                stdRatioValue.className = meetsRequirement ? 'price-up fw-bold' : 'price-down fw-bold';
-            } else {
-                stdRatioValue.textContent = '-';
-                stdRatioValue.className = 'fw-bold';
-            }
-
-            if (hasRequired) {
-                stdRatioRequired.textContent = data.std_ratio_required.toFixed(1) + 'x';
-            } else {
-                stdRatioRequired.textContent = '-';
-            }
-
-            if (stdExplanation) {
-                if (!hasRatio || !hasRequired) {
-                    stdExplanation.innerHTML = '<span class="text-secondary">Collecting data...</span>';
-                } else if (data.std_ratio >= data.std_ratio_required) {
-                    const coverage = (data.std_ratio * 100 / data.std_ratio_required).toFixed(0);
-                    stdExplanation.innerHTML = '<span class="price-up">&#10003; OK (' + coverage + '%)</span>';
-                } else {
-                    const coverage = (data.std_ratio * 100 / data.std_ratio_required).toFixed(0);
-                    stdExplanation.innerHTML = '<span class="price-down">&#10007; Low (' + coverage + '%)</span>';
-                }
-            }
-
-            const rtc = data.round_trip_cost_bps;
-            if (rtc) {
-                const rtTotal = document.getElementById('round-trip-total');
-                const rtBreakdown = document.getElementById('round-trip-breakdown');
-                if (rtTotal) rtTotal.textContent = rtc.total_bps.toFixed(1) + ' bps';
-                if (rtBreakdown) {
-                    const entryLabel = rtc.entry_mode === 'LIMIT' ? 'maker' : 'taker';
-                    const exitLabel  = rtc.exit_mode  === 'LIMIT' ? 'maker' : 'taker';
-                    rtBreakdown.textContent =
-                        'entry ' + rtc.entry_bps.toFixed(1) + ' (' + entryLabel + ')' +
-                        ' + exit ' + rtc.exit_bps.toFixed(1) + ' (' + exitLabel + ')' +
-                        (rtc.slippage_bps > 0 ? ' + slip ' + rtc.slippage_bps.toFixed(1) : '');
-                }
-            }
-        }
-
-        const regimeFilterEl = document.getElementById('regime-filter-status');
-        if (regimeFilterEl) {
-            const regime = data.regime || 'UNKNOWN';
-            if (regime === 'COLLECTING') {
-                regimeFilterEl.textContent = 'WAIT';
-                regimeFilterEl.className = 'badge bg-warning';
-            } else if (regime === 'MEAN_REVERTING') {
-                regimeFilterEl.textContent = 'MR';
-                regimeFilterEl.className = 'badge bg-success';
-            } else if (regime === 'TRENDING') {
-                regimeFilterEl.textContent = 'TR';
-                regimeFilterEl.className = 'badge bg-danger';
-            } else {
-                regimeFilterEl.textContent = regime;
-                regimeFilterEl.className = 'badge bg-secondary';
-            }
-        }
-
-        const dataReadyEl = document.getElementById('data-ready-status');
-        if (dataReadyEl) {
-            const dataReady = data.data_ready;
-            if (dataReady === true) {
-                dataReadyEl.textContent = 'YES';
-                dataReadyEl.className = 'badge bg-success';
-            } else if (dataReady === false) {
-                dataReadyEl.textContent = 'NO';
-                dataReadyEl.className = 'badge bg-warning';
-            } else {
-                dataReadyEl.textContent = '-';
-                dataReadyEl.className = 'badge bg-secondary';
-            }
-        }
-
-        updatePosition(data.current_position);
-
-        // Update blocked signal indicator
-        updateBlockedSignal(data.last_blocked_signal);
-    }
-
-    function updateBlockedSignal(blockedSignal) {
-        const card = document.getElementById('blocked-signal-card');
-        if (!blockedSignal) {
-            if (card) card.style.display = 'none';
-            return;
-        }
-
-        // Show the card
-        card.style.display = 'block';
-
-        // Update the fields
-        document.getElementById('blocked-signal-type').textContent = blockedSignal.would_be_signal || '-';
-        document.getElementById('blocked-signal-type').className =
-            blockedSignal.would_be_signal === 'LONG' ? 'fw-bold text-success' :
-            blockedSignal.would_be_signal === 'SHORT' ? 'fw-bold text-danger' : 'fw-bold';
-
-        document.getElementById('blocked-signal-zscore').textContent =
-            blockedSignal.zscore !== undefined ? blockedSignal.zscore.toFixed(4) : '-';
-
-        // Format timestamp
-        if (blockedSignal.timestamp) {
-            const time = new Date(blockedSignal.timestamp);
-            document.getElementById('blocked-signal-time').textContent = time.toLocaleTimeString();
-        } else {
-            document.getElementById('blocked-signal-time').textContent = '-';
-        }
-
-        document.getElementById('blocked-signal-reason').textContent = blockedSignal.reason || 'Unknown reason';
-    }
-
-function updateFilterStatus(elementId, passed, value) {
-        const el = document.getElementById(elementId);
-        if (passed === undefined) {
-            el.textContent = '-';
-            el.className = 'badge bg-secondary';
-        } else {
-            el.textContent = passed ? 'OK' : 'NO';
-            el.className = 'badge ' + (passed ? 'bg-success' : 'bg-danger');
-        }
-    }
-
-    function updatePosition(position) {
-        const badge = document.getElementById('position-badge');
-        const details = document.getElementById('position-details');
-        const closeBtn = document.getElementById('close-position-btn');
-
-        if (position === 'NONE' || !position) {
-            badge.textContent = 'FLAT';
-            badge.className = 'badge bg-secondary';
-            badge.style.fontSize = '1.2rem';
-            badge.style.padding = '0.4rem 0.8rem';
-            details.style.display = 'none';
-            if (closeBtn) closeBtn.style.display = 'none';
-            _positionEntryTime = null;
-        } else {
-            badge.textContent = position;
-            badge.className = 'badge ' + (position === 'LONG' ? 'badge-long' : 'badge-short');
-            badge.style.fontSize = '1.2rem';
-            badge.style.padding = '0.4rem 0.8rem';
-            details.style.display = 'block';
-            if (closeBtn) closeBtn.style.display = 'inline-block';
-
-            // Populate detail fields from currentOpenTrade
-            const t = currentOpenTrade;
-            if (t) {
-                const entryZEl = document.getElementById('position-entry-z');
-                if (entryZEl) entryZEl.textContent = t.entry_zscore != null ? parseFloat(t.entry_zscore).toFixed(3) : '-';
-
-                const pnlEl = document.getElementById('position-pnl');
-                if (pnlEl) {
-                    const pnl = t.unrealized_pnl != null ? parseFloat(t.unrealized_pnl) : null;
-                    if (pnl != null) {
-                        pnlEl.textContent = (pnl >= 0 ? '+$' : '-$') + Math.abs(pnl).toFixed(2);
-                        pnlEl.className = pnl >= 0 ? 'price-up' : 'price-down';
-                    } else {
-                        pnlEl.textContent = '-';
-                        pnlEl.className = '';
-                    }
-                }
-
-                const spotEntryEl = document.getElementById('position-entry-spot');
-                if (spotEntryEl) spotEntryEl.textContent = t.entry_spot_price ? '$' + parseFloat(t.entry_spot_price).toFixed(2) : '-';
-
-                const futEntryEl = document.getElementById('position-entry-futures');
-                if (futEntryEl) futEntryEl.textContent = t.entry_futures_price ? '$' + parseFloat(t.entry_futures_price).toFixed(2) : '-';
-
-                const notionalEl = document.getElementById('position-notional');
-                if (notionalEl) notionalEl.textContent = t.notional_usd ? '$' + parseFloat(t.notional_usd).toFixed(0) : '-';
-
-                // Store entry time for age ticker
-                _positionEntryTime = t.entry_time ? new Date(t.entry_time + 'Z') : null;
-            }
-        }
-    }
-
-    // Position age ticker state
-    let _positionEntryTime = null;
-    function _formatAge(ms) {
-        const s = Math.floor(ms / 1000);
-        if (s < 60) return s + 's';
-        const m = Math.floor(s / 60);
-        if (m < 60) return m + 'm ' + (s % 60) + 's';
-        const h = Math.floor(m / 60);
-        return h + 'h ' + (m % 60) + 'm';
-    }
-    setInterval(function() {
-        const ageEl = document.getElementById('position-age');
-        if (ageEl && _positionEntryTime) {
-            ageEl.textContent = _formatAge(Date.now() - _positionEntryTime.getTime());
-        }
-    }, 1000);
-
-    function updateTradingStatus(dataPoints, lookback, dataReady, hurstOk, stdOk) {
-        const statusCard = document.getElementById('trading-status-card');
-        const statusIcon = document.getElementById('trading-status-icon');
-        const statusText = document.getElementById('trading-status-text');
-        const statusDetail = document.getElementById('trading-status-detail');
-        const progressBar = document.getElementById('trading-progress-bar');
-        const progressText = document.getElementById('trading-progress-text');
-        const dataCountDisplay = document.getElementById('data-count-display');
-
-        const percent = Math.min(100, (dataPoints / lookback) * 100);
-
-        // Update progress bar
-        progressBar.style.width = percent + '%';
-        progressText.textContent = Math.round(percent) + '%';
-        dataCountDisplay.textContent = dataPoints.toLocaleString() + ' / ' + lookback.toLocaleString();
-
-        if (!dataReady) {
-            // Collecting data
-            statusCard.style.borderLeft = '4px solid #ffc107';
-            statusIcon.innerHTML = '<i class="bi bi-hourglass-split text-warning"></i>';
-            statusText.textContent = 'Collecting Data...';
-            statusText.className = 'fw-bold text-warning';
-            statusDetail.textContent = 'Cannot trade until lookback period is complete';
-            progressBar.className = 'progress-bar progress-bar-striped progress-bar-animated bg-warning';
-        } else {
-            // Check if filters pass
-            const filtersPass = (hurstOk !== false) && (stdOk !== false);
-
-            if (filtersPass) {
-                // Ready to trade
-                statusCard.style.borderLeft = '4px solid #198754';
-                statusIcon.innerHTML = '<i class="bi bi-check-circle-fill text-success"></i>';
-                statusText.textContent = 'Ready to Trade';
-                statusText.className = 'fw-bold text-success';
-                statusDetail.textContent = 'All filters passed - waiting for Z-score signal';
-                progressBar.className = 'progress-bar bg-success';
-            } else {
-                // Data ready but filters blocked
-                statusCard.style.borderLeft = '4px solid #dc3545';
-                statusIcon.innerHTML = '<i class="bi bi-pause-circle-fill text-danger"></i>';
-                statusText.textContent = 'Filters Blocked';
-                statusText.className = 'fw-bold text-danger';
-                let blockedBy = [];
-                if (hurstOk === false) blockedBy.push('Hurst');
-                if (stdOk === false) blockedBy.push('STD');
-                statusDetail.textContent = 'Blocked by: ' + blockedBy.join(', ');
-                progressBar.className = 'progress-bar bg-danger';
-            }
-        }
-    }
-
-    function updateCharts(data) {
-        const zscore = data.zscore || 0;
-        const spread = data.spread || 0;
-
-        zscoreHistory.push(zscore);
-        spreadHistory.push(spread);
-
-        if (zscoreHistory.length > maxDataPoints) {
-            zscoreHistory.shift();
-            spreadHistory.shift();
-        }
-
-        const labels = Array.from({length: zscoreHistory.length}, (_, i) => i);
-        zscoreChart.data.labels = labels;
-        zscoreChart.data.datasets[0].data = zscoreHistory;
-        zscoreChart.data.datasets[1].data = Array(labels.length).fill(entryThreshold);
-        zscoreChart.data.datasets[2].data = Array(labels.length).fill(-entryThreshold);
-        zscoreChart.data.datasets[3].data = Array(labels.length).fill(exitThreshold);
-        zscoreChart.data.datasets[4].data = Array(labels.length).fill(-exitThreshold);
-        zscoreChart.update('none');
-
-        spreadChart.data.labels = labels;
-        spreadChart.data.datasets[0].data = spreadHistory;
-        spreadChart.update('none');
-    }
-
-    function addTradeToTable(trade) {
-        const tbody = document.getElementById('trades-table');
-        const emptyRow = tbody.querySelector('td[colspan]');
-        if (emptyRow) emptyRow.parentElement.remove();
-
-        const row = document.createElement('tr');
-        const pnlClass = trade.pnl_usd > 0 ? 'price-up' : trade.pnl_usd < 0 ? 'price-down' : '';
-
-        // Format prices - show entry price, and if closed show "entry → exit"
-        const formatPrice = (price) => price ? '$' + price.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0}) : '-';
-
-        let spotDisplay = formatPrice(trade.entry_spot_price);
-        let futDisplay = formatPrice(trade.entry_futures_price);
-
-        if (!trade.is_open && trade.exit_spot_price) {
-            spotDisplay = `${formatPrice(trade.entry_spot_price)}<br><span class="text-secondary">→${formatPrice(trade.exit_spot_price)}</span>`;
-            futDisplay = `${formatPrice(trade.entry_futures_price)}<br><span class="text-secondary">→${formatPrice(trade.exit_futures_price)}</span>`;
-        }
-
-        row.innerHTML = `
-            <td>${trade.entry_time ? new Date(trade.entry_time).toLocaleTimeString() : '-'}</td>
-            <td><span class="badge ${trade.position_type === 'LONG' ? 'badge-long' : 'badge-short'}" style="font-size:0.6rem;">${trade.position_type}</span></td>
-            <td>${(trade.entry_zscore || 0).toFixed(1)}</td>
-            <td style="font-size:0.65rem;">${spotDisplay}</td>
-            <td style="font-size:0.65rem;">${futDisplay}</td>
-            <td class="${pnlClass}">${trade.is_open ? '-' : '$' + (trade.pnl_usd || 0).toFixed(2)}</td>
-        `;
-
-        tbody.insertBefore(row, tbody.firstChild);
-        while (tbody.children.length > 10) tbody.removeChild(tbody.lastChild);
-    }
-
-    fetch('/api/trades?limit=10')
-        .then(response => response.json())
-        .then(trades => {
-            trades.reverse().forEach(trade => addTradeToTable(trade));
-
-            // Check for open position to initialize margin display and detail panel
-            const openTrade = trades.find(t => t.is_open);
-            if (openTrade) {
-                currentPosition = {
-                    type: openTrade.position_type,
-                    quantity: openTrade.quantity || 0,
-                    entrySpotPrice: openTrade.entry_spot_price || 0,
-                    entryFuturesPrice: openTrade.entry_futures_price || 0,
-                    notionalUsd: openTrade.notional_usd || 0
-                };
-                currentOpenTrade = openTrade;
-                updatePosition(openTrade.position_type);
-                updateMarginDisplay(currentPosition.entrySpotPrice, currentPosition.entryFuturesPrice);
-            }
-        });
-
-    fetch('/api/spread-history?n=100')
-        .then(response => response.json())
-        .then(data => {
-            if (data.zscores) zscoreHistory = data.zscores;
-            if (data.spreads) spreadHistory = data.spreads;
-        });
-
-    function syncPosition(action) {
-        fetch('/api/engine/sync-position', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({action: action})
-        })
-        .then(response => response.json())
-        .then(data => {
-            if (data.success) {
-                if (action === 'recover') {
-                    if (data.recovered_position) {
-                        showToast('Position recovered: ' + data.recovered_position + ' | Trade #' + data.trade_id + ' | Entry Z: ' + (data.entry_zscore || 0).toFixed(2), 'success');
-                    } else {
-                        showToast(data.message || 'No open trades to recover', 'info');
-                    }
-                } else if (action === 'clear') {
-                    showToast('Position cleared (was ' + data.previous_position + ', ' + data.trades_closed + ' trade(s) closed)', 'info');
-                }
-                fetch('/api/engine/status').then(r => r.json()).then(d => {
-                    if (d.signal) updateSignal(d.signal);
-                    currentOpenTrade = d.open_trade || null;
-                    updatePosition(d.position || 'NONE');
-                });
-            } else {
-                showToast('Sync failed: ' + (data.error || 'Unknown error'), 'danger');
-            }
-        })
-        .catch(err => {
-            console.error('Sync position error:', err);
-            showToast('Sync error: ' + err.message, 'danger');
-        });
-    }
-
-    // Orphaned spot position tracking
-    let orphanWarningDismissed = false;
-
-    function checkOrphanedSpots() {
-        if (orphanWarningDismissed) return;
-
-        fetch('/api/spot-holdings')
-            .then(response => response.json())
-            .then(data => {
-                const warningEl = document.getElementById('orphan-warning');
-                const detailsEl = document.getElementById('orphan-details');
-                const sellBtn = document.querySelector('#orphan-warning button.btn-warning');
-
-                if (data.has_orphan && data.holdings.length > 0) {
-                    const orphan = data.holdings.find(h => h.is_orphan);
-                    if (orphan) {
-                        let msg = `You have ${orphan.total.toFixed(6)} ${orphan.currency} (~$${orphan.usd_value.toFixed(2)}) in your spot wallet without an active position.`;
-
-                        // Check if frozen (can't sell)
-                        if (orphan.frozen > 0.00000001 && orphan.available < 0.00000001) {
-                            msg += ` (FROZEN - used as margin collateral. Close futures positions first.)`;
-                            if (sellBtn) {
-                                sellBtn.disabled = true;
-                                sellBtn.innerHTML = '<i class="bi bi-lock me-1"></i>Frozen';
-                            }
-                        } else if (orphan.available > 0.00000001) {
-                            if (sellBtn) {
-                                sellBtn.disabled = false;
-                                sellBtn.innerHTML = '<i class="bi bi-cash-coin me-1"></i>Sell to USDT';
-                            }
-                        }
-
-                        detailsEl.textContent = msg;
-                        warningEl.classList.remove('d-none');
-                        const tsEl = document.getElementById('orphan-detected-at');
-                        if (tsEl) tsEl.textContent = 'Detected ' + new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});
-                    }
-                } else {
-                    warningEl.classList.add('d-none');
-                }
-            })
-            .catch(err => console.error('Error checking orphaned spots:', err));
-    }
-
-    function closeOrphanedSpot(event) {
-        if (!confirm('This will sell your orphaned spot holdings to USDT at market price. Continue?')) {
-            return;
-        }
-
-        const btn = event.target.closest('button');
-        btn.disabled = true;
-        btn.innerHTML = '<i class="bi bi-hourglass-split me-1"></i>Selling...';
-
-        fetch('/api/close-orphaned-spot', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({})
-        })
-        .then(response => response.json())
-        .then(data => {
-            if (data.success) {
-                const sold = data.amount_sold ? data.amount_sold.toFixed(6) : '';
-                showToast('Sold ' + sold + ' ' + (data.currency || 'asset') + ' to USDT | Order: ' + (data.order_id || 'N/A'), 'success');
-                document.getElementById('orphan-warning').classList.add('d-none');
-            } else {
-                showToast('Failed to sell spot: ' + (data.error || data.message || 'Unknown error'), 'danger');
-            }
-        })
-        .catch(err => {
-            console.error('Error closing orphaned spot:', err);
-            showToast('Error: ' + err.message, 'danger');
-        })
-        .finally(() => {
-            btn.disabled = false;
-            btn.innerHTML = '<i class="bi bi-cash-coin me-1"></i>Sell to USDT';
-        });
-    }
-
-    function dismissOrphanWarning() {
-        orphanWarningDismissed = true;
-        document.getElementById('orphan-warning').classList.add('d-none');
-    }
-
-    // Exchange position mismatch tracking
-    let exchangePositionWarningDismissed = false;
-
-    function checkExchangePositions() {
-        if (exchangePositionWarningDismissed) return;
-
-        fetch('/api/exchange-positions')
-            .then(response => response.json())
-            .then(data => {
-                const warningEl = document.getElementById('exchange-position-warning');
-                const detailsEl = document.getElementById('exchange-position-details');
-                const actionsEl = document.getElementById('exchange-position-actions');
-
-                if (data.success && data.mismatch) {
-                    let msg = data.mismatch_reason;
-                    let actionsHtml = '';
-
-                    if (data.exchange_has_position && data.positions.length > 0) {
-                        const pos = data.positions[0];
-                        const isSwap = pos.is_swap;
-                        const posType = isSwap ? '' : 'spot margin ';
-                        const qtyDisplay = pos.quantity.toFixed(isSwap ? 0 : 6);
-                        msg = `Exchange has ${posType}${pos.side} position: ${qtyDisplay} ${pos.symbol} @ $${pos.entry_price.toFixed(2)} (PnL: $${pos.unrealized_pnl.toFixed(2)})`;
-
-                        if (isSwap) {
-                            actionsHtml = `
-                                <button class="btn btn-success btn-sm me-2" onclick="syncFromExchange()">
-                                    <i class="bi bi-arrow-down-circle me-1"></i>Recover to Engine
-                                </button>
-                                <button class="btn btn-danger btn-sm me-2" onclick="closeExchangePosition('${pos.symbol}')">
-                                    <i class="bi bi-x-circle me-1"></i>Close on Exchange
-                                </button>
-                                <button class="btn btn-outline-secondary btn-sm" onclick="dismissExchangePositionWarning()">
-                                    <i class="bi bi-x"></i>
-                                </button>
-                            `;
-                        } else {
-                            actionsHtml = `
-                                <button class="btn btn-danger btn-sm me-2" onclick="closeExchangePosition('${pos.symbol}')">
-                                    <i class="bi bi-x-circle me-1"></i>Close Spot Margin
-                                </button>
-                                <button class="btn btn-warning btn-sm me-2" onclick="closeAllSpotOrphans('${pos.symbol}')">
-                                    <i class="bi bi-shield-x me-1"></i>Close All + Sell Orphan
-                                </button>
-                                <button class="btn btn-outline-secondary btn-sm" onclick="dismissExchangePositionWarning()">
-                                    <i class="bi bi-x"></i>
-                                </button>
-                            `;
-                        }
-                    } else if (data.engine_has_position) {
-                        msg = `Engine shows ${data.engine_position} but no position on exchange. May have been closed manually.`;
-
-                        actionsHtml = `
-                            <button class="btn btn-warning btn-sm me-2" onclick="syncPosition('clear')">
-                                <i class="bi bi-arrow-counterclockwise me-1"></i>Clear Engine State
-                            </button>
-                            <button class="btn btn-outline-secondary btn-sm" onclick="dismissExchangePositionWarning()">
-                                <i class="bi bi-x"></i>
-                            </button>
-                        `;
-                    }
-
-                    detailsEl.textContent = msg;
-                    actionsEl.innerHTML = actionsHtml;
-                    warningEl.classList.remove('d-none');
-                    const mtsEl = document.getElementById('mismatch-detected-at');
-                    if (mtsEl) mtsEl.textContent = 'Detected ' + new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});
-                } else {
-                    warningEl.classList.add('d-none');
-                }
-            })
-            .catch(err => console.error('Error checking exchange positions:', err));
-    }
-
-    function syncFromExchange() {
-        // Try to recover the position from database first
-        syncPosition('recover');
-    }
-
-    function closeExchangePosition(symbol) {
-        if (!confirm(`This will close the position for ${symbol} on the exchange at market price. Continue?`)) {
-            return;
-        }
-
-        const btn = event.target.closest('button');
-        btn.disabled = true;
-        btn.innerHTML = '<i class="bi bi-hourglass-split me-1"></i>Closing...';
-
-        fetch('/api/close-exchange-position', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({symbol: symbol})
-        })
-        .then(response => response.json())
-        .then(data => {
-            if (data.success) {
-                showToast('Position closed | Order: ' + (data.order_id || 'N/A'), 'success');
-                syncPosition('clear');
-                document.getElementById('exchange-position-warning').classList.add('d-none');
-                checkExchangePositions();
-            } else {
-                showToast('Failed to close: ' + (data.error || 'Unknown error'), 'danger');
-            }
-        })
-        .catch(err => {
-            console.error('Error closing exchange position:', err);
-            showToast('Error: ' + err.message, 'danger');
-        })
-        .finally(() => {
-            btn.disabled = false;
-            btn.innerHTML = '<i class="bi bi-x-circle me-1"></i>Close on Exchange';
-        });
-    }
-
-    // Close spot margin position AND sell any orphaned wallet balance in sequence.
-    // The short must be covered first (BUY to repay borrow) then the wallet BTC sold.
-    async function closeAllSpotOrphans(symbol) {
-        if (!confirm(`This will:\n1. Close the spot margin SHORT (buy to cover borrow)\n2. Sell any remaining BTC wallet balance\n\nContinue?`)) return;
-
-        const btn = event.target.closest('button');
-        btn.disabled = true;
-        btn.innerHTML = '<i class="bi bi-hourglass-split me-1"></i>Closing...';
-
-        try {
-            // Step 1: close the margin short
-            const r1 = await fetch('/api/close-exchange-position', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({symbol})
-            }).then(r => r.json());
-
-            if (!r1.success) {
-                showToast('Step 1 (close margin) failed: ' + (r1.error || 'unknown'), 'danger');
-                return;
-            }
-
-            // Step 2: sell orphan wallet balance (if any)
-            await new Promise(r => setTimeout(r, 1500)); // wait for fill
-            const asset = symbol.split('-')[0]; // 'BTC' from 'BTC-USDT'
-            const r2 = await fetch('/api/close-orphaned-spot', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({currency: asset})
-            }).then(r => r.json());
-
-            const step2msg = r2.success ? 'Wallet BTC sold' : 'Step 2 note: ' + r2.error;
-            showToast('Done — Margin closed. ' + step2msg, 'success');
-
-            document.getElementById('exchange-position-warning').classList.add('d-none');
-            document.getElementById('orphan-spot-warning')?.classList.add('d-none');
-            checkExchangePositions();
-        } catch(err) {
-            showToast('Error: ' + err.message, 'danger');
-        } finally {
-            btn.disabled = false;
-            btn.innerHTML = '<i class="bi bi-shield-x me-1"></i>Close All + Sell Orphan';
-        }
-    }
-
-    function dismissExchangePositionWarning() {
-        exchangePositionWarningDismissed = true;
-        document.getElementById('exchange-position-warning').classList.add('d-none');
-    }
-
-    function updateAccountInfo() {
-        fetch('/api/account-info')
-            .then(response => response.json())
-            .then(data => {
-                // Debug: log connection status
-                if (!data.has_api_keys) {
-                    console.warn('Account: API keys not configured in .env file');
-                }
-                if (!data.has_adapters) {
-                    console.warn('Account: REST adapters not initialized (restart app after configuring API keys)');
-                }
-                if (!data.connected && data.has_adapters) {
-                    console.warn('Account: Adapters exist but not connected to exchange');
-                }
-
-                const exchangeEl = document.getElementById('exchange-name');
-                if (exchangeEl) {
-                    let status = data.exchange;
-                    if (data.is_demo) {
-                        status += ' Demo';
-                        exchangeEl.style.color = 'var(--accent-blue)';
-                    } else {
-                        status += ' Live';
-                        exchangeEl.style.color = 'var(--accent-green)';
-                    }
-                    if (!data.has_api_keys) status += ' — No API Keys';
-                    else if (!data.has_adapters) status += ' — Restart Required';
-                    else if (!data.connected) status += ' — Not Connected';
-                    exchangeEl.textContent = status;
-                }
-
-                updateElement('account-uid', data.uid || '-');
-
-                const levelEl = document.getElementById('account-level');
-                if (levelEl) {
-                    const level = data.account_level || '-';
-                    levelEl.textContent = level || '-';
-                    levelEl.className = 'badge ' + (level ? 'bg-info' : 'bg-secondary');
-                }
-
-                const balanceEl = document.getElementById('account-balance');
-                if (balanceEl) balanceEl.textContent = '$' + (data.total_equity || data.balance || 0).toFixed(2);
-
-                const availableEl = document.getElementById('available-balance');
-                if (availableEl) availableEl.textContent = '$' + (data.available || 0).toFixed(2);
-
-                const pnlEl = document.getElementById('daily-pnl');
-                if (pnlEl) {
-                    const pnl = data.unrealized_pnl || 0;
-                    pnlEl.textContent = (pnl >= 0 ? '+' : '') + '$' + pnl.toFixed(2);
-                    pnlEl.classList.remove('balance-positive', 'balance-negative');
-                    pnlEl.classList.add(pnl >= 0 ? 'balance-positive' : 'balance-negative');
-                }
-
-                const accountCard = document.getElementById('account-card');
-                if (accountCard) {
-                    accountCard.classList.remove('account-connected', 'account-disconnected');
-                    accountCard.classList.add(data.connected ? 'account-connected' : 'account-disconnected');
-                }
-
-                updateElement('account-equity', '$' + (data.total_equity || data.balance || 0).toFixed(2));
-                updateElement('account-available', '$' + (data.available || 0).toFixed(2));
-
-                updateElement('margin-imr', '$' + (data.initial_margin || 0).toFixed(2));
-                updateElement('margin-mmr', '$' + (data.maintenance_margin || 0).toFixed(2));
-
-                const marginRatio = data.margin_ratio || 0;
-                const marginRatioEl = document.getElementById('margin-ratio');
-                if (marginRatioEl) {
-                    marginRatioEl.textContent = marginRatio > 0 ? marginRatio.toFixed(1) + '%' : 'N/A';
-                    marginRatioEl.classList.remove('price-up', 'price-down', 'text-warning');
-                    if (marginRatio > 500) marginRatioEl.classList.add('price-up');
-                    else if (marginRatio > 150) marginRatioEl.classList.add('text-warning');
-                    else if (marginRatio > 0) marginRatioEl.classList.add('price-down');
-                }
-
-                const healthBadge = document.getElementById('margin-health-badge');
-                if (healthBadge) {
-                    const health = data.margin_health || 'N/A';
-                    healthBadge.textContent = health;
-                    healthBadge.classList.remove('bg-success', 'bg-warning', 'bg-danger', 'bg-secondary');
-                    if (health === 'SAFE') healthBadge.classList.add('bg-success');
-                    else if (health === 'WARNING') healthBadge.classList.add('bg-warning');
-                    else if (health === 'DANGER') healthBadge.classList.add('bg-danger');
-                    else healthBadge.classList.add('bg-secondary');
-                }
-
-                updateElement('mark-price', data.mark_price ? '$' + data.mark_price.toFixed(2) : '-');
-                updateElement('liq-price', data.liquidation_price ? '$' + data.liquidation_price.toFixed(2) : '-');
-
-                // Update actual leverage from exchange (for accurate margin calculations)
-                if (data.actual_spot_leverage !== undefined) {
-                    actualSpotLeverage = data.actual_spot_leverage;
-                }
-                if (data.actual_futures_leverage !== undefined) {
-                    actualFuturesLeverage = data.actual_futures_leverage;
-                }
-
-                // Store leverage source for display
-                window.spotLeverageSource = data.spot_leverage_source || 'unknown';
-                window.futuresLeverageSource = data.futures_leverage_source || 'unknown';
-
-                // Also check positions array for actual leverage (if we have open positions)
-                if (data.positions && data.positions.length > 0) {
-                    data.positions.forEach(pos => {
-                        if (pos.symbol && (pos.symbol.includes('SWAP') || pos.symbol.includes('PERP'))) {
-                            actualFuturesLeverage = pos.leverage || actualFuturesLeverage;
-                            window.futuresLeverageSource = 'exchange';
-                        }
-                    });
-                }
-
-                // Timestamp: show when P&L was last refreshed
-                const tsEl = document.getElementById('account-last-updated');
-                if (tsEl) {
-                    const now = new Date();
-                    tsEl.textContent = 'Updated ' + now.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'});
-                }
-            })
-            .catch(err => console.log('Account info error:', err));
-    }
-
-    function updateElement(id, text) {
-        const el = document.getElementById(id);
-        if (el) el.textContent = text;
-    }
-
-    updateAccountInfo();
-    setInterval(updateAccountInfo, 5000);
-
-    // Check for orphaned spots every 5 seconds (live trading needs rapid detection)
-    checkOrphanedSpots();
-    setInterval(checkOrphanedSpots, 5000);
-
-    // Check for exchange position mismatches every 5 seconds
-    checkExchangePositions();
-    setInterval(checkExchangePositions, 30000);
-
-    function updateActiveOrders() {
-        fetch('/api/active-orders')
-            .then(response => response.json())
-            .then(data => {
-                const noOrdersEl = document.getElementById('no-active-orders');
-                const ordersContentEl = document.getElementById('active-orders-content');
-                const modeBadge = document.getElementById('execution-mode-badge');
-
-                if (modeBadge) {
-                    const entryMode = data.entry_execution_mode || 'LIMIT';
-                    const exitMode  = data.exit_execution_mode  || 'LIMIT';
-                    modeBadge.textContent = entryMode + ' / ' + exitMode;
-                    const allLimit = entryMode === 'LIMIT' && exitMode === 'LIMIT';
-                    modeBadge.className = 'badge ' + (allLimit ? 'bg-success' : 'bg-warning');
-                    modeBadge.title = 'Entry: ' + entryMode + '  |  Exit: ' + exitMode;
-                }
-
-                if (data.orders && data.orders.length > 0) {
-                    noOrdersEl.style.display = 'none';
-                    ordersContentEl.style.display = 'block';
-
-                    const order = data.orders[0];
-                    document.getElementById('spot-leg-side').textContent = order.spot_leg.side;
-                    document.getElementById('spot-leg-price').textContent = '$' + (order.spot_leg.target_price || 0).toFixed(2);
-                    updateLegStatus('spot-leg-status', order.spot_leg.status);
-
-                    document.getElementById('futures-leg-side').textContent = order.futures_leg.side;
-                    document.getElementById('futures-leg-price').textContent = '$' + (order.futures_leg.target_price || 0).toFixed(2);
-                    updateLegStatus('futures-leg-status', order.futures_leg.status);
-                } else {
-                    noOrdersEl.style.display = 'block';
-                    ordersContentEl.style.display = 'none';
-                }
-            })
-            .catch(err => console.log('Active orders error:', err));
-    }
-
-    function updateLegStatus(elementId, status) {
-        const el = document.getElementById(elementId);
-        if (!el) return;
-        el.textContent = status;
-        el.className = 'badge ';
-        switch (status) {
-            case 'PENDING': el.className += 'bg-secondary'; break;
-            case 'OPEN': el.className += 'bg-info'; break;
-            case 'PARTIAL': el.className += 'bg-warning'; break;
-            case 'FILLED': el.className += 'bg-success'; break;
-            case 'CANCELLED': el.className += 'bg-danger'; break;
-            case 'FAILED': el.className += 'bg-danger'; break;
-            default: el.className += 'bg-secondary';
-        }
-    }
-
-    updateActiveOrders();
-    setInterval(updateActiveOrders, 1000);
-
-    function closePosition() {
-        if (!confirm('Close the current position manually?')) return;
-        const btn = document.getElementById('close-position-btn');
-        if (btn) { btn.disabled = true; btn.innerHTML = '<i class="bi bi-hourglass-split"></i> Closing...'; }
-        fetch('/api/engine/close-position', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' }
-        })
-        .then(response => response.json())
-        .then(data => {
-            if (data.success) {
-                showToast(data.message || 'Position closed', 'success');
-                fetch('/api/engine/status').then(r => r.json()).then(d => {
-                    if (d.signal) updateSignal(d.signal);
-                    currentOpenTrade = d.open_trade || null;
-                    updatePosition(d.position || 'NONE');
-                });
-            } else {
-                showToast('Failed: ' + (data.error || 'Unknown error'), 'danger');
-            }
-        })
-        .catch(err => showToast('Error: ' + err, 'danger'))
-        .finally(() => {
-            if (btn) { btn.disabled = false; btn.innerHTML = '<i class="bi bi-x-circle"></i> Close'; }
-        });
-    }
-
-    function clearTrades() {
-        if (!confirm('Clear all trade history?')) return;
-        fetch('/api/trades/clear', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({})
-        })
-        .then(response => response.json())
-        .then(data => {
-            if (data.success) {
-                showToast('Cleared ' + data.deleted + ' trades', 'success');
-                const tbody = document.getElementById('trades-table');
-                tbody.innerHTML = '<tr><td colspan="6" class="text-center text-secondary">No trades</td></tr>';
-            } else {
-                showToast('Failed to clear trades', 'danger');
-            }
-        })
-        .catch(err => showToast('Error: ' + err, 'danger'));
-    }
-
-    function clearSDTouches() {
-        if (!confirm('Reset SD touch history?')) return;
-        fetch('/api/sd-touches/clear', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({})
-        })
-        .then(response => response.json())
-        .then(data => {
-            if (data.success) showToast('Cleared ' + data.deleted + ' SD touches', 'success');
-            else showToast('Failed to clear SD touches', 'danger');
-        })
-        .catch(err => showToast('Error: ' + err, 'danger'));
-    }
-
-    function resetSpreadHistory() {
-        if (!confirm('Reset spread data? System will need to recollect data.')) return;
-        fetch('/api/spread-history/clear', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({})
-        })
-        .then(response => response.json())
-        .then(data => {
-            if (data.success) {
-                showToast('Spread data reset', 'success');
-                zscoreHistory = [];
-                spreadHistory = [];
-                zscoreChart.data.datasets[0].data = [];
-                spreadChart.data.datasets[0].data = [];
-                zscoreChart.update();
-                spreadChart.update();
-            } else {
-                showToast('Failed to reset spread data', 'danger');
-            }
-        })
-        .catch(err => showToast('Error: ' + err, 'danger'));
-    }
-
-    function resetTradesOnly() {
-        if (!confirm('Reset trades and SD analysis? (Spread data will be preserved)')) return;
-        fetch('/api/reset-trades', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({})
-        })
-        .then(response => response.json())
-        .then(data => {
-            if (data.success) {
-                const d = data.deleted;
-                showToast(`Reset: ${d.trades} trades, ${d.sd_touches} SD touches (spread preserved)`, 'success');
-                const tbody = document.getElementById('trades-table');
-                tbody.innerHTML = '<tr><td colspan="6" class="text-center text-secondary">No trades</td></tr>';
-                fetch('/api/engine/status').then(r => r.json()).then(d => updateSignal(d.signal));
-            } else {
-                showToast('Reset failed', 'danger');
-            }
-        })
-        .catch(err => showToast('Error: ' + err, 'danger'));
-    }
-
-    function resetAll() {
-        if (!confirm('Reset EVERYTHING - trades, SD touches, spread data?')) return;
-        fetch('/api/reset-all', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({})
-        })
-        .then(response => response.json())
-        .then(data => {
-            if (data.success) {
-                const d = data.deleted;
-                showToast(`Reset: ${d.trades} trades, ${d.sd_touches} SD, ${d.spread_history} spreads`, 'success');
-                const tbody = document.getElementById('trades-table');
-                tbody.innerHTML = '<tr><td colspan="6" class="text-center text-secondary">No trades</td></tr>';
-                zscoreHistory = [];
-                spreadHistory = [];
-                zscoreChart.data.datasets[0].data = [];
-                spreadChart.data.datasets[0].data = [];
-                zscoreChart.update();
-                spreadChart.update();
-                fetch('/api/engine/status').then(r => r.json()).then(d => updateSignal(d.signal));
-            } else {
-                showToast('Failed to reset', 'danger');
-            }
-        })
-        .catch(err => showToast('Error: ' + err, 'danger'));
-    }
-
-    // ========== Exchange Order Log ==========
-    function refreshExchangeOrders() {
-        const tbody = document.getElementById('exchange-orders-table');
-        tbody.innerHTML = '<tr><td colspan="14" class="text-center text-secondary py-2"><i class="bi bi-hourglass-split me-1"></i>Loading...</td></tr>';
-
-        fetch('/api/exchange-orders?limit=100')
-            .then(r => r.json())
-            .then(data => {
-                const orders = data.orders || [];
-                if (orders.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="14" class="text-center text-secondary py-3">No orders found</td></tr>';
-                    return;
-                }
-
-                tbody.innerHTML = '';
-                orders.forEach(o => {
-                    const sideClass = o.side === 'buy' ? 'text-success' : 'text-danger';
-                    const stateClass = o.state === 'filled' ? 'text-success' : (o.state === 'cancelled' ? 'text-secondary' : 'text-warning');
-                    const pnlClass = o.pnl > 0 ? 'text-success' : (o.pnl < 0 ? 'text-danger' : '');
-                    const feeClass = o.fee < 0 ? 'text-danger' : '';
-                    const time = o.filled_at ? new Date(parseInt(o.filled_at)).toLocaleTimeString() : '-';
-                    const date = o.filled_at ? new Date(parseInt(o.filled_at)).toLocaleDateString() : '';
-
-                    const tr = document.createElement('tr');
-                    tr.innerHTML = `
-                        <td title="${date}">${time}</td>
-                        <td>${o.symbol}</td>
-                        <td><span class="badge bg-secondary" style="font-size:0.6rem">${o.inst_type}</span></td>
-                        <td class="${sideClass} fw-bold">${o.side.toUpperCase()}</td>
-                        <td class="text-secondary">${o.pos_side || '-'}</td>
-                        <td>${o.order_type}</td>
-                        <td>${o.quantity}</td>
-                        <td>${o.fill_qty || '-'}</td>
-                        <td>${o.fill_price > 0 ? '$' + o.fill_price.toLocaleString() : '-'}</td>
-                        <td>${o.leverage ? o.leverage + 'x' : '-'}</td>
-                        <td class="${feeClass}">${o.fee !== 0 ? o.fee.toFixed(4) + ' ' + o.fee_ccy : '-'}</td>
-                        <td class="${pnlClass}">${o.pnl !== 0 ? '$' + o.pnl.toFixed(4) : '-'}</td>
-                        <td class="${stateClass}">${o.state}</td>
-                        <td><code style="font-size:0.6rem">${o.order_id.slice(-8)}</code></td>
-                    `;
-                    tbody.appendChild(tr);
-                });
-            })
-            .catch(err => {
-                tbody.innerHTML = `<tr><td colspan="14" class="text-center text-danger py-3">Error: ${err}</td></tr>`;
-            });
-    }
+    const dir = (op.direction || '').replace('_SPREAD', '');
+    badge.textContent = dir;
+    badge.className = 'badge ' + (dir === 'LONG' ? 'bg-success' : 'bg-danger');
+    owner.textContent = op.owner;
+    closeBtn.style.display = algoOn ? 'none' : '';
+
+    // Live numbers come from the algo snapshot (it marks the P&L every tick).
+    const net = al.net_pnl;
+    pnl.textContent = net != null ? fmtUsd(net) : '';
+    pnl.className = 'font-monospace fw-bold mt-1 ' + ((net || 0) >= 0 ? 'text-success' : 'text-danger');
+
+    details.style.display = '';
+    document.getElementById('pd-entry').textContent = fmt(al.entry_spread);
+    document.getElementById('pd-delta').textContent = fmt(al.delta_spread);
+    document.getElementById('pd-held').textContent = al.held_sec != null ? (al.held_sec < 120 ? al.held_sec.toFixed(0) + 's' : (al.held_sec / 60).toFixed(1) + 'm') : '—';
+    const lv = al.spread_levels || {};
+    document.getElementById('pd-be').textContent = fmt(lv.break_even);
+    document.getElementById('pd-tp').textContent = fmt(lv.take_profit);
+    document.getElementById('pd-sl').textContent = fmt(lv.stop);
+    document.getElementById('pd-peak').textContent = al.peak_pnl != null ? fmtUsd(al.peak_pnl) : '—';
+    const apos = al.position || {};
+    document.getElementById('pd-qty').textContent = apos.qty != null ? Number(apos.qty).toFixed(6) : Number(op.qty || 0).toFixed(6);
+    document.getElementById('pd-notional').textContent = al.notional != null ? fmtUsd(al.notional, 0) : '—';
+}
+
+// ─── manual trading ──────────────────────────────────────────────────────────
+async function manualTrade(direction) {
+    const label = direction === 'LONG_SPREAD' ? 'BUY the spread (buy Spot / sell Perp)'
+                                              : 'SELL the spread (sell Spot / buy Perp)';
+    if (!confirm('MANUAL ORDER\n\n' + label + '\n\nProceed?')) return;
+    try {
+        const r = await fetch('/api/execute', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({direction})
+        }).then(x => x.json());
+        showToast(r.success ? 'Order filled: ' + (r.message || 'ok')
+                            : 'Refused: ' + (r.error || 'unknown'), r.success ? 'success' : 'danger');
+    } catch (e) { showToast('Order failed: ' + e, 'danger'); }
+    pollSignal();
+}
+
+async function closePosition() {
+    if (!confirm('Close the open position NOW?')) return;
+    try {
+        const r = await fetch('/api/close', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                             body: JSON.stringify({})}).then(x => x.json());
+        showToast(r.success ? 'Closed. Net: ' + (r.net_pnl != null ? '$' + r.net_pnl.toFixed(2) : 'n/a')
+                            : 'Refused: ' + (r.error || 'unknown'), r.success ? 'success' : 'danger');
+    } catch (e) { showToast('Close failed: ' + e, 'danger'); }
+    pollSignal(); pollJournal();
+}
+
+// ─── charts ──────────────────────────────────────────────────────────────────
+const zscoreChart = new Chart(document.getElementById('zscoreChart'), {
+    type: 'line',
+    data: { labels: [], datasets: [
+        { label: 'z', data: [], borderColor: '#0d6efd', borderWidth: 1.5, pointRadius: 0, tension: 0.2 },
+        { label: '+entry', data: [], borderColor: '#dc3545', borderWidth: 1, borderDash: [4,4], pointRadius: 0 },
+        { label: '−entry', data: [], borderColor: '#198754', borderWidth: 1, borderDash: [4,4], pointRadius: 0 },
+    ]},
+    options: { animation: false, plugins: { legend: { display: false } },
+               scales: { x: { display: false }, y: { ticks: { font: { size: 9 } } } } }
+});
+const spreadChart = new Chart(document.getElementById('spreadChart'), {
+    type: 'line',
+    data: { labels: [], datasets: [
+        { label: 'spread', data: [], borderColor: '#6610f2', borderWidth: 1.5, pointRadius: 0, tension: 0.2 },
+        { label: 'mean', data: [], borderColor: '#6c757d', borderWidth: 1, borderDash: [4,4], pointRadius: 0 },
+    ]},
+    options: { animation: false, plugins: { legend: { display: false } },
+               scales: { x: { display: false }, y: { ticks: { font: { size: 9 } } } } }
+});
+
+async function pollSeries() {
+    let s;
+    try { s = await fetch('/api/signal/series?max_points=200', {cache: 'no-store'}).then(r => r.json()); }
+    catch (e) { return; }
+    const pts = s.points || [];
+    const labels = pts.map((_, i) => i);
+    zscoreChart.data.labels = labels;
+    zscoreChart.data.datasets[0].data = pts.map(p => p.z);
+    zscoreChart.data.datasets[1].data = pts.map(() => s.entry_zscore);
+    zscoreChart.data.datasets[2].data = pts.map(() => -s.entry_zscore);
+    zscoreChart.update();
+    spreadChart.data.labels = labels;
+    spreadChart.data.datasets[0].data = pts.map(p => p.spread);
+    spreadChart.data.datasets[1].data = pts.map(() => s.mean);
+    spreadChart.update();
+}
+
+// ─── excursions + journal ────────────────────────────────────────────────────
+async function pollExcursions() {
+    try {
+        const e = await fetch('/api/excursions', {cache: 'no-store'}).then(r => r.json());
+        document.getElementById('ex-2').textContent = e.touch_2_total ?? '—';
+        document.getElementById('ex-3').textContent = e.touch_3_total ?? '—';
+        document.getElementById('ex-rev').textContent = e.reversions ?? '—';
+        document.getElementById('ex-max').textContent = Math.max(Math.abs(e.max_z || 0), Math.abs(e.min_z || 0)).toFixed(1);
+    } catch (e) {}
+}
+
+async function resetExcursions() {
+    await fetch('/api/excursions/reset', {method: 'POST'});
+    pollExcursions();
+}
+
+async function pollJournal() {
+    let j;
+    try { j = await fetch('/api/journal?limit=40', {cache: 'no-store'}).then(r => r.json()); }
+    catch (e) { return; }
+    const rows = j.rows || [];
+    const body = document.getElementById('journal-body');
+    if (!rows.length) return;
+    body.innerHTML = rows.map(r => {
+        const t = new Date(r.ts * 1000).toLocaleTimeString();
+        const dir = (r.direction || '').replace('_SPREAD', '');
+        const net = r.net_pnl;
+        const netTxt = r.event === 'CLOSE' ? (net != null ? net.toFixed(2) : '—') : '';
+        const netCls = (net || 0) >= 0 ? 'text-success' : 'text-danger';
+        const evCls = r.event === 'OPEN' ? 'text-primary' : 'text-dark';
+        const reason = r.reason ? ' title="' + r.reason + '"' : '';
+        return `<tr${reason}><td>${t}</td><td class="${evCls}">${r.event}</td>` +
+               `<td>${dir}</td><td>${r.source || ''}</td>` +
+               `<td class="text-end font-monospace ${netCls}">${netTxt}</td></tr>`;
+    }).join('');
+}
+
+pollSignal(); pollSeries(); pollExcursions(); pollJournal();
+setInterval(pollSignal, 1000);
+setInterval(pollSeries, 3000);
+setInterval(pollExcursions, 5000);
+setInterval(pollJournal, 10000);
 </script>
 {% endblock %}
