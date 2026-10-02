@@ -165,13 +165,20 @@ class SpreadCandles:
         self.status: Dict[str, Dict] = {tf: {"state": "pending", "detail": "", "at": 0.0}
                                         for tf in TIMEFRAMES}
         self._fill_thread: Optional[threading.Thread] = None
+        self._refetch = False          # pair changed → history must be re-fetched
         self._ema_cache: Dict[Tuple, Tuple[float, float]] = {}
         self._load()
 
     # ── identity: a different pair is a different series ─────────────────────
+    @staticmethod
+    def _norm_key(key) -> str:
+        """Pair key compared case/space-insensitively, so re-saving the same
+        symbols in another spelling doesn't wipe the candles."""
+        return "|".join(p.strip().upper() for p in str(key or "").split("|"))
+
     def _check_key(self) -> None:
         try:
-            key = str(self._key_fn() or "")
+            key = self._norm_key(self._key_fn())
         except Exception:
             return
         if not key:
@@ -187,6 +194,7 @@ class SpreadCandles:
             self.status = {tf: {"state": "pending", "detail": "", "at": 0.0}
                            for tf in TIMEFRAMES}
             self._dirty = True
+            self._refetch = True
 
     # ── live ticks ────────────────────────────────────────────────────────────
     def update(self, ts: float, ltp_a: Optional[float], ltp_b: Optional[float],
@@ -216,6 +224,11 @@ class SpreadCandles:
                     for t in sorted(bars)[:len(bars) - MAX_BARS]:
                         del bars[t]
             self._dirty = True
+            refetch, self._refetch = self._refetch, False
+        if refetch:
+            # The wiped candles were never re-fetched before, so the bands sat
+            # on a handful of live candles ("history pending") until a restart.
+            self.backfill_async(force=True)
         self._maybe_save()
 
     # ── bands ─────────────────────────────────────────────────────────────────
@@ -310,6 +323,7 @@ class SpreadCandles:
         now = self._clock()
         with self._lock:
             self._check_key()
+            self._refetch = False                 # this fill is the re-fetch
         for tf, sec in TIMEFRAMES.items():
             st = self.status.get(tf, {})
             if not force and st.get("state") == "ok" and now - float(st.get("at", 0)) < 3600:
@@ -386,10 +400,11 @@ class SpreadCandles:
             key_now = str(self._key_fn() or "")
         except Exception:
             key_now = ""
-        if key_now and data.get("key") and data["key"] != key_now:
+        key_now = self._norm_key(key_now)
+        if key_now and data.get("key") and self._norm_key(data["key"]) != key_now:
             logger.info("Candles: saved candles are for another pair — not loaded")
             return
-        self._key = data.get("key") or key_now or None
+        self._key = self._norm_key(data.get("key")) or key_now or None
         for tf, rows in (data.get("bars") or {}).items():
             if tf in self._bars:
                 self._bars[tf] = {float(r[0]): [float(x) for x in r[1:]]
