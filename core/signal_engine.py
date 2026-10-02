@@ -667,15 +667,20 @@ class SignalEngine:
             mean, std = (b["mean"], b["std"]) if b.get("ready") else (mean, 0.0)
         sd = std if std > 1e-12 else 0.0
 
-        step = max(1, len(samples) // max_points)
+        # Evenly spaced picks, first and last included, so the point count is
+        # exactly min(len, max_points). An integer stride (len // max_points)
+        # made the count saw between max_points and ~1.5× it as the window
+        # grew, squeezing the chart sideways and snapping it back each time
+        # the stride stepped up.
+        n, m = len(samples), max(2, int(max_points))
+        if n <= m:
+            idx = range(n)
+        else:
+            idx = sorted({round(j * (n - 1) / (m - 1)) for j in range(m)})
         points = []
-        for i in range(0, len(samples), step):
+        for i in idx:
             sp = samples[i][3]
             points.append({"t": round(samples[i][0], 1), "spread": round(sp, 4),
-                           "z": round((sp - mean) / sd, 4) if sd else 0.0})
-        if (len(samples) - 1) % step != 0:
-            sp = samples[-1][3]
-            points.append({"t": round(samples[-1][0], 1), "spread": round(sp, 4),
                            "z": round((sp - mean) / sd, 4) if sd else 0.0})
 
         return {
