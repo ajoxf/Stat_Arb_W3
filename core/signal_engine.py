@@ -744,4 +744,5 @@ class SignalEngine:
             "mean": round(mean, 4), "std": round(std, 6),
             "entry_zscore": self._p()["entry_zscore"],
             "stop_zscore": self._p()["stop_zscore"],
+            "sample_interval_sec": self._p()["sample_interval_sec"],
         }

@@ -1021,21 +1021,28 @@ const spreadChart = new Chart(document.getElementById('spreadChart'), {
                scales: { x: { display: false }, y: { ticks: { font: { size: 9 } } } } }
 });
 
+// Redraw the z / spread charts every tick: the next fetch is scheduled one
+// sample interval after the last one finished, so requests never overlap.
+let SERIES_MS = 500;
+async function seriesLoop() {
+    try { await pollSeries(); } finally { setTimeout(seriesLoop, SERIES_MS); }
+}
 async function pollSeries() {
     let s;
     try { s = await fetch('/api/signal/series?max_points=200', {cache: 'no-store'}).then(r => r.json()); }
     catch (e) { return; }
+    if (s.sample_interval_sec) SERIES_MS = Math.max(250, s.sample_interval_sec * 1000);
     const pts = s.points || [];
     const labels = pts.map((_, i) => i);
     zscoreChart.data.labels = labels;
     zscoreChart.data.datasets[0].data = pts.map(p => p.z);
     zscoreChart.data.datasets[1].data = pts.map(() => s.entry_zscore);
     zscoreChart.data.datasets[2].data = pts.map(() => -s.entry_zscore);
-    zscoreChart.update();
+    zscoreChart.update('none');
     spreadChart.data.labels = labels;
     spreadChart.data.datasets[0].data = pts.map(p => p.spread);
     spreadChart.data.datasets[1].data = pts.map(() => s.mean);
-    spreadChart.update();
+    spreadChart.update('none');
 }
 
 // ─── candle bands (spread OHLC + TradingView BB, EMA basis) ─────────────────
@@ -1272,11 +1279,10 @@ async function resetExcursionsBtn() {
 }
 
 updateManualHints();
-pollSignal(); pollSeries(); pollCandles(); pollActiveOrders();
+pollSignal(); seriesLoop(); pollCandles(); pollActiveOrders();
 pollInsights(); pollTrades(); pollMargin(); pollVolume();
 refreshFills(); refreshExchangeOrders(); pollLatency();
 setInterval(pollSignal, 1000);
-setInterval(pollSeries, 3000);
 setInterval(pollCandles, 3000);
 setInterval(pollActiveOrders, 2000);
 setInterval(pollTrades, 5000);
