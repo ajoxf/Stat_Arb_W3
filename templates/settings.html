@@ -21,7 +21,7 @@
                     <div class="col-6">
                         <label class="form-label">Warm-up <span class="badge bg-secondary">min</span></label>
                         <input type="number" step="1" class="form-control form-control-sm ap" id="min_signal_minutes">
-                        <div class="form-text">Collect this much before ANY trade.</div>
+                        <div class="form-text">Collect this much live data before ANY trade (both band sources).</div>
                     </div>
                     <div class="col-6">
                         <label class="form-label">Sample interval (s)</label>
@@ -61,8 +61,8 @@
                         <div class="form-text"><strong>Ticks</strong> = the rolling window above.
                         <strong>Candles</strong> = TradingView-style bands with an EMA basis on the
                         spread's candles: basis = EMA(N) of closes, σ = stdev(N), bands = basis ±
-                        Entry Z × σ. Candles are saved to disk and back-filled from OKX, so a restart
-                        needs no warm-up. An open position keeps the bands it entered with.</div>
+                        Entry Z × σ. Candles are saved to disk and back-filled from OKX, but trading still
+                        waits for the Warm-up minutes of live data. An open position keeps the bands it entered with.</div>
                     </div>
                     <div class="col-6">
                         <label class="form-label fw-semibold">Band source</label>

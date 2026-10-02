@@ -99,7 +99,7 @@ class SignalEngine:
         p = {
             "window_minutes": 120.0,
             "sample_interval_sec": 0.5,
-            "min_signal_minutes": 10.0,
+            "min_signal_minutes": 90.0,
             "entry_zscore": 2.5,
             "exit_zscore": 0.0,
             "stop_zscore": 4.0,
@@ -633,7 +633,9 @@ class SignalEngine:
                 mean, std = float(b["mean"]), float(b["std"])
             else:
                 std = 0.0                             # not tradeable until N candles exist
-            enough = bool(b.get("ready"))
+            # Back-filled candles are ready at once, but the live warm-up still
+            # gates trading: N candles AND min_signal_minutes of collected ticks.
+            enough = bool(b.get("ready")) and enough
             out["candles_have"], out["candles_need"] = b.get("count", 0), n_len
         hl = self.half_life(spreads)
         usable = std > 1e-12

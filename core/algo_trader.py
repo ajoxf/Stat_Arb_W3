@@ -483,14 +483,14 @@ class AlgoTrader:
         # gates the exit logic.
         pos_bands = self._position_bands(sig)
         if not sig.get("ready") and pos_bands is None:
-            if sig.get("band_source") == "candles":
+            have_min = (sig.get("history_sec") or 0) / 60.0
+            need_min = sig.get("min_signal_minutes", 0) or 0
+            if sig.get("band_source") == "candles" and have_min >= need_min:
                 snap["status"] = (f"loading candles ({sig.get('candles_have', 0)}/"
                                   f"{sig.get('candles_need', 0)} on "
                                   f"{sig.get('band_timeframe')})")
             else:
-                need = sig.get("min_signal_minutes", 0)
-                have = (sig.get("history_sec") or 0) / 60.0
-                snap["status"] = f"collecting signal ({have:.1f}/{need:.0f} min)"
+                snap["status"] = f"collecting signal ({have_min:.1f}/{need_min:.0f} min)"
             self._set_snap(snap)
             return
 

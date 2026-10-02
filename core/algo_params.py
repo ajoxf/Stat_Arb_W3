@@ -10,7 +10,7 @@ DEFAULT_ALGO_PARAMS = {
     # ── signal window ────────────────────────────────────────────────────────
     "window_minutes": 120.0,          # rolling lookback for mean/σ/z
     "sample_interval_sec": 0.5,       # spread sample rate
-    "min_signal_minutes": 10.0,       # warm-up before ANY trade (the ready gate)
+    "min_signal_minutes": 90.0,       # warm-up before ANY trade (the ready gate)
     "stats_update_interval_sec": 300.0,  # recompute mean/σ every N s (stable bands)
     "hedge_ratio": 1.0,               # spread = k × spot − perp
     "max_quote_age_sec": 60.0,        # skip samples on a stalled feed
