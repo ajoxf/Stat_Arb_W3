@@ -96,7 +96,7 @@
                             <option value="sell_only">High → Low only (Sell spread)</option>
                             <option value="buy_only">Low → High only (Buy spread)</option>
                         </select>
-                        <div class="form-text">Which side the algo may <strong>open</strong>. Sell = sell Spot at bid / buy Perp at ask when the sell price's z ≥ +entry. <strong>Exits are never restricted.</strong></div>
+                        <div class="form-text">Which side the algo may <strong>open</strong>. Sell = sell Leg A at bid / buy Leg B at ask when the sell price's z ≥ +entry. <strong>Exits are never restricted.</strong></div>
                     </div>
                     <div class="col-6">
                         <label class="form-label">Confirmation ticks</label>
@@ -403,11 +403,11 @@
                         <input type="number" step="100" class="form-control form-control-sm tc" id="max_position_size_usd">
                     </div>
                     <div class="col-6">
-                        <label class="form-label">Spot leverage (×)</label>
+                        <label class="form-label">Leg A leverage (×)</label>
                         <input type="number" step="1" class="form-control form-control-sm tc" id="spot_leverage">
                     </div>
                     <div class="col-6">
-                        <label class="form-label">Perp leverage (×)</label>
+                        <label class="form-label">Leg B leverage (×)</label>
                         <input type="number" step="1" class="form-control form-control-sm tc" id="futures_leverage">
                     </div>
                 </div>
@@ -419,19 +419,19 @@
             <div class="card-body">
                 <div class="row g-2">
                     <div class="col-3">
-                        <label class="form-label">Spot maker</label>
+                        <label class="form-label">Leg A maker</label>
                         <input type="number" step="0.5" class="form-control form-control-sm tc" id="spot_maker_fee_bps">
                     </div>
                     <div class="col-3">
-                        <label class="form-label">Spot taker</label>
+                        <label class="form-label">Leg A taker</label>
                         <input type="number" step="0.5" class="form-control form-control-sm tc" id="spot_taker_fee_bps">
                     </div>
                     <div class="col-3">
-                        <label class="form-label">Perp maker</label>
+                        <label class="form-label">Leg B maker</label>
                         <input type="number" step="0.5" class="form-control form-control-sm tc" id="futures_maker_fee_bps">
                     </div>
                     <div class="col-3">
-                        <label class="form-label">Perp taker</label>
+                        <label class="form-label">Leg B taker</label>
                         <input type="number" step="0.5" class="form-control form-control-sm tc" id="futures_taker_fee_bps">
                     </div>
                     <div class="col-12"><div class="form-text">All in bps of notional, per leg, one way.</div></div>

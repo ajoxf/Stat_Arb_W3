@@ -127,7 +127,7 @@
   var topZ = 20;
 
   var DEFS = [
-    {id: 'ladder', title: 'Ladder · Spot − Perp', x: 8, y: 8, w: 360, h: 640, flush: true},
+    {id: 'ladder', title: 'Ladder · Leg A − Leg B', x: 8, y: 8, w: 360, h: 640, flush: true},
     {id: 'signal', title: 'Signal & Position', x: 376, y: 8, w: 470, h: 360},
     {id: 'stats', title: 'Statistics & Filters', x: 854, y: 8, w: 330, h: 360},
     {id: 'bands', title: 'Spread', x: 376, y: 376, w: 470, h: 272},
@@ -431,7 +431,7 @@
       '<div class="grid"><table><thead><tr>' +
       '  <th class="c-work" title="Your position\'s levels: ENTRY, BE (break-even), TP and SL">Mark</th>' +
       '  <th class="c-bid" title="SELL the spread: Bid A − Ask B. Size = what both books can do, in clips">Bids</th>' +
-      '  <th class="c-price" title="The spread, Spot − Perp, one row per increment">Price</th>' +
+      '  <th class="c-price" title="The spread, Leg A − Leg B, one row per increment">Price</th>' +
       '  <th class="c-ask" title="BUY the spread: Ask A − Bid B. Size = what both books can do, in clips">Asks</th>' +
       '</tr></thead><tbody></tbody></table></div>' +
       '</div>';

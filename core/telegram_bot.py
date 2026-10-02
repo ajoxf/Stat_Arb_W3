@@ -140,8 +140,8 @@ class TelegramNotifier:
                 R("Notional", f"${trade.notional_usd:,.2f}"),
                 R("Margin Req", margin_str),
                 "",
-                R("Spot Entry", f"${trade.entry_spot_price:,.4f}"),
-                R("Fut Entry", f"${trade.entry_futures_price:,.4f}"),
+                R("Leg A Entry", f"${trade.entry_spot_price:,.4f}"),
+                R("Leg B Entry", f"${trade.entry_futures_price:,.4f}"),
                 R("Spread", f"{trade.entry_spread:+.4f}  ({spread_bps:+.2f} bps)"),
                 "",
                 R("Z-score", f"{trade.entry_zscore:+.4f}"),
@@ -232,10 +232,10 @@ class TelegramNotifier:
                 R("Duration", duration_str),
                 R("Exit Time", exit_str),
                 "",
-                R("Spot Entry", f"${trade.entry_spot_price:,.4f}"),
-                R("Spot Exit", f"${trade.exit_spot_price:,.4f}"),
-                R("Fut Entry", f"${trade.entry_futures_price:,.4f}"),
-                R("Fut Exit", f"${trade.exit_futures_price:,.4f}"),
+                R("Leg A Entry", f"${trade.entry_spot_price:,.4f}"),
+                R("Leg A Exit", f"${trade.exit_spot_price:,.4f}"),
+                R("Leg B Entry", f"${trade.entry_futures_price:,.4f}"),
+                R("Leg B Exit", f"${trade.exit_futures_price:,.4f}"),
                 "",
                 R("Entry Spread", f"{entry_spread:+.4f}  (Z: {trade.entry_zscore:+.4f})"),
                 R("Exit Spread", f"{exit_spread:+.4f}  (Z: {trade.exit_zscore:+.4f})"),
@@ -546,15 +546,15 @@ class TelegramNotifier:
             R("Margin Req", margin_str),
             R("Entry Time", entry_time),
             "",
-            R("Spot Entry", f"${entry_spot:,.4f}"),
-            R("Fut Entry", f"${entry_fut:,.4f}"),
+            R("Leg A Entry", f"${entry_spot:,.4f}"),
+            R("Leg B Entry", f"${entry_fut:,.4f}"),
             R("Entry Spread", f"{entry_spread:+.4f}  (Z: {entry_z:+.4f})"),
             "",
         ]
         if current_spot:
-            rows.append(R("Spot Now", f"${current_spot:,.4f}"))
+            rows.append(R("Leg A Now", f"${current_spot:,.4f}"))
         if current_fut:
-            rows.append(R("Fut Now", f"${current_fut:,.4f}"))
+            rows.append(R("Leg B Now", f"${current_fut:,.4f}"))
         rows.append(R("Spread Now", f"{current_spread:+.4f}  (Z: {current_z:+.4f})"))
         rows += [
             "",
@@ -616,10 +616,10 @@ class TelegramNotifier:
                 R("Exit", t.get("exit_reason", "EXIT")),
                 R("Duration", duration_str),
                 "",
-                R("Spot Entry", f"${entry_spot:,.4f}"),
-                R("Spot Exit", f"${exit_spot:,.4f}"),
-                R("Fut Entry", f"${entry_fut:,.4f}"),
-                R("Fut Exit", f"${exit_fut:,.4f}"),
+                R("Leg A Entry", f"${entry_spot:,.4f}"),
+                R("Leg A Exit", f"${exit_spot:,.4f}"),
+                R("Leg B Entry", f"${entry_fut:,.4f}"),
+                R("Leg B Exit", f"${exit_fut:,.4f}"),
                 "",
                 R("Entry Spread", f"{entry_spread:+.4f}  ({entry_spread_bps:+.2f} bps)"),
                 R("Exit Spread", f"{exit_spread:+.4f}"),
