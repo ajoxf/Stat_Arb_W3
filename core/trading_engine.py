@@ -153,21 +153,14 @@ class TradingEngine:
         try:
             cancelled_count = 0
 
-            # Clean up spot orders
-            if self.spot_adapter and hasattr(self.spot_adapter, 'cancel_all_orders'):
-                count = await self.spot_adapter.cancel_all_orders(
-                    symbol=self.config.spot_symbol,
-                    inst_type="SPOT"
-                )
-                cancelled_count += count
-
-            # Clean up futures orders
-            if self.futures_adapter and hasattr(self.futures_adapter, 'cancel_all_orders'):
-                count = await self.futures_adapter.cancel_all_orders(
-                    symbol=self.config.futures_symbol,
-                    inst_type="SWAP"
-                )
-                cancelled_count += count
+            # Each leg is looked up by its symbol alone. Either leg can be spot
+            # or a perp, and a hard-coded instType (SPOT for leg A, SWAP for
+            # leg B) made OKX reject the query (51015) for an -SWAP leg A, so
+            # that leg's leftover orders were never cancelled.
+            for adapter, symbol in ((self.spot_adapter, self.config.spot_symbol),
+                                    (self.futures_adapter, self.config.futures_symbol)):
+                if adapter and hasattr(adapter, 'cancel_all_orders'):
+                    cancelled_count += await adapter.cancel_all_orders(symbol=symbol)
 
             if cancelled_count > 0:
                 logger.info("Cleaned up %d orphan orders from previous session", cancelled_count)
