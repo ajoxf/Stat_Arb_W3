@@ -44,7 +44,10 @@ body.desk iframe.embed { width: 100%; height: 100%; border: 0; background: #f0f0
 .side.armed.sell { border-color: var(--ask, #b83232); } .side.armed.buy { border-color: var(--bid-strong, #1f7ac2); }
 .side.off { opacity: .5; }
 .side .lbl { font-size: 10px; font-weight: 700; letter-spacing: .05em; }
-.side .lbl small { font-weight: 400; color: var(--frame-muted, #5a5a5a); }
+.side .lbl small { display: block; font-weight: 400; color: var(--frame-muted, #5a5a5a); white-space: nowrap; }
+.side .pxs { font: 11px/1.35 Consolas, Menlo, monospace; max-width: 160px; margin: 3px auto 0; }
+.side .pxs div { display: flex; justify-content: space-between; }
+.side .pxs span:first-child { color: var(--frame-muted, #5a5a5a); }
 .side .px { font: 700 24px/1.1 Consolas, Menlo, monospace; }
 .side.sell .px { color: var(--ask, #b83232); } .side.buy .px { color: var(--bid-strong, #1f7ac2); }
 .side .zl { font-size: 10px; color: var(--frame-muted, #5a5a5a); margin-top: 3px; border-top: 1px solid #e2e2e2; padding-top: 3px; }

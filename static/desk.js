@@ -283,6 +283,7 @@
         signal: {
           sell_spread: d.sell_spread, buy_spread: d.buy_spread,
           z_sell: d.z_sell, z_buy: d.z_buy,
+          bid_a: d.bid_a, ask_a: d.ask_a, bid_b: d.bid_b, ask_b: d.ask_b,
           entry_threshold: d.entry_zscore,
           trade_direction: d.trade_direction || 'both',
           history_sec: d.history_sec, min_history_sec: d.min_history_sec,
@@ -542,10 +543,16 @@
     body.innerHTML =
       '<div class="sides">' +
       ' <div class="side sell"><div class="lbl">SELL SPREAD <small>Bid A − Ask B</small></div>' +
-      '   <div class="px s-px">—</div><div class="zl">Z-SCORE</div><div class="z s-z">—</div>' +
+      '   <div class="px s-px">—</div>' +
+      '   <div class="pxs"><div><span>Bid A</span><span class="s-p1">—</span></div>' +
+      '   <div><span>Ask B</span><span class="s-p2">—</span></div></div>' +
+      '   <div class="zl">Z-SCORE</div><div class="z s-z">—</div>' +
       '   <div class="en s-en"></div><div class="en">short entry · long exit</div></div>' +
       ' <div class="side buy"><div class="lbl">BUY SPREAD <small>Ask A − Bid B</small></div>' +
-      '   <div class="px b-px">—</div><div class="zl">Z-SCORE</div><div class="z b-z">—</div>' +
+      '   <div class="px b-px">—</div>' +
+      '   <div class="pxs"><div><span>Ask A</span><span class="b-p1">—</span></div>' +
+      '   <div><span>Bid B</span><span class="b-p2">—</span></div></div>' +
+      '   <div class="zl">Z-SCORE</div><div class="z b-z">—</div>' +
       '   <div class="en b-en"></div><div class="en">long entry · short exit</div></div>' +
       '</div>' +
       '<div class="sec">Position</div><div class="pos-box muted">flat</div>' +
@@ -560,9 +567,11 @@
     var body = W.signal.body, g = S.status.signal || {};
     var entry = Number(g.entry_threshold || 2.5);
     var td = g.trade_direction || 'both';
-    function side(cls, px, z, armed, on, enTxt) {
+    function side(cls, px, z, armed, on, enTxt, p1, p2) {
       var box = $('.side.' + cls, body);
       $('.' + cls[0] + '-px', body).textContent = num(px, 2);
+      $('.' + cls[0] + '-p1', body).textContent = num(p1, 2);   // the two prices
+      $('.' + cls[0] + '-p2', body).textContent = num(p2, 2);   // this spread is built from
       var zEl = $('.' + cls[0] + '-z', body);
       zEl.textContent = z == null ? DASH : signed(z, 2);
       zEl.className = 'z ' + cls[0] + '-z' + (armed && on ? ' hot ' + cls : '');
@@ -572,9 +581,9 @@
       box.className = 'side ' + cls + (armed && on ? ' armed' : '') + (on ? '' : ' off');
     }
     side('sell', g.sell_spread, g.z_sell, g.z_sell != null && g.z_sell >= entry, td !== 'buy_only',
-         'short at ≥ +' + entry.toFixed(2));
+         'short at ≥ +' + entry.toFixed(2), g.bid_a, g.ask_b);
     side('buy', g.buy_spread, g.z_buy, g.z_buy != null && g.z_buy <= -entry, td !== 'sell_only',
-         'long at ≤ −' + entry.toFixed(2));
+         'long at ≤ −' + entry.toFixed(2), g.ask_a, g.bid_b);
     var t = S.status.open_trade;
     var pb = $('.pos-box', body);
     if (!t) {
@@ -737,6 +746,7 @@
     if (!W.charts || !charts.z) { return Promise.resolve(); }
     var sec = prefs.chartSec != null ? prefs.chartSec : 900;
     return getJSON('/api/spread-series?n=600' + (sec ? '&sec=' + sec : '')).then(function (d) {
+      if (d.sample_interval_sec) { chartMs = Math.max(250, d.sample_interval_sec * 1000); }
       var note = $('.ch-note', W.charts.body);
       if (note) { note.textContent = '· updated ' + new Date().toLocaleTimeString(); }
       var z = d.zscores || [], s = d.spreads || [];
@@ -879,7 +889,13 @@
   setInterval(pollStatus, 1000);
   setInterval(pollAlgo, 2000);
   setInterval(function () { REFRESH.ladder(); }, 700);
-  setInterval(function () { REFRESH.charts(); }, 2000);
+  // z / spread charts redraw every tick: refetch one sample interval after
+  // the previous fetch settles, so requests never overlap.
+  var chartMs = 500;
+  (function chartLoop() {
+    var done = function () { setTimeout(chartLoop, chartMs); };
+    REFRESH.charts().then(done, done);
+  })();
   setInterval(function () { REFRESH.bands(); }, 3000);
   setInterval(function () { REFRESH.margin(); }, 15000);
   setInterval(function () { REFRESH.fills(); REFRESH.trades(); }, 10000);

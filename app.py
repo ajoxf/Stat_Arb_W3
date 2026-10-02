@@ -1290,7 +1290,8 @@ def api_spread_series():
     return jsonify({'zscores': [p['z'] for p in pts],
                     'spreads': [p['spread'] for p in pts],
                     'mean': s.get('mean'),
-                    'entry_zscore': s.get('entry_zscore')})
+                    'entry_zscore': s.get('entry_zscore'),
+                    'sample_interval_sec': s.get('sample_interval_sec')})
 
 
 @app.route('/api/margin', methods=['GET'])
