@@ -542,13 +542,13 @@
   BUILD.signal = function (body) {
     body.innerHTML =
       '<div class="sides">' +
-      ' <div class="side sell"><div class="lbl">SELL SPREAD <small>Bid A − Ask B</small></div>' +
+      ' <div class="side sell"><div class="lbl">SELL SPREAD <span class="dir">H to L</span><small>Bid A − Ask B</small></div>' +
       '   <div class="px s-px">—</div>' +
       '   <div class="pxs"><div><span>Bid A</span><span class="s-p1">—</span></div>' +
       '   <div><span>Ask B</span><span class="s-p2">—</span></div></div>' +
       '   <div class="zl">Z-SCORE</div><div class="z s-z">—</div>' +
       '   <div class="en s-en"></div><div class="en">short entry · long exit</div></div>' +
-      ' <div class="side buy"><div class="lbl">BUY SPREAD <small>Ask A − Bid B</small></div>' +
+      ' <div class="side buy"><div class="lbl">BUY SPREAD <span class="dir">L to H</span><small>Ask A − Bid B</small></div>' +
       '   <div class="px b-px">—</div>' +
       '   <div class="pxs"><div><span>Ask A</span><span class="b-p1">—</span></div>' +
       '   <div><span>Bid B</span><span class="b-p2">—</span></div></div>' +
