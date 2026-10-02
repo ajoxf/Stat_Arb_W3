@@ -145,37 +145,45 @@
                 </span>
             </div>
             <div class="card-body py-2">
-                <div class="row align-items-center">
-                    <div class="col-4 text-center">
-                        <div id="sell-spread-tile" class="p-2 rounded" style="border: 2px solid transparent;"
+                <div class="row align-items-stretch g-2">
+                    <div class="col-4">
+                        <div id="sell-spread-tile" class="p-2 rounded h-100 text-center d-flex flex-column" style="border: 2px solid transparent;"
                              title="What SELLING the spread gets NOW: sell Leg A at its bid, buy Leg B at its ask. The algo SHORTS the spread when this price's z reaches +entry, and closes a LONG here.">
-                            <div class="text-secondary mb-1" style="font-size:0.68rem; letter-spacing:0.04em;">
-                                <strong>SELL SPREAD</strong> <span>Bid A − Ask B</span></div>
+                            <div class="text-secondary fw-bold" style="font-size:0.7rem; letter-spacing:0.04em;">SELL SPREAD</div>
+                            <div class="text-secondary mb-1" style="font-size:0.65rem; white-space:nowrap;">Bid A − Ask B</div>
                             <div class="font-monospace fw-bold text-danger" id="sell-spread-value" style="font-size:1.7rem; line-height:1.1;">&mdash;</div>
+                            <div class="font-monospace mt-1 mx-auto w-100" style="font-size:0.72rem; line-height:1.35; max-width:170px;">
+                                <div class="d-flex justify-content-between"><span class="text-secondary">Bid A</span><span id="sell-px-1">&mdash;</span></div>
+                                <div class="d-flex justify-content-between"><span class="text-secondary">Ask B</span><span id="sell-px-2">&mdash;</span></div>
+                            </div>
                             <div class="mt-2 pt-1" style="border-top:1px solid var(--bs-border-color);">
                                 <div class="text-secondary" style="font-size:0.6rem; letter-spacing:0.04em;">Z-SCORE</div>
                                 <div class="font-monospace fw-bold" id="sell-spread-z" style="font-size:1.4rem; line-height:1.1;">&mdash;</div>
                                 <div class="text-secondary font-monospace" id="sell-spread-entry" style="font-size:0.65rem;"></div>
                             </div>
-                            <div class="text-secondary" style="font-size:0.6rem;">short entry · long exit</div>
+                            <div class="text-secondary mt-auto" style="font-size:0.6rem;">short entry · long exit</div>
                         </div>
                     </div>
-                    <div class="col-4 text-center">
-                        <div id="buy-spread-tile" class="p-2 rounded" style="border: 2px solid transparent;"
+                    <div class="col-4">
+                        <div id="buy-spread-tile" class="p-2 rounded h-100 text-center d-flex flex-column" style="border: 2px solid transparent;"
                              title="What BUYING the spread costs NOW: buy Leg A at its ask, sell Leg B at its bid. The algo goes LONG the spread when this price's z reaches −entry, and closes a SHORT here.">
-                            <div class="text-secondary mb-1" style="font-size:0.68rem; letter-spacing:0.04em;">
-                                <strong>BUY SPREAD</strong> <span>Ask A − Bid B</span></div>
+                            <div class="text-secondary fw-bold" style="font-size:0.7rem; letter-spacing:0.04em;">BUY SPREAD</div>
+                            <div class="text-secondary mb-1" style="font-size:0.65rem; white-space:nowrap;">Ask A − Bid B</div>
                             <div class="font-monospace fw-bold text-success" id="buy-spread-value" style="font-size:1.7rem; line-height:1.1;">&mdash;</div>
+                            <div class="font-monospace mt-1 mx-auto w-100" style="font-size:0.72rem; line-height:1.35; max-width:170px;">
+                                <div class="d-flex justify-content-between"><span class="text-secondary">Ask A</span><span id="buy-px-1">&mdash;</span></div>
+                                <div class="d-flex justify-content-between"><span class="text-secondary">Bid B</span><span id="buy-px-2">&mdash;</span></div>
+                            </div>
                             <div class="mt-2 pt-1" style="border-top:1px solid var(--bs-border-color);">
                                 <div class="text-secondary" style="font-size:0.6rem; letter-spacing:0.04em;">Z-SCORE</div>
                                 <div class="font-monospace fw-bold" id="buy-spread-z" style="font-size:1.4rem; line-height:1.1;">&mdash;</div>
                                 <div class="text-secondary font-monospace" id="buy-spread-entry" style="font-size:0.65rem;"></div>
                             </div>
-                            <div class="text-secondary" style="font-size:0.6rem;">long entry · short exit</div>
+                            <div class="text-secondary mt-auto" style="font-size:0.6rem;">long entry · short exit</div>
                         </div>
                     </div>
-                    <div class="col-4 text-center">
-                        <div id="position-badge" class="badge bg-secondary" style="font-size:1.1rem; padding:0.4rem 0.8rem;">FLAT</div>
+                    <div class="col-4 text-center d-flex flex-column justify-content-center">
+                        <div><div id="position-badge" class="badge bg-secondary" style="font-size:1.1rem; padding:0.4rem 0.8rem;">FLAT</div></div>
                         <div class="text-secondary mt-1" style="font-size:0.7rem;">Position <span id="position-owner" class="badge bg-light text-dark" style="font-size:0.6rem;"></span></div>
                         <div id="position-pnl" class="font-monospace fw-bold mt-1" style="font-size:1.2rem;"></div>
                     </div>
@@ -218,7 +226,7 @@
                 <span id="cb-src" class="badge bg-secondary" style="font-size:0.62rem;"></span>
             </div>
             <div class="card-body py-2">
-                <canvas id="candleBandChart" height="140"></canvas>
+                <div class="chart-box" style="position: relative; height: 260px; min-width: 0;"><canvas id="candleBandChart"></canvas></div>
                 <div id="cb-note" class="text-secondary mt-1" style="font-size:0.66rem;"></div>
             </div>
         </div>
@@ -226,13 +234,13 @@
         <!-- Z-Score chart -->
         <div class="card mb-3">
             <div class="card-header py-1"><small><i class="bi bi-activity me-2"></i>Z-Score History</small></div>
-            <div class="card-body py-2"><canvas id="zscoreChart" height="130"></canvas></div>
+            <div class="card-body py-2"><div class="chart-box" style="position: relative; height: 240px; min-width: 0;"><canvas id="zscoreChart"></canvas></div></div>
         </div>
 
         <!-- Spread chart -->
         <div class="card mb-3">
             <div class="card-header py-1"><small><i class="bi bi-graph-up me-2"></i>Spread History <span class="text-secondary">(Leg A − Leg B)</span></small></div>
-            <div class="card-body py-2"><canvas id="spreadChart" height="100"></canvas></div>
+            <div class="card-body py-2"><div class="chart-box" style="position: relative; height: 180px; min-width: 0;"><canvas id="spreadChart"></canvas></div></div>
         </div>
     </div>
 
@@ -770,6 +778,11 @@ async function pollSignal() {
     }
 
     // Sell / Buy spread tiles — each on its own executable z.
+    // The two prices each executable spread is built from.
+    document.getElementById('sell-px-1').textContent = fmt(data.bid_a);
+    document.getElementById('sell-px-2').textContent = fmt(data.ask_b);
+    document.getElementById('buy-px-1').textContent = fmt(data.ask_a);
+    document.getElementById('buy-px-2').textContent = fmt(data.bid_b);
     renderSide('sell', data.sell_spread, data.z_sell,
                data.z_sell != null && data.z_sell >= ENTRY_Z, '+');
     renderSide('buy', data.buy_spread, data.z_buy,
@@ -995,7 +1008,7 @@ const zscoreChart = new Chart(document.getElementById('zscoreChart'), {
         { label: '+entry', data: [], borderColor: '#dc3545', borderWidth: 1, borderDash: [4,4], pointRadius: 0 },
         { label: '−entry', data: [], borderColor: '#198754', borderWidth: 1, borderDash: [4,4], pointRadius: 0 },
     ]},
-    options: { animation: false, plugins: { legend: { display: false } },
+    options: { animation: false, maintainAspectRatio: false, plugins: { legend: { display: false } },
                scales: { x: { display: false }, y: { ticks: { font: { size: 9 } } } } }
 });
 const spreadChart = new Chart(document.getElementById('spreadChart'), {
@@ -1004,7 +1017,7 @@ const spreadChart = new Chart(document.getElementById('spreadChart'), {
         { label: 'spread', data: [], borderColor: '#6610f2', borderWidth: 1.5, pointRadius: 0, tension: 0.2 },
         { label: 'mean', data: [], borderColor: '#6c757d', borderWidth: 1, borderDash: [4,4], pointRadius: 0 },
     ]},
-    options: { animation: false, plugins: { legend: { display: false } },
+    options: { animation: false, maintainAspectRatio: false, plugins: { legend: { display: false } },
                scales: { x: { display: false }, y: { ticks: { font: { size: 9 } } } } }
 });
 
@@ -1028,7 +1041,7 @@ async function pollSeries() {
 // ─── candle bands (spread OHLC + TradingView BB, EMA basis) ─────────────────
 const candleChart = window.SpreadCandlesChart
     ? new Chart(document.getElementById('candleBandChart'),
-                SpreadCandlesChart.config({fontSize: 9, xTicks: 6}))
+                SpreadCandlesChart.config({fontSize: 9, xTicks: 6, maintainAspectRatio: false}))
     : null;
 
 async function pollCandles() {

@@ -66,6 +66,10 @@ class SignalEngine:
 
         # (timestamp, leg_a, leg_b, spread)
         self._samples: Deque[Tuple[float, float, float, float]] = deque()
+        # z of each sample AS OF the moment it was taken, aligned to the TAIL of
+        # _samples (restored samples have none). The chart draws these so past
+        # points hold still instead of being re-scored against today's mean.
+        self._z_hist: Deque[float] = deque()
         self._lock = threading.RLock()
 
         self._thread: Optional[threading.Thread] = None
@@ -154,6 +158,7 @@ class SignalEngine:
     def reset(self) -> None:
         with self._lock:
             self._samples.clear()
+            self._z_hist.clear()
             self._stats_cache = None
             self._reset_exc_state()
             self._clear_persisted()
@@ -280,6 +285,7 @@ class SignalEngine:
             logger.info("SignalEngine: hedge ratio changed %s → %s — window reset",
                         self._k_last, k)
             self._samples.clear()
+            self._z_hist.clear()
             self._stats_cache = None
             self._reset_exc_state()
         self._k_last = k
@@ -293,11 +299,13 @@ class SignalEngine:
         k = self._p().get("hedge_ratio", 1.0) or 1.0
         spread = k * float(la) - float(lb)
         window_sec = self._p()["window_minutes"] * 60.0
+        band = self._candle_band(k)
         with self._lock:
             self._check_hedge_ratio(k)
             self._samples.append((now, float(la), float(lb), spread))
             self._trim(now, window_sec)
-            self._update_excursions_locked(now)
+            stats = self._update_excursions_locked(now)
+            self._z_hist.append(self._point_z(spread, band, stats))
         self._feed_candles(now, la, lb)
 
     def _feed_candles(self, now: float, la: float, lb: float) -> None:
@@ -318,25 +326,50 @@ class SignalEngine:
         """Inject a sample directly (used by tests)."""
         ts = time.time() if ts is None else ts
         k = self._p().get("hedge_ratio", 1.0) or 1.0
+        spread = k * float(leg_a) - float(leg_b)
+        band = self._candle_band(k)
         with self._lock:
             self._check_hedge_ratio(k)
-            self._samples.append((ts, float(leg_a), float(leg_b),
-                                  k * float(leg_a) - float(leg_b)))
+            self._samples.append((ts, float(leg_a), float(leg_b), spread))
             self._trim(ts, self._p()["window_minutes"] * 60.0)
-            self._update_excursions_locked(ts)
+            stats = self._update_excursions_locked(ts)
+            self._z_hist.append(self._point_z(spread, band, stats))
 
-    def _update_excursions_locked(self, ts: Optional[float] = None) -> None:
+    def _candle_band(self, k: float) -> Optional[Tuple[float, float]]:
+        """(mean, std) of the candle bands when they are the band source
+        ((0, 0) until they are ready), else None for the tick window."""
+        src, tf, n_len = self._band_params()
+        if src != "candles" or self.candles is None:
+            return None
+        try:
+            b = self.candles.bands(tf, n_len, k)
+        except Exception:
+            return 0.0, 0.0
+        return (float(b["mean"]), float(b["std"])) if b.get("ready") else (0.0, 0.0)
+
+    @staticmethod
+    def _point_z(spread: float, band: Optional[Tuple[float, float]],
+                 stats: Optional[Tuple[float, float]]) -> float:
+        mean, std = band if band is not None else (stats or (0.0, 0.0))
+        return (spread - mean) / std if std > 1e-12 else 0.0
+
+    def _update_excursions_locked(self, ts: Optional[float] = None
+                                  ) -> Optional[Tuple[float, float]]:
+        """Tally the newest sample's z; returns the tick window's (mean, std)."""
         if len(self._samples) < 2:
-            return
+            return None
         spreads = [s[3] for s in self._samples]
         mean, std = self.compute_stats(spreads)
         if std <= 1e-12:
-            return
+            return None
         self._tally_z((spreads[-1] - mean) / std, ts)
+        return mean, std
 
     def _trim(self, now: float, window_sec: float) -> None:
         while self._samples and (now - self._samples[0][0]) > window_sec:
             self._samples.popleft()
+        while len(self._z_hist) > len(self._samples):
+            self._z_hist.popleft()
 
     # ── window persistence (resume warm-up across a quick restart) ───────────
     def _series_key(self) -> str:
@@ -432,6 +465,7 @@ class SignalEngine:
             return
         with self._lock:
             self._samples = deque(kept)
+            self._z_hist.clear()
             self._stats_cache = None
             self._k_last = k_now
             self._reset_exc_state()
@@ -642,20 +676,18 @@ class SignalEngine:
 
     def get_series(self, max_points: int = 200, last_sec: Optional[float] = None) -> Dict:
         """Recent spread + per-sample z series for the dashboard charts,
-        downsampled to at most ``max_points``. z is computed against the
-        window's CURRENT (cached) mean/std so the chart matches the traded z."""
+        downsampled to about ``max_points``. Each point's z is the one recorded
+        when it was sampled (a restored sample without one is scored against
+        the current mean/std), so drawn history holds still."""
         with self._lock:
             samples = list(self._samples)
+            zs = list(self._z_hist)
         if not samples:
             return {"points": [], "spread_min": None, "spread_max": None,
                     "entry_zscore": self._p()["entry_zscore"],
                     "stop_zscore": self._p()["stop_zscore"]}
 
         spreads = [s[3] for s in samples]
-        if last_sec and last_sec > 0:
-            cut = samples[-1][0] - float(last_sec)
-            recent = [x for x in samples if x[0] >= cut]
-            samples = recent or samples[-1:]
         cache = self._stats_cache
         if cache is not None:
             mean, std = cache[0], cache[1]
@@ -666,22 +698,42 @@ class SignalEngine:
             b = self.candles.bands(tf, n_len, self._p().get("hedge_ratio", 1.0) or 1.0)
             mean, std = (b["mean"], b["std"]) if b.get("ready") else (mean, 0.0)
         sd = std if std > 1e-12 else 0.0
+        off = len(samples) - len(zs)              # leading samples with no recorded z
 
-        # Evenly spaced picks, first and last included, so the point count is
-        # exactly min(len, max_points). An integer stride (len // max_points)
-        # made the count saw between max_points and ~1.5× it as the window
-        # grew, squeezing the chart sideways and snapping it back each time
-        # the stride stepped up.
-        n, m = len(samples), max(2, int(max_points))
+        first = 0
+        if last_sec and last_sec > 0:
+            cut = samples[-1][0] - float(last_sec)
+            first = next((i for i, x in enumerate(samples) if x[0] >= cut),
+                         len(samples) - 1)
+
+        # Downsample on FIXED time buckets (the last sample of each), so a
+        # point already drawn never changes as the window slides. The bucket
+        # width only doubles as history grows, so the line re-flows a handful
+        # of times during warm-up and then holds.
+        n, m = len(samples) - first, max(2, int(max_points))
         if n <= m:
-            idx = range(n)
+            idx = list(range(first, len(samples)))
         else:
-            idx = sorted({round(j * (n - 1) / (m - 1)) for j in range(m)})
+            span = samples[-1][0] - samples[first][0]
+            w = max(0.05, float(self._p()["sample_interval_sec"]))
+            while span / w > m - 2:
+                w *= 2.0
+            idx = []
+            for i in range(first, len(samples)):
+                bkt = int(samples[i][0] // w)
+                if idx and int(samples[idx[-1]][0] // w) == bkt:
+                    idx[-1] = i
+                else:
+                    idx.append(i)
         points = []
         for i in idx:
             sp = samples[i][3]
+            if i >= off:
+                z = zs[i - off]
+            else:
+                z = (sp - mean) / sd if sd else 0.0
             points.append({"t": round(samples[i][0], 1), "spread": round(sp, 4),
-                           "z": round((sp - mean) / sd, 4) if sd else 0.0})
+                           "z": round(z, 4)})
 
         return {
             "points": points,
