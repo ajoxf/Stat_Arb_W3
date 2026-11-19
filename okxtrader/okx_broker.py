@@ -85,6 +85,30 @@ def _levels(row):
     return out or None
 
 
+#: The levels behind the pushed five are re-read this often, and not
+#: believed once older than DEEP_STALE_SEC.
+DEEP_EVERY_SEC = 1.0
+DEEP_STALE_SEC = 5.0
+
+
+def _deepen(top, deep):
+    """The pushed top-of-book, with the REST book's levels BEHIND it
+    on each side. The pushed levels win where both have a price: they
+    are the fresher; the REST book only adds what lies further out."""
+    if not top or not deep:
+        return top
+    out = list(top)
+    asks = [l['price'] for l in top if l['type'] == 'ask']
+    bids = [l['price'] for l in top if l['type'] == 'bid']
+    for level in deep:
+        if level['type'] == 'ask' and (not asks or level['price'] > max(asks)):
+            out.append(level)
+        elif level['type'] == 'bid' and (not bids
+                                         or level['price'] < min(bids)):
+            out.append(level)
+    return out
+
+
 def _f(value, default=None):
     try:
         if value in (None, ''):
@@ -157,6 +181,17 @@ class OKXBroker:
         self._watched = set()
         self._row_cache = {}                   # instId -> (at, row)
         self._book_watched = set()             # books the desk shows
+        #: How many levels a side the ladder's depth reads. OKX's REST
+        #: book goes to 400; its WebSocket books5 to five, which at
+        #: BTC's 0.1 tick is less than one ladder row. OKX_BOOK_DEPTH
+        #: changes it (5 = the pushed top only).
+        try:
+            self.book_levels = max(1, min(400, int(os.environ.get(
+                'OKX_BOOK_DEPTH', '400'))))
+        except ValueError:
+            self.book_levels = 400
+        self._deep_cache = {}                  # instId -> (at, levels)
+        self._deep_thread = None
         #: Parallel fetches go over HTTP; an in-process transport (the
         #: simulator in tests) is read one at a time.
         self.parallel = self.client.transport is None
@@ -255,6 +290,10 @@ class OKXBroker:
             return
         from .okx_ws import PriceStream
         self.stream = PriceStream(url)
+        if self.book_levels > 5 and self._deep_thread is None:
+            self._deep_thread = threading.Thread(
+                target=self._deep_loop, daemon=True, name='okx-deep-book')
+            self._deep_thread.start()
         self.stream.watch(self._watched)
         self.stream.start()
 
@@ -488,7 +527,9 @@ class OKXBroker:
         if self.stream is not None:
             row = self.stream.book(symbol)
             if row is not None:
-                return _levels(row)
+                deep = self._deep_cache.get(symbol)
+                fresh = deep and time.time() - deep[0] < DEEP_STALE_SEC
+                return _deepen(_levels(row), deep[1] if fresh else None)
         now = time.time()
         cached = self._book_cache.get(symbol)
         if cached and now - cached[0] < 0.5:
@@ -500,7 +541,8 @@ class OKXBroker:
         def one(sym):
             try:
                 rows = self.client.get('/api/v5/market/books',
-                                       {'instId': sym, 'sz': '5'})
+                                       {'instId': sym,
+                                        'sz': str(self.book_levels)})
                 return sym, (_levels(rows[0]) if rows else None)
             except OKXError:
                 return sym, None
@@ -516,6 +558,29 @@ class OKXBroker:
             self._book_cache[sym] = (at, levels)
         cached = self._book_cache.get(symbol)
         return cached[1] if cached else None
+
+    def _deep_loop(self):
+        """With the WebSocket carrying the top five levels, the levels
+        BEHIND them come from REST - read here, off the trading loop,
+        about once a second, every book the desk shows at once."""
+        from concurrent.futures import ThreadPoolExecutor
+
+        def one(sym):
+            try:
+                rows = self.client.get('/api/v5/market/books',
+                                       {'instId': sym,
+                                        'sz': str(self.book_levels)})
+                return sym, (_levels(rows[0]) if rows else None)
+            except Exception:
+                return sym, None
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            while True:
+                due = sorted(self._book_watched)
+                if due:
+                    for sym, levels in ex.map(one, due):
+                        if levels:
+                            self._deep_cache[sym] = (time.time(), levels)
+                time.sleep(DEEP_EVERY_SEC)
 
     def rates(self, symbol, timeframe_min, count):
         """The last `count` bars, oldest first, the forming one last; or

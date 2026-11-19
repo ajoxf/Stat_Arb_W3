@@ -4068,33 +4068,41 @@
       return '';
     }
     var spread = b - beta * a;
-    var html = '<div class="spread-math">' +
-      '<div><b>spread</b> = B \u2212 \u03b2 \u00d7 A (mid prices)</div>' +
-      '<div class="sm-num">= ' + fmt(b, 4) + ' \u2212 ' + beta + ' \u00d7 ' +
-      fmt(a, 4) + ' = <b>' + fmt(spread, 4) + '</b></div>';
-    var ratio = b / a;
-    var betaDrift = beta ? (ratio / beta - 1) * 100 : null;
+    // Coins, not letters: ETH-USDT-SWAP -> ETH.
+    function coin(symbol) { return String(symbol || '?').split('-')[0]; }
+    function two(x) {
+      return x.toLocaleString(undefined, {minimumFractionDigits: 2,
+                                          maximumFractionDigits: 2});
+    }
+    function signed2(x) { return (x >= 0 ? '+' : '\u2212') + two(Math.abs(x)); }
+    // Line 1: the sum, with today's prices, that a calculator agrees with.
+    var html = '<div class="spread-math" title="The spread is leg B minus ' +
+      '\u03b2 times leg A, at the middle of each leg\u2019s bid and ask">' +
+      '<div>Spread <b>' + signed2(spread) + '</b> = ' + coin(row.symbol_b) +
+      ' ' + two(b) + ' \u2212 ' + beta + ' \u00d7 ' + coin(row.symbol_a) +
+      ' ' + two(a) + '</div>';
+    // Line 2: how far it has moved without anyone trading.
+    var bits = [];
+    var betaDrift = beta ? ((b / a) / beta - 1) * 100 : null;
+    var big = betaDrift !== null && isFinite(betaDrift) &&
+      Math.abs(betaDrift) >= 5;
     if (betaDrift !== null && isFinite(betaDrift)) {
-      var big = Math.abs(betaDrift) >= 5;
-      html += '<div' + (big ? ' class="sm-warn"' : '') + ' title="' +
-        'The legs\u2019 price ratio B \u00f7 A now, against the \u03b2 the ' +
-        'spread uses. Beyond about 5% the spread starts to follow one ' +
-        'leg\u2019s own price; re-read \u03b2 in Pairs > Edit.">' +
-        '\u03b2 ' + beta + ' \u00b7 B\u00f7A now ' + ratio.toFixed(6) +
-        ' \u00b7 \u03b2 drift ' + (betaDrift >= 0 ? '+' : '') +
-        betaDrift.toFixed(2) + '%' + (big ? ' \u2014 re-read \u03b2' : '') +
-        '</div>';
+      bits.push('<span' + (big ? ' class="sm-warn"' : '') + ' title="How ' +
+        'far ' + coin(row.symbol_b) + '\u00f7' + coin(row.symbol_a) +
+        ' is now (' + (b / a).toFixed(6) + ') from \u03b2. Past 5% the ' +
+        'spread starts to follow one coin\u2019s own price: fix \u03b2 in ' +
+        'Pairs > Edit.">\u03b2 drift ' + (betaDrift >= 0 ? '+' : '\u2212') +
+        Math.abs(betaDrift).toFixed(1) + '%' +
+        (big ? ' \u2014 fix \u03b2 in Pairs' : '') + '</span>');
     }
     var session = market.session || {};
     if (session.source === '24h' && session.open !== null &&
         session.open !== undefined) {
-      var moved = spread - session.open;
-      html += '<div title="The spread 24 hours ago, from both legs\u2019 ' +
-        '5-minute closes at this \u03b2">24h drift ' +
-        (moved >= 0 ? '+' : '') + fmt(moved, 4) + ' (from ' +
-        fmt(session.open, 4) + ', range ' + fmt(session.low, 4) + ' to ' +
-        fmt(session.high, 4) + ')</div>';
+      bits.push('<span title="The spread 24 hours ago was ' +
+        two(session.open) + '">24h ' + signed2(spread - session.open) +
+        '</span>');
     }
+    if (bits.length) { html += '<div>' + bits.join(' \u00b7 ') + '</div>'; }
     return html + '</div>';
   }
 
@@ -4133,6 +4141,10 @@
     // Nothing to announce on the first draw, or when only some other
     // cell in the row changed.
     if (was === undefined || was === now) { return; }
+    // Only the TOUCH flashes. With OKX's full book every row's size
+    // moves every second, and a whole column flashing pale is a column
+    // nobody can read (it was: white figures on a pale band).
+    if (!cell.classList.contains('has-qty')) { return; }
     cell.classList.remove('ticked');
     void cell.offsetWidth;                    // restart the animation
     cell.classList.add('ticked');

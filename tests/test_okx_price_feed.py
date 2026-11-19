@@ -188,3 +188,50 @@ def test_a_pushed_book_is_the_ladders_depth(broker):
         {'type': 'ask', 'price': 61000.5, 'volume': 12.0},
         {'type': 'bid', 'price': 61000.4, 'volume': 7.0}]
     assert calls == []
+
+
+def test_the_pushed_five_are_deepened_by_the_rest_book_behind_them(broker):
+    """books5 is five levels: at BTC's 0.1 tick, less than one ladder
+    row. The REST book's levels further out are added BEHIND them; where
+    both have a price the pushed one wins, being the fresher."""
+    b, sim = broker
+    b.stream = connected_stream(time.time)
+    b.depth('BTC-USDT-SWAP')
+    b.stream.on_message(json.dumps({
+        'arg': {'channel': 'books5', 'instId': 'BTC-USDT-SWAP'},
+        'data': [{'asks': [['100.5', '12', '0', '3']],
+                  'bids': [['100.4', '7', '0', '2']], 'ts': '1'}]}))
+    b._deep_cache['BTC-USDT-SWAP'] = (time.time(), [
+        {'type': 'ask', 'price': 100.5, 'volume': 99.0},   # stale copy
+        {'type': 'ask', 'price': 100.9, 'volume': 30.0},
+        {'type': 'bid', 'price': 100.4, 'volume': 99.0},
+        {'type': 'bid', 'price': 99.8, 'volume': 40.0}])
+    book = b.depth('BTC-USDT-SWAP')
+    assert {'type': 'ask', 'price': 100.5, 'volume': 12.0} in book
+    assert {'type': 'ask', 'price': 100.9, 'volume': 30.0} in book
+    assert {'type': 'bid', 'price': 99.8, 'volume': 40.0} in book
+    assert len(book) == 4                               # 99s dropped
+
+
+def test_CONTROL_a_stale_rest_book_is_not_added(broker):
+    b, sim = broker
+    b.stream = connected_stream(time.time)
+    b.depth('BTC-USDT-SWAP')
+    b.stream.on_message(json.dumps({
+        'arg': {'channel': 'books5', 'instId': 'BTC-USDT-SWAP'},
+        'data': [{'asks': [['100.5', '12', '0', '3']],
+                  'bids': [['100.4', '7', '0', '2']], 'ts': '1'}]}))
+    b._deep_cache['BTC-USDT-SWAP'] = (time.time() - 60, [
+        {'type': 'ask', 'price': 100.9, 'volume': 30.0}])
+    assert len(b.depth('BTC-USDT-SWAP')) == 2
+
+
+def test_the_rest_book_asks_okx_for_400_levels(broker):
+    b, sim = broker
+    asked = []
+    real = b.client.transport
+    b.client.transport = lambda m, p, params=None, body=None: (
+        asked.append((p, dict(params or {}))) or real(m, p, params, body))
+    b.depth('ETH-USDT-SWAP')
+    books = [q for p, q in asked if p == '/api/v5/market/books']
+    assert books and books[0]['sz'] == '400'
