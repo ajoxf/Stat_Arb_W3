@@ -2307,7 +2307,11 @@
             var vip = (live.fee_commission || {})[entry[3]];
             seed = undefined;
             input.placeholder = vip === undefined || vip === null
-              ? 'OKX fees' : 'OKX VIP ' + Number(vip).toFixed(4);
+              ? 'OKX fees' : Number(vip).toFixed(4) + ' OKX';
+            input.title = 'Blank: the commission per lot per side at your ' +
+              'OKX VIP fees' + (vip === undefined || vip === null ? ''
+                : ' (' + Number(vip).toFixed(4) + ' USDT)') +
+              ', re-read hourly. Type a number only to override it.';
           }
           var value = (own === undefined || own === null || own === '')
             ? seed : own;
@@ -2389,14 +2393,19 @@
       return (symbol || '') + ' set to ' + fmt(used, 2) +
         ', OKX says ' + fmt(fromMt5, 2);
     }
-    function inUnits(lots, contract) {
-      return contract ? ' = ' + fmt(lots * contract, 2) + ' units' : '';
+    function inUnits(lots, contract, symbol) {
+      // Coins, not lots: 0.1 lot of BTC is 0.001 BTC, and two decimals
+      // printed that as 0.00. Four significant figures, whatever size.
+      if (!contract) { return ''; }
+      var units = lots * contract;
+      return ' = ' + (units ? String(Number(units.toPrecision(4))) : '0') +
+        ' ' + String(symbol || '').split('-')[0];
     }
     note.textContent =
       'In force: 1 Qty = ' + fmt(lotsA, 2) + ' lots ' +
-      (live.symbol_a || 'A') + inUnits(lotsA, live.contract_a) +
+      (live.symbol_a || 'A') + inUnits(lotsA, live.contract_a, live.symbol_a) +
       ' / ' + fmt(lotsB, 2) + ' lots ' +
-      (live.symbol_b || 'B') + inUnits(lotsB, live.contract_b) +
+      (live.symbol_b || 'B') + inUnits(lotsB, live.contract_b, live.symbol_b) +
       (perQty ? ' — ' + money(perQty) + ' per 1.00 of spread' : '') +
       '. Qty ' + fmt(qty, 2) + ' sends ' + fmt(lotsA * qty, 2) + ' / ' +
       fmt(lotsB * qty, 2) + ' lots' +
