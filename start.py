@@ -91,7 +91,8 @@ def engine_fingerprint(config_path):
     accounts = {
         name: {key: (account or {}).get(key)
                for key in ('endpoint', 'login', 'server', 'terminal_path',
-                           'password_env')}
+                           'password_env', 'exchange', 'demo', 'api_key_env',
+                           'secret_env', 'passphrase_env', 'base_url')}
         for name, account in (raw.get('accounts') or {}).items()}
     pairs = {
         key: {field: (pair or {}).get(field)
@@ -484,14 +485,19 @@ class Engine:
             Child(f'leg:{name}',
                   [sys.executable, 'run_leg.py',
                    '--config', self.args.config, '--account', name])
-            for name, account in config.accounts.items() if account.endpoint]
-        if not self.children:
+            for name, account in config.accounts.items()
+            if account.endpoint and not account.is_okx]
+        # An OKX account has no runner: the coordinator reaches it over
+        # its API itself. The engine runs when there is either.
+        has_okx = any(a.is_okx for a in config.accounts.values())
+        if not self.children and not has_okx:
             return
         for child in self.children:
             child.start()
         # The coordinator last: connecting to a runner that has not
         # bound its port yet is a retry loop nobody needs to watch.
-        time.sleep(2.0)
+        if self.children:
+            time.sleep(2.0)
         coordinator = Child('coordinator',
                             [sys.executable, 'run_coordinator.py',
                              '--config', self.args.config,

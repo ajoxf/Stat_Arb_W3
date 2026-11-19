@@ -357,27 +357,83 @@ STRUCTURAL_SETTINGS = ('POLL_INTERVAL_SEC',)
 
 
 class AccountConfig:
-    """One MT5 account = one login, one terminal, one port.
+    """One trading account.
 
-    Two accounts pointing at the same terminal folder are ONE account
-    whatever the config says — a terminal holds a single login.
+    ``exchange == 'okx'`` (the default for a new account): one OKX
+    account, demo or live, reached over its API with a key, secret and
+    passphrase that live in `.env` — the account row holds only the
+    NAMES of those keys. One OKX account carries both legs of a spread
+    (spot and the perp, or two perps): that is the normal case on a
+    crypto exchange, not a clash.
+
+    ``exchange == 'mt5'``: Mirror's original MetaTrader 5 account — one
+    login, one terminal, one leg-runner port. Kept so the engine and its
+    tests are unchanged; this desk trades OKX.
     """
 
+    #: The keys the Stat_Arb_W3 desk already used, so an existing `.env`
+    #: works as it is for the first OKX account.
+    W3_KEYS = ('OKX_API_KEY', 'OKX_SECRET_KEY', 'OKX_PASSPHRASE')
+
     def __init__(self, name, terminal_path=None, login=None,
-                 password_env="", server=None, endpoint=None):
+                 password_env="", server=None, endpoint=None,
+                 exchange=None, demo=None, api_key_env=None,
+                 secret_env=None, passphrase_env=None, base_url=None):
         self.name = name
+        # An account with MT5 fields and no exchange named is Mirror's;
+        # anything else is OKX.
+        self.exchange = (exchange or ('mt5' if (terminal_path or login
+                                                 or endpoint) else 'okx'))
         self.terminal_path = terminal_path
         self.login = int(login) if login else None
         self.password_env = password_env or env_key_for(name)
         self.server = server
-        #: host:port where this account's leg runner listens.
+        #: host:port where this account's leg runner listens (MT5 only).
         self.endpoint = endpoint
+        keys = okx_env_keys(name)
+        self.api_key_env = api_key_env or keys[0]
+        self.secret_env = secret_env or keys[1]
+        self.passphrase_env = passphrase_env or keys[2]
+        if demo is None:
+            demo = os.environ.get('OKX_DEMO_MODE', 'true').strip().lower() \
+                not in ('false', '0', 'no', 'live')
+        self.demo = bool(demo)
+        #: Only for the simulated exchange / a test host; blank = OKX.
+        self.base_url = base_url or None
+
+    @property
+    def is_okx(self):
+        return self.exchange == 'okx'
 
     @property
     def password(self):
         return os.environ.get(self.password_env) if self.password_env else None
 
+    @property
+    def api_key(self):
+        return os.environ.get(self.api_key_env, '')
+
+    @property
+    def api_secret(self):
+        return os.environ.get(self.secret_env, '')
+
+    @property
+    def api_passphrase(self):
+        return os.environ.get(self.passphrase_env, '')
+
+    @property
+    def has_api_key(self):
+        return bool(self.api_key and self.api_secret and self.api_passphrase)
+
     def to_dict(self):
+        if self.is_okx:
+            out = {'exchange': 'okx', 'demo': self.demo,
+                   'api_key_env': self.api_key_env,
+                   'secret_env': self.secret_env,
+                   'passphrase_env': self.passphrase_env}
+            if self.base_url:
+                out['base_url'] = self.base_url
+            return out
         return {'terminal_path': self.terminal_path, 'login': self.login,
                 'password_env': self.password_env, 'server': self.server,
                 'endpoint': self.endpoint}
@@ -392,7 +448,12 @@ class AccountConfig:
                        clean_terminal_path(raw.get('terminal_path')) or None),
                    login=raw.get('login'),
                    password_env=raw.get('password_env'),
-                   server=raw.get('server'), endpoint=raw.get('endpoint'))
+                   server=raw.get('server'), endpoint=raw.get('endpoint'),
+                   exchange=raw.get('exchange'), demo=raw.get('demo'),
+                   api_key_env=raw.get('api_key_env'),
+                   secret_env=raw.get('secret_env'),
+                   passphrase_env=raw.get('passphrase_env'),
+                   base_url=raw.get('base_url'))
 
 
 class PairConfig:
@@ -1161,6 +1222,13 @@ def engine_hold_reasons(raw):
     problems = []
     for name, account in (raw.get('accounts') or {}).items():
         account = account or {}
+        parsed = AccountConfig.from_dict(name, account)
+        if parsed.is_okx:
+            if not parsed.has_api_key and not parsed.base_url:
+                problems.append(
+                    f"account '{name}': no OKX API key saved — enter the "
+                    f"key, secret and passphrase on the Exchanges page")
+            continue
         endpoint = (account.get('endpoint') or '').strip()
         for problem in (endpoint_clash(raw, name, endpoint),
                         login_clash(raw, name, account.get('login')),
@@ -1200,6 +1268,18 @@ def env_key_for(account_name):
     slug = _ENV_SAFE.sub('_', (account_name or '').upper().strip())
     slug = re.sub(r'_+', '_', slug).strip('_') or 'ACCOUNT'
     return f'MT5_PASSWORD_{slug}'
+
+
+def okx_env_keys(account_name):
+    """The three .env keys holding an OKX account's API key, secret and
+    passphrase. The account named `okx` uses Stat_Arb_W3's own keys so an
+    existing `.env` keeps working; any other account gets its own."""
+    if (account_name or '').strip().lower() == 'okx':
+        return AccountConfig.W3_KEYS
+    slug = _ENV_SAFE.sub('_', (account_name or '').upper().strip())
+    slug = re.sub(r'_+', '_', slug).strip('_') or 'ACCOUNT'
+    return (f'OKX_API_KEY_{slug}', f'OKX_SECRET_KEY_{slug}',
+            f'OKX_PASSPHRASE_{slug}')
 
 
 def env_line(key, value):

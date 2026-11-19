@@ -18,7 +18,7 @@ from okxtrader.config import TraderConfig
 from okxtrader.coordinator import Coordinator
 from okxtrader.database import Store
 from okxtrader import logsetup
-from okxtrader.legs import RemoteLeg
+from okxtrader.legs import LocalLeg, RemoteLeg
 from okxtrader.shutdown import should_close
 
 
@@ -33,6 +33,11 @@ def build_legs(config, retries=3, delay=1.0):
     """
     legs = {}
     for name, account in config.accounts.items():
+        if account.is_okx:
+            leg = okx_leg(account)
+            if leg is not None:
+                legs[name] = leg
+            continue
         if not account.endpoint:
             logging.error(
                 "account '%s' has no endpoint — give it one (e.g. "
@@ -42,6 +47,22 @@ def build_legs(config, retries=3, delay=1.0):
         if leg.connect(retries=retries, delay=delay):
             legs[name] = leg
     return legs
+
+
+def okx_leg(account):
+    """An OKX account is reached over its API, in this process: no leg
+    runner, no terminal. One leg object serves every pair routed to it.
+    None when OKX does not answer or refuses the key — retried later by
+    `leg_factory`, the same as a runner that is not up yet."""
+    from okxtrader.okx_broker import OKXBroker
+    leg = LocalLeg(OKXBroker(account))
+    if leg.connect():
+        logging.info("OKX account '%s' connected (%s)", account.name,
+                     'demo' if account.demo else 'LIVE')
+        return leg
+    logging.error("OKX account '%s' did not connect: %s", account.name,
+                  leg.broker.last_error or 'no answer')
+    return None
 
 
 def leg_factory(config):
@@ -54,6 +75,8 @@ def leg_factory(config):
     """
     def connect(name):
         account = config.accounts.get(name)
+        if account is not None and account.is_okx:
+            return okx_leg(account)
         if account is None or not account.endpoint:
             return None
         leg = RemoteLeg(name, account.endpoint)

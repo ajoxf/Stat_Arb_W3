@@ -180,7 +180,8 @@ def test_the_engine_spawns_a_runner_per_account_and_one_coordinator(
 def test_no_endpoint_anywhere_starts_nothing_and_is_not_a_crash(workdir,
                                                                 monkeypatch):
     (workdir / 'config.json').write_text(
-        json.dumps({'accounts': {'a': {}}, 'pairs': {}}), encoding='utf-8')
+        json.dumps({'accounts': {'a': {'exchange': 'mt5'}}, 'pairs': {}}),
+        encoding='utf-8')
     FakeChild.started = []
     monkeypatch.setattr(start, 'Child', FakeChild)
     engine = start.Engine(_args(workdir))
@@ -189,6 +190,24 @@ def test_no_endpoint_anywhere_starts_nothing_and_is_not_a_crash(workdir,
 
     assert engine.children == []
     assert FakeChild.started == []
+
+
+def test_an_okx_account_needs_no_runner_only_the_coordinator(workdir,
+                                                             monkeypatch):
+    """OKX is a REST API the coordinator talks to directly: there is no
+    terminal to host, so no leg runner — just the coordinator."""
+    (workdir / 'config.json').write_text(
+        json.dumps({'accounts': {'okx': {'exchange': 'okx'}}, 'pairs': {}}),
+        encoding='utf-8')
+    FakeChild.started = []
+    monkeypatch.setattr(start, 'Child', FakeChild)
+    monkeypatch.setattr(start.time, 'sleep', lambda seconds: None)
+    engine = start.Engine(_args(workdir))
+
+    engine.restart()
+
+    assert FakeChild.started == ['coordinator']
+    engine.stop('test')
 
 
 def _args(workdir):
