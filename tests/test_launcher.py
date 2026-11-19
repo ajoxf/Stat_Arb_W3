@@ -368,3 +368,24 @@ def test_the_launcher_says_when_it_is_the_one_opening_a_window():
     assert "print('[launcher] opening the screen now')" in source
     assert source.index('opening the screen now') < \
         source.index('appwindow.open_window(url)')
+
+
+def test_a_key_saved_in_env_lets_the_engine_start(workdir, monkeypatch):
+    """The launcher must read .env itself: the keys live there, and a
+    launcher that never looked held the engine for ever with the keys
+    sitting on disk (seen on a desk: 'no OKX API key saved' beside three
+    ticks saying saved)."""
+    for key in ('OKX_API_KEY', 'OKX_SECRET_KEY', 'OKX_PASSPHRASE'):
+        monkeypatch.delenv(key, raising=False)
+    (workdir / 'config.json').write_text(json.dumps({
+        'accounts': {'okx': {'exchange': 'okx', 'demo': True}},
+        'pairs': {}}), encoding='utf-8')
+    assert start.check_config('config.json')          # no key yet: held
+    (workdir / '.env').write_text(
+        'OKX_API_KEY="k"\nOKX_SECRET_KEY="s"\nOKX_PASSPHRASE="p"\n',
+        encoding='utf-8')
+    try:
+        assert start.check_config('config.json') == []
+    finally:
+        for key in ('OKX_API_KEY', 'OKX_SECRET_KEY', 'OKX_PASSPHRASE'):
+            os.environ.pop(key, None)

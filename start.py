@@ -111,6 +111,19 @@ def engine_fingerprint(config_path):
                        'env': env_digest}, sort_keys=True)
 
 
+def load_env(config_path):
+    """Load the .env beside `config_path` into this process, over what
+    is already set. Values are never printed."""
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return
+    env = os.path.join(os.path.dirname(os.path.abspath(config_path))
+                       or '.', '.env')
+    if os.path.exists(env):
+        load_dotenv(env, override=True)
+
+
 def check_config(path):
     """Refuse to start on a clash, and say which field to correct.
 
@@ -120,6 +133,12 @@ def check_config(path):
     problems = []
     if not path:
         return problems
+    # The keys live in .env, beside the config. Read FRESH each time,
+    # and over anything inherited: a key saved on the Exchanges page a
+    # moment ago is what the engine will use, so it is what decides
+    # whether the engine may start. Without this the launcher never saw
+    # a key at all and held the engine for ever.
+    load_env(path)
     try:
         with open(path, 'r', encoding='utf-8') as f:
             raw = json.load(f)
