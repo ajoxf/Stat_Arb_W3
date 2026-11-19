@@ -25,6 +25,9 @@ from . import hedgeratio, sizing
 PASS, WARN, FAIL, INFO = 'PASS', 'WARN', 'FAIL', 'INFO'
 _RANK = {PASS: 0, INFO: 0, WARN: 1, FAIL: 2}
 
+#: Dollars and the dollar stablecoins OKX quotes in: one money here.
+USD_LIKE = {'USD', 'USDT', 'USDC'}
+
 
 class Checklist:
     def __init__(self, clock=time.time):
@@ -225,6 +228,8 @@ def check_pair(checklist, pair, report_a, report_b,
     if price_a and price_b:
         spread = price_b - beta * price_a
         broken = hedgeratio.implausible(beta, price_a, price_b, spread)
+        suggested_now, _ = hedgeratio.suggest(pair.pair_type, price_a,
+                                              price_b)
         if broken is None:
             checklist.add(scope, 'Spread', PASS,
                           f'{spread:,.4f} = {price_b:,.4f} - {beta:g} x '
@@ -234,7 +239,12 @@ def check_pair(checklist, pair, report_a, report_b,
                           f'{spread:,.2f} is not a difference between '
                           f'{price_a:,.4f} and {price_b:,.4f} — with this '
                           f'beta the "spread" is really one leg\'s own price',
-                          ['Re-derive the hedge ratio for this pair'])
+                          [f'Open the pair, press "Read both legs from OKX" '
+                           f'and Save to take the suggested beta'
+                           + (f' ({suggested_now:g})' if suggested_now
+                              else ''),
+                           'The beta is stale: the two prices have moved '
+                           'a long way since it was set'])
 
     # The spread is `P_B - beta x P_A`. Subtracting one price from
     # another only means anything if the two are quoted in the SAME
@@ -258,7 +268,15 @@ def check_pair(checklist, pair, report_a, report_b,
                        'will not pretend to'])
     elif currency_a and currency_b:
         account = (account_currency or '').upper()
-        if account and account != currency_a:
+        if (account and account != currency_a
+                and {account, currency_a} <= USD_LIKE):
+            # OKX states every account's equity in USD; legs in USDT or
+            # USDC are the same money to within the peg. Not a warning.
+            checklist.add(scope, 'Currency', PASS,
+                          f'both legs priced in {currency_a}; OKX shows '
+                          f'your equity in {account} (1 {currency_a} is '
+                          f'about 1 {account})')
+        elif account and account != currency_a:
             checklist.add(scope, 'Currency', WARN,
                           f'both legs are priced in {currency_a}, but the '
                           f'account is in {account}. OKX converts on the '
@@ -355,7 +373,7 @@ OKX_KEY_FIXES = {
               'created; if it is lost, create a new key)'],
 }
 
-ACCT_LEVELS = {'1': 'Spot mode', '2': 'Spot and futures mode',
+ACCT_LEVELS = {'1': 'Spot mode', '2': 'Futures mode (spot and futures)',
                '3': 'Multi-currency margin', '4': 'Portfolio margin'}
 
 
@@ -436,7 +454,9 @@ def check_okx_account(checklist, name, broker, has_keys=True):
         checklist.add(scope, 'Account mode', WARN,
                       f'{words}: derivatives yes, but spot cannot be sold '
                       f'short - a SELL on a spot leg needs the coin',
-                      ['Multi-currency margin lets the spot leg borrow'])
+                      ['Multi-currency margin lets the spot leg borrow: on OKX, '
+                       'Trade > the "Futures mode" panel > Account mode > '
+                       'Multi-currency margin (with nothing open)'])
     else:
         checklist.add(scope, 'Account mode', PASS, words)
     try:

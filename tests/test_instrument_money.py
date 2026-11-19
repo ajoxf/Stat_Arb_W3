@@ -125,3 +125,54 @@ def test_the_same_currency_as_the_account_is_not_warned_about():
     diagnostics.check_pair(checklist, Pair(), symbol(),
                            symbol(symbol='GC1226'), account_currency='USD')
     assert currency_check(checklist)['status'] == PASS
+
+
+def test_usdt_legs_on_an_okx_account_shown_in_usd_are_not_warned_about():
+    """OKX states every account's equity in USD. A USDT ladder beside it
+    is the same money to within the peg - a warning there is noise a
+    trader learns to ignore."""
+    checklist = diagnostics.Checklist()
+    diagnostics.check_pair(checklist, Pair(), symbol(currency='USDT'),
+                           symbol(symbol='GC1226', currency='USDT'),
+                           account_currency='USD')
+    assert currency_check(checklist)['status'] == PASS
+
+
+class EthBtc(Pair):
+    key = 'BTC-USDT-SWAP|ETH-USDT-SWAP'
+    symbol_a = 'BTC-USDT-SWAP'
+    symbol_b = 'ETH-USDT-SWAP'
+    hedge_ratio = 0.054
+    hedge_ratio_for = 'BTC-USDT-SWAP|ETH-USDT-SWAP'
+    pair_type = 'RELATED'
+
+
+def test_a_stale_beta_names_the_beta_to_take_and_the_button():
+    """ETH/BTC was 0.054 once; at 62,551 / 1,774 that 'spread' is BTC's
+    price. The fix says which button, and what beta it will give."""
+    checklist = diagnostics.Checklist()
+    diagnostics.check_pair(
+        checklist, EthBtc(),
+        symbol(symbol='BTC-USDT-SWAP', bid=62551.0, ask=62552.0,
+               currency='USDT'),
+        symbol(symbol='ETH-USDT-SWAP', bid=1774.0, ask=1774.2,
+               currency='USDT'))
+    spread = [c for c in checklist.checks if c['name'] == 'Spread'][0]
+    assert spread['status'] == FAIL
+    assert 'Read both legs from OKX' in spread['fix'][0]
+    assert '0.028' in spread['fix'][0]
+
+
+def test_the_example_eth_btc_beta_is_derived_from_live_prices():
+    """config.example.json ships the ETH/BTC beta UNSTAMPED, so the
+    engine re-derives it on first start instead of trusting a number
+    from another year's prices."""
+    import json, os
+    from okxtrader import hedgeratio
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    pairs = json.load(open(os.path.join(here, 'config.example.json')))['pairs']
+    pair = pairs['BTC-USDT-SWAP|ETH-USDT-SWAP']
+    beta, _ = hedgeratio.resolve(pair['hedge_ratio'], pair['hedge_ratio_for'],
+                                 pair['pair_type'], 'BTC-USDT-SWAP',
+                                 'ETH-USDT-SWAP', 62551.0, 1774.0)
+    assert beta is not None and abs(beta - 1774.0 / 62551.0) < 0.002

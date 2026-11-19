@@ -41,7 +41,7 @@
       },
       "pair_type": "RELATED",
       "hedge_ratio": 0.054,
-      "hedge_ratio_for": "BTC-USDT-SWAP|ETH-USDT-SWAP",
+      "hedge_ratio_for": "",
       "increment": 0.05,
       "clip_lots_a": 1.0,
       "clip_lots_b": 1.86,
