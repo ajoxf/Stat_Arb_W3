@@ -109,10 +109,13 @@ class PairSession:
         start = parse_hhmm(clean_hhmm(getattr(pair, 'break_start', None)))
         end = parse_hhmm(clean_hhmm(getattr(pair, 'break_end', None)))
         self.brk = (start, end) if start and end else None
+        #: Crypto, 24/7: no cutoff at all unless this ladder set hours.
+        self.always = (_hours_mode(config) == '24/7'
+                       and not self.own_hours)
 
     @property
     def cutoff(self):
-        return self.close
+        return None if self.always else self.close
 
     def state(self, now):
         """OPEN, BREAK or CLOSED at broker time `now` (None: unknown)."""
@@ -122,6 +125,8 @@ class PairSession:
         if self.brk and _within(t, _minutes(self.brk[0]),
                                 _minutes(self.brk[1])):
             return 'BREAK'
+        if self.always:
+            return 'OPEN'
         if self.open is not None:
             return 'OPEN' if _within(t, _minutes(self.open),
                                      _minutes(self.close)) else 'CLOSED'
@@ -139,7 +144,7 @@ class PairSession:
         negative past it - the Algo's cutoff buffer then holds entries
         until the broker's midnight, as it always has. With an open set,
         it is the NEXT close: the session itself says when it is shut."""
-        if now is None:
+        if now is None or self.always:
             return None
         t = now.hour * 60 + now.minute + now.second / 60.0
         left = _minutes(self.close) - t
@@ -163,11 +168,19 @@ class PairSession:
     def describe(self, now):
         def text(hm):
             return None if hm is None else f'{hm[0]:02d}:{hm[1]:02d}'
-        return {'open': text(self.open), 'close': text(self.close),
+        return {'open': text(self.open),
+                'close': '24/7' if self.always else text(self.close),
                 'break': None if not self.brk else
                 f'{text(self.brk[0])}-{text(self.brk[1])}',
                 'own_hours': self.own_hours, 'state': self.state(now),
                 'quiet': self.quiet(now) if now is not None else False}
+
+
+def _hours_mode(config):
+    """'24/7' or 'SESSION': the config's own, else the desk default."""
+    from .config import DEFAULT_SETTINGS
+    return str(config.get('MARKET_HOURS',
+                          DEFAULT_SETTINGS.get('MARKET_HOURS', '24/7'))).upper()
 
 
 def past_cutoff(now, close_hour, close_minute):
@@ -232,6 +245,13 @@ class SessionClock:
         broker = self.broker_now()
         cutoff = (f"{int(self.config.get('OVERNIGHT_CLOSE_HOUR', 16)):02d}:"
                   f"{int(self.config.get('OVERNIGHT_CLOSE_MINUTE', 55)):02d}")
+        if _hours_mode(self.config) == '24/7':
+            return {'broker_time': broker.strftime('%H:%M:%S')
+                    if broker else None, 'offset_sec': offset,
+                    'cutoff': '24/7',
+                    'note': 'crypto trades around the clock: no desk-wide '
+                            'cutoff - a ladder with its own hours still '
+                            'keeps them (OKX time is UTC)'}
         if offset is None:
             return {'broker_time': None, 'offset_sec': None, 'cutoff': cutoff,
                     'note': ('the broker clock has not been measured yet — '

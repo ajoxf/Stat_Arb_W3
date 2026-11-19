@@ -315,6 +315,11 @@ DEFAULT_SETTINGS = {
     #: How often the broker's clock offset is re-measured. It does not
     #: drift on the scale of a poll, and it is a round trip per account.
     'BROKER_CLOCK_TTL_SEC': 300.0,
+    #: Crypto trades around the clock: '24/7' has NO desk-wide cutoff -
+    #: no DAY cancel, no overnight rule, no Algo cutoff buffer - unless
+    #: a ladder sets hours of its own. 'SESSION' brings back Mirror's
+    #: single cutoff at OVERNIGHT_CLOSE_HOUR:MINUTE.
+    'MARKET_HOURS': '24/7',
     'OVERNIGHT_CLOSE_HOUR': 16,
     'OVERNIGHT_CLOSE_MINUTE': 55,
     'OVERNIGHT_DEFAULT': OvernightMode.ALLOW.value,

@@ -3886,6 +3886,8 @@ class Coordinator:
         events = []
         for key, pair in self.config.pairs.items():
             hours = PairSession(pair, self.config)
+            if hours.cutoff is None:
+                continue                     # 24/7: there is no cutoff
             if not self.session_clock.due(key, hours.cutoff):
                 continue
             self.session_clock.mark(key)

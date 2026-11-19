@@ -154,7 +154,9 @@ def run(rows, params, width, cost_in, levels, offset_sec=None,
                         {side: sided[side][2] for side in sided})
         gates = {'health': None, 'halt': halt, 'entry_check': check,
                  'levels': levels_block,
-                 'cutoff_min': _cutoff_minutes(bucket, offset_sec, *cutoff)}
+                 'cutoff_min': (None if cutoff is None else
+                                _cutoff_minutes(bucket, offset_sec,
+                                                *cutoff))}
         body = signal.evaluate(now, md, stats, positions, gates)
         if body.get('blocked_side'):
             reason = _reason_kind(body.get('blocked'))

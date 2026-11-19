@@ -622,10 +622,15 @@ def _fill_style():
     fill, the OKX default, has its own tests against the simulated
     exchange (test_maker.py, test_maker_desk.py)."""
     from okxtrader import config as cfg
-    was = cfg.DEFAULT_SETTINGS['FILL_STYLE']
+    was = (cfg.DEFAULT_SETTINGS['FILL_STYLE'],
+           cfg.DEFAULT_SETTINGS['MARKET_HOURS'])
+    # ...and Mirror's session cutoff, which its session tests exercise;
+    # the OKX default is 24/7 (test_crypto_hours.py).
     cfg.DEFAULT_SETTINGS['FILL_STYLE'] = 'taker'
+    cfg.DEFAULT_SETTINGS['MARKET_HOURS'] = 'SESSION'
     yield
-    cfg.DEFAULT_SETTINGS['FILL_STYLE'] = was
+    cfg.DEFAULT_SETTINGS['FILL_STYLE'], \
+        cfg.DEFAULT_SETTINGS['MARKET_HOURS'] = was
 
 
 @pytest.fixture(autouse=True)
