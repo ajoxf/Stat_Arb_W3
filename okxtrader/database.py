@@ -301,6 +301,15 @@ CREATE TABLE IF NOT EXISTS algo_candles (
 """
 
 
+def _resolve(resolve, account, row):
+    """(pair key, leg) for one fill: by its position TICKET where the
+    resolver takes one (the coordinator's does), else by symbol."""
+    try:
+        return resolve(account, row.get('symbol'), row.get('position_id'))
+    except TypeError:
+        return resolve(account, row.get('symbol'))
+
+
 class Store:
     """One SQLite file, opened the same way everywhere."""
 
@@ -529,6 +538,16 @@ class Store:
                 [(str(a), str(t), now, key) for a, t, key in rows])
         return len(rows)
 
+    def ticket_pair(self, account, ticket):
+        """The pair a ticket of ours was held on, or None."""
+        if not ticket:
+            return None
+        with self._connect() as connection:
+            row = connection.execute(
+                'SELECT pair_key FROM our_tickets WHERE account = ? AND '
+                'ticket = ?', (str(account), str(ticket))).fetchone()
+        return row['pair_key'] if row else None
+
     def our_tickets(self):
         """Every (account, ticket) this system has ever held."""
         with self._connect() as connection:
@@ -632,7 +651,7 @@ class Store:
                 deal_id = str(row.get('deal_id') or '')
                 if not deal_id:
                     continue
-                pair_key, leg = (resolve(account, row.get('symbol'))
+                pair_key, leg = (_resolve(resolve, account, row)
                                  if resolve else (None, None))
                 connection.execute(
                     """INSERT OR REPLACE INTO fills

@@ -217,3 +217,91 @@ def test_okx_fills_reach_the_journal(broker, tmp_path):
     [fill] = store.fills()
     assert fill['symbol'] == 'BTC-USDT-SWAP' and fill['is_ours'] == 1
     assert fill['commission'] < 0
+
+
+# -- a close reduces its own position, it never opens the opposite one -------
+
+def _orders_sent(sim):
+    return len(sim.orders)
+
+
+def test_a_spot_long_whose_coin_is_gone_is_not_sold_short(broker, sim):
+    """Selling coin that is not there BORROWS it. A close of a spot long
+    whose coin was sold elsewhere must send nothing at all."""
+    r = broker.send_market_order('BTC-USDT', OrderSide.BUY, 0.003)
+    sim.balances['BTC'] = 0.0                    # sold on the OKX app
+    broker._bal_cache = None
+    before = _orders_sent(sim)
+    closed = broker.close_position_ticket('BTC-USDT', r.ticket, 0.003,
+                                          OrderSide.BUY)
+    assert not closed.success and 'already flat' in closed.error
+    assert _orders_sent(sim) == before           # nothing went out
+    assert sim.balances['BTC'] == 0.0            # and nothing was borrowed
+
+
+def test_a_spot_long_closes_only_the_coin_still_held(broker, sim):
+    r = broker.send_market_order('BTC-USDT', OrderSide.BUY, 0.003)
+    sim.balances['BTC'] = 0.001                  # part sold elsewhere
+    broker._bal_cache = None
+    broker.close_position_ticket('BTC-USDT', r.ticket, 0.003, OrderSide.BUY)
+    assert sim.balances['BTC'] == pytest.approx(0.0)   # flat, not short
+
+
+def test_a_spot_short_buys_back_only_what_is_owed(broker, sim):
+    r = broker.send_market_order('BTC-USDT', OrderSide.SELL, 0.003)
+    sim.balances['BTC'] = -0.001                 # part repaid elsewhere
+    broker._bal_cache = None
+    broker.close_position_ticket('BTC-USDT', r.ticket, 0.003,
+                                 OrderSide.SELL)
+    assert sim.balances['BTC'] == pytest.approx(0.0)   # flat, not long
+
+
+def test_a_perp_close_is_capped_to_what_okx_holds_on_that_side(broker, sim):
+    r = broker.send_market_order('BTC-USDT-SWAP', OrderSide.BUY, 0.5)
+    sim.positions[('BTC-USDT-SWAP', 'long')]['pos'] = 0.2   # cut elsewhere
+    broker._pos_cache = None
+    closed = broker.close_position_ticket('BTC-USDT-SWAP', r.ticket, 0.5,
+                                          OrderSide.BUY)
+    assert closed.success or closed.volume == pytest.approx(0.2)
+    assert ('BTC-USDT-SWAP', 'long') not in sim.positions
+    assert ('BTC-USDT-SWAP', 'short') not in sim.positions   # never opened
+
+
+def test_a_resting_close_leaves_no_room_for_a_second_one(broker, sim):
+    """A maker close already resting on the whole long: a second close
+    on top would be an order with nothing left to reduce."""
+    r = broker.send_market_order('BTC-USDT-SWAP', OrderSide.BUY, 0.5)
+    tick = broker.symbol_tick('BTC-USDT-SWAP')
+    first = broker.place_pending_limit('BTC-USDT-SWAP', OrderSide.SELL, 0.5,
+                                       tick.ask + 50, position_ticket=r.ticket,
+                                       post_only=False)
+    assert first['ok']
+    broker._pos_cache = None
+    second = broker.place_pending_limit('BTC-USDT-SWAP', OrderSide.SELL, 0.5,
+                                        tick.ask + 60,
+                                        position_ticket=r.ticket,
+                                        post_only=False)
+    assert not second['ok'] and 'already flat' in second['error']
+
+
+def test_a_spot_resting_close_with_no_coin_is_refused(broker, sim):
+    r = broker.send_market_order('BTC-USDT', OrderSide.BUY, 0.003)
+    sim.balances['BTC'] = 0.0
+    broker._bal_cache = None
+    tick = broker.symbol_tick('BTC-USDT')
+    placed = broker.place_pending_limit('BTC-USDT', OrderSide.SELL, 0.003,
+                                        tick.ask, position_ticket=r.ticket,
+                                        post_only=False)
+    assert not placed['ok'] and 'already flat' in placed['error']
+
+
+def test_CONTROL_unreadable_okx_sends_no_close(broker):
+    r = broker.send_market_order('BTC-USDT-SWAP', OrderSide.BUY, 0.2)
+
+    def down(*a, **k):
+        raise OKXError('OKX did not answer')
+    broker._pos_cache = None
+    broker.client.transport = down
+    closed = broker.close_position_ticket('BTC-USDT-SWAP', r.ticket, 0.2,
+                                          OrderSide.BUY)
+    assert not closed.success and 'nothing was sent' in closed.error

@@ -707,6 +707,61 @@ class OKXBroker:
                                  _f(d.get('liab'), 0.0))
         return out
 
+    def _closable(self, symbol, position, volume, exclude_order=None):
+        """(volume this close may send, refusal or None).
+
+        A close must REDUCE the position it belongs to - never be an
+        opposite order that opens a new one. So before any closing order
+        goes out, OKX's own book is read and the close is capped to what
+        is really there:
+
+        - **Perpetual / future** (long/short mode): what OKX holds on the
+          position's own posSide, less our closing orders already
+          resting on it. A close on posSide=long can only reduce a long,
+          and capping it means it is never refused half-way either.
+        - **Spot**: closing a long SELLS the coin, and selling coin that
+          is not there BORROWS it - a short nobody asked for. Closing a
+          short BUYS it back, and buying more than is owed is a new
+          long. So a spot long closes at most the coin actually held,
+          and a spot short at most the coin actually owed.
+
+        Unreadable is not flat: when OKX cannot be read, nothing is sent.
+        """
+        volume = min(float(volume), float(position['volume']))
+        side = OrderSide(position['side'])
+        if self.is_derivative(symbol):
+            held = self._exchange_positions()
+            if held is None:
+                return 0.0, ('OKX positions could not be read - nothing was '
+                             'sent, so a close cannot open anything')
+            there = held.get((symbol, position.get('pos_side')), 0.0)
+            resting = sum(
+                o['volume'] - o.get('filled', 0.0)
+                for t, o in self.ledger['orders'].items()
+                if t != exclude_order and o.get('position_ticket') is not None
+                and o.get('symbol') == symbol
+                and o.get('pos_side') == position.get('pos_side')
+                and o.get('state') in ('live', 'partially_filled'))
+            room = max(0.0, there - resting)
+            what = f"{position.get('pos_side')} {symbol}"
+        else:
+            holdings = self._spot_holdings()
+            if holdings is None:
+                return 0.0, ('OKX balances could not be read - nothing was '
+                             'sent, so a close cannot open anything')
+            coin = symbol.split('-')[0]
+            balance, liability = holdings.get(coin, (0.0, 0.0))
+            if side is OrderSide.BUY:
+                room = max(0.0, balance)            # a long: the coin held
+                what = f'{coin} held'
+            else:
+                room = max(liability, -balance, 0.0)  # a short: coin owed
+                what = f'{coin} owed'
+        if room <= _EPS:
+            return 0.0, (f'already flat at OKX - no {what} to close, so no '
+                         f'order was sent')
+        return min(volume, room), None
+
     def _trim_to_exchange(self):
         """Shrink the ledger to what OKX holds. A position closed outside
         the desk must read as gone, never be believed. Newest tickets are
@@ -904,7 +959,12 @@ class OKXBroker:
                 return OrderResult(False, error=f'no open position {ticket} '
                                                 f'on this desk')
             close_side = OrderSide(entry_side).opposite
-            volume = min(float(volume), p['volume'])
+            volume, refusal = self._closable(symbol, p, volume)
+            if refusal is not None:
+                if 'already flat' in refusal:
+                    self._pos_cache = None
+                    self._trim_to_exchange()
+                return OrderResult(False, error=refusal)
             try:
                 touch, price = self._protected_price(symbol, close_side,
                                                      slippage_points)
@@ -965,6 +1025,12 @@ class OKXBroker:
                 if target is None:
                     return {'ok': False, 'ticket': None, 'price': price,
                             'error': f'no open position {position_ticket}'}
+                # A resting CLOSE is capped to what OKX holds on that
+                # position, like any close: it reduces, it never opens.
+                volume, refusal = self._closable(symbol, target, volume)
+                if refusal is not None:
+                    return {'ok': False, 'ticket': None, 'price': price,
+                            'error': refusal}
                 pos_side = target.get('pos_side')
             else:
                 pos_side = 'long' if side is OrderSide.BUY else 'short'
@@ -988,6 +1054,11 @@ class OKXBroker:
             self.ledger['ords'][ord_id] = {
                 'ticket': ticket,
                 'entry': 'close' if position_ticket is not None else 'open',
+                # The POSITION this order closes, so its fills are filed
+                # against that position's ladder, not the order's.
+                'position_ticket': (int(position_ticket)
+                                    if position_ticket is not None
+                                    else None),
                 'comment': comment}
             self._save_ledger()
             return {'ok': True, 'ticket': ticket, 'error': None,
@@ -1235,7 +1306,11 @@ class OKXBroker:
                 'commission': fee, 'swap': 0.0, 'fee': fee,
                 'fee_ccy': r.get('feeCcy') or 'USDT',
                 'pnl': _f(r.get('fillPnl'), 0.0), 'state': 'filled',
-                'filled_at': ts, 'position_id': meta.get('ticket'),
+                'filled_at': ts,
+                # The position ticket: an opening fill IS its position;
+                # a closing fill points at the position it closed.
+                'position_id': (meta.get('position_ticket')
+                                or meta.get('ticket')),
                 'magic': MAGIC_NUMBER if ours else 0, 'is_bot': ours,
                 'comment': meta.get('comment', ''),
                 'server_offset_sec': offset,

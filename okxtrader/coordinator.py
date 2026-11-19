@@ -4103,19 +4103,54 @@ class Coordinator:
             written += self.store.record_fills(name, rows, self.resolve_leg)
         return written
 
-    def resolve_leg(self, account, symbol):
+    def resolve_leg(self, account, symbol, ticket=None):
         """(pair key, 'A'/'B') for a fill, where it belongs to a pair.
 
-        A fill we cannot map is still journalled: it happened on the
-        account, and a journal that drops what it does not recognise is
-        not an audit trail.
+        By TICKET first. On OKX one account carries every ladder, and one
+        instrument (BTC-USDT-SWAP) can be a leg of several: matching by
+        symbol filed a fill under whichever ladder came first. So:
+
+        1. A position in the book holding this ticket - its ladder, its
+           leg.
+        2. Our own ticket ledger (a position closed since) - its ladder,
+           and the leg that ladder trades this instrument on.
+        3. Only when exactly ONE ladder trades this instrument on this
+           account, that ladder.
+
+        Anything else is left unassigned rather than guessed. A fill we
+        cannot map is still journalled: it happened on the account, and
+        a journal that drops what it does not recognise is not an audit
+        trail.
         """
-        for key, pair in self.config.pairs.items():
+        def leg_of(key):
+            pair = self.config.pairs.get(key)
+            if pair is None:
+                return None
             if pair.account_a == account and pair.symbol_a == symbol:
-                return key, 'A'
+                return 'A'
             if pair.account_b == account and pair.symbol_b == symbol:
-                return key, 'B'
-        return None, None
+                return 'B'
+            return None
+
+        if ticket not in (None, ''):
+            wanted = str(ticket)
+            for position in self.book.positions(open_only=False):
+                for name, fill in (('A', position.leg_a),
+                                   ('B', position.leg_b)):
+                    if fill and fill.account == account and wanted in {
+                            str(t) for t in (fill.position_tickets or ())}:
+                        return position.pair_key, name
+            if self.store is not None:
+                try:
+                    key = self.store.ticket_pair(account, wanted)
+                except Exception as e:             # never lose the journal
+                    logging.debug('ticket lookup failed: %s', e)
+                    key = None
+                if key and leg_of(key):
+                    return key, leg_of(key)
+        matches = [(key, leg_of(key)) for key in self.config.pairs
+                   if leg_of(key)]
+        return matches[0] if len(matches) == 1 else (None, None)
 
     def reconcile_if_due(self):
         """Every ~20s in LIVE. Assume you will lose track."""
