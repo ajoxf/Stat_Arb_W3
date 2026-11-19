@@ -108,6 +108,19 @@ except ImportError:            # dotenv optional; the shell can set them
 #: setting in the UI — the spec's rule is that guessed numbers get
 #: corrected from measurement, which needs them on screen first.
 DEFAULT_SETTINGS = {
+    # --- how a spread is FILLED on OKX (see maker.py) -----------------
+    #: 'maker': the W3 fill - both legs rest at the touch as plain
+    #: limits, re-pegged by amend, maker fees at the account's VIP tier.
+    #: 'taker': Mirror's crossing - both legs at market (IOC capped at
+    #: OKX_IOC_PROTECTION_BPS), taker fees, on in ~a second.
+    'FILL_STYLE': 'maker',
+    'MAKER_TIMEOUT_SEC': 30.0,
+    'MAKER_OFFSET_BPS': 1.0,
+    'MAKER_SAFETY_BPS': 0.5,
+    'MAKER_REPEG_SEC': 1.0,
+    'MAKER_AMEND_BPS': 1.0,
+    'MAKER_RECOVERY_SEC': 60.0,
+    'MAKER_RECOVERY_STEP_BPS': 2.0,
     # --- the loop -----------------------------------------------------
     'POLL_INTERVAL_SEC': 0.3,
     #: How often the coordinator drains clicks, on its own thread. This

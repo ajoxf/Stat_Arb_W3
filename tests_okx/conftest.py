@@ -615,6 +615,19 @@ def pytest_configure(config):
                    'pending the desk used before the spread trigger')
 
 
+@pytest.fixture(autouse=True, scope='session')
+def _fill_style():
+    """Mirror's engine tests drive the TAKER crossing (both legs at
+    market), which stays available as FILL_STYLE = taker. The W3 maker
+    fill, the OKX default, has its own tests against the simulated
+    exchange (test_maker.py, test_maker_desk.py)."""
+    from okxtrader import config as cfg
+    was = cfg.DEFAULT_SETTINGS['FILL_STYLE']
+    cfg.DEFAULT_SETTINGS['FILL_STYLE'] = 'taker'
+    yield
+    cfg.DEFAULT_SETTINGS['FILL_STYLE'] = was
+
+
 @pytest.fixture(autouse=True)
 def _working_orders(request, monkeypatch):
     """Working orders are held and crossed at the level by default. The

@@ -90,6 +90,9 @@ class Reconciler:
         #: could not account for. Never struck out, never auto-closed:
         #: they are put on the screen for a person to adopt or close.
         self.unclaimed = {}
+        #: () -> {(account, ticket)} a maker fill holds right now: a leg
+        #: half way on is OURS, mid-click, not a stray.
+        self.in_flight = None
 
     #: Strikes before acting. One poll can catch the broker mid-fill.
     STRIKES = 3
@@ -114,6 +117,12 @@ class Reconciler:
             broker[name] = {str(p['ticket']): p for p in positions}
 
         known = self.known_tickets() | self.ledger()
+        if self.in_flight is not None:
+            try:
+                known |= set(self.in_flight())
+            except Exception as e:                   # never lose the pass
+                logging.error('reconcile: in-flight tickets unreadable: %s',
+                              e)
         # The same TICKET seen under another account name is the same
         # position seen through a second connection to one terminal —
         # which is what two configured accounts sharing an MT5 login

@@ -31,7 +31,8 @@ from .algoexec import LiveSink
 from .book import Book
 from .chart import SpreadTape, chart_path
 from .database import Store
-from .executor import PairExecutor, mark_position
+from .executor import PairExecutor, mark_position, slippage
+from .maker import MakerFills
 from .models import (ALGO_SOURCE, MAGIC_NUMBER, MANUAL, LegFill, OrderType,
                      SpreadPosition, SpreadSide)
 from .quoter import Quoter, quoting_leg
@@ -97,8 +98,14 @@ class Coordinator:
         # journalled as a refusal, in the broker's words - so the desk
         # and Telegram both say it.
         self.quoter.on_refusal = self._working_order_refused
+        # The W3 maker fill: both legs rest at the touch, re-pegged,
+        # recovered as maker - the OKX default for every entry.
+        self.maker = MakerFills(config, legs, self.executor, clock=clock)
+        self.maker.on_done = self._maker_done
+        self.quoter.maker = self.maker
         self.reconciler = Reconciler(config, legs, self.book, self.executor,
                                      clock=clock, store=store)
+        self.reconciler.in_flight = self.maker.in_flight_tickets
         self._last_reconcile = None
         self.session_clock = SessionClock(config, offset=self.broker_offset)
         #: The measured broker clock, per account: (measured at, offset).
@@ -642,6 +649,7 @@ class Coordinator:
             # them: a peg re-priced off a snapshot older than the one on
             # screen is a peg holding a level nobody is showing.
             self.quoter.work(pair, md)
+            self.maker.step(pair, md)
             self.tidy_closing_orders(pair)
         return self.market
 
@@ -1016,8 +1024,10 @@ class Coordinator:
             md = self.market.get(pair.key)
             side = SpreadSide(getattr(side, 'value', side))
             level = executable_spread(md, side) if md else None
-            result = self.executor.market_entry(pair, side, md, quantity,
-                                                level)
+            result = self.enter(pair, side, md, quantity, level, 'algo')
+            if result.ok and result.working:
+                return {'ok': True, 'working': result.working,
+                        'reason': result.reason}
             if result.ok and result.position:
                 result.position.source = ALGO_SOURCE
                 self.remember(self.book.add_position(result.position))
@@ -1028,6 +1038,39 @@ class Coordinator:
                                  side=side.value, level=level, algo=True,
                                  naked=result.naked)
             return {'ok': False, 'reason': result.reason or 'not filled'}
+
+    def enter(self, pair, side, md, quantity, level, source):
+        """Put a spread on. The W3 maker fill where it is on (the OKX
+        default: both legs rest, the position arrives in `_maker_done`),
+        otherwise Mirror's both-legs-at-market crossing."""
+        if self.maker.enabled(pair):
+            return self.maker.start(pair, side, md, quantity, level, source)
+        return self.executor.market_entry(pair, side, md, quantity, level)
+
+    def _maker_done(self, job, result):
+        """A maker fill ended: book it, or say why not."""
+        with self.lock:
+            if result.ok and result.position:
+                position = result.position
+                if job.source == 'algo':
+                    position.source = ALGO_SOURCE
+                if job.level is not None:
+                    position.entry_slippage = slippage(
+                        job.level, position.entry_spread, job.side)
+                position = self.book.add_position(position)
+                self.remember(position)
+                if job.source == 'algo':
+                    self.algos.adopt(job.pair_key, position.position_id)
+                return
+            if self.store is not None and result.reason:
+                self.store.event('refused', job.pair_key,
+                                 reason=f'maker fill: {result.reason}',
+                                 side=job.side.value, level=job.level,
+                                 algo=job.source == 'algo',
+                                 naked=result.naked)
+            if result.naked:
+                logging.critical('%s: maker fill left a leg ON: %s',
+                                 job.pair_key, result.naked)
 
     def algo_exit(self, pair, position_id, reason):
         """A LIVE Algo exit: close one position, both legs, by TICKET."""
@@ -2606,8 +2649,7 @@ class Coordinator:
                 return {'ok': True, 'closed': closed, 'reduced': True,
                         'reason': f'closed {len(closed)} position(s) '
                                   f'oldest first'}
-            result = self.executor.market_entry(pair, side, md, quantity,
-                                                level)
+            result = self.enter(pair, side, md, quantity, level, 'manual')
             if result.ok and result.position:
                 self.remember(self.book.add_position(result.position))
             elif self.store is not None and result.reason:
@@ -2943,6 +2985,15 @@ class Coordinator:
         for key, pair in self.config.pairs.items():
             if pair_key in (None, key):
                 self.quoter.work(pair, self.market.get(key))
+                # A maker fill resting both legs is a working order too:
+                # CXL pulls it (a leg already on is recovered/unwound by
+                # the same rules as a timeout, never left alone).
+                job = self.maker.jobs.get(key)
+                wanted = getattr(side, 'value', side)
+                if job is not None and wanted in (None, job.side.value):
+                    self.maker.cancel(key, reason)
+                    self.maker.step(pair, self.market.get(key))
+                    pulled = list(pulled) + [job.id]
         return pulled
 
     def close_unclaimed(self, account, ticket):
@@ -3562,6 +3613,9 @@ class Coordinator:
                     if not o.is_working and o.reason
                     and self.clock() - o.created_at < DEAD_ORDER_MEMORY_SEC],
                 'quotes': self.quoter.snapshot(key),
+                # W3 maker fills working on this ladder: both legs
+                # resting at OKX, how far each has filled.
+                'maker_fills': self.maker.snapshot(key),
                 'quoting_leg': pair.quoting_leg,
                 # The leg that will ACTUALLY rest the pending — the
                 # setting when there is one, otherwise the wider book.

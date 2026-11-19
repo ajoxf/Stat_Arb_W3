@@ -200,7 +200,7 @@ def test_the_market_click_reduces_before_it_opens():
     assert '_reduce_first' in source
     # Before market_entry, not after: closing first never holds both
     # sides at once, so a disconnect cannot catch it with double on.
-    assert source.index('_reduce_first') < source.index('market_entry')
+    assert source.index('_reduce_first') < source.index('self.enter(')
 
 
 def test_the_coordinator_and_the_quoter_share_ONE_implementation():
@@ -308,7 +308,7 @@ def test_the_market_click_REFUSES_to_open_after_a_failed_close():
     source = inspect.getsource(Coordinator._click)
     assert 'failure' in source
     # The refusal must come BEFORE market_entry, or it is not a refusal.
-    assert source.index('if failure is not None') < source.index('market_entry')
+    assert source.index('if failure is not None') < source.index('self.enter(')
     assert "'refused': True" in source
 
 

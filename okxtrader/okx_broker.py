@@ -942,9 +942,12 @@ class OKXBroker:
         return float(fmt_price(price, row.get('tickSz') if row else 0.01))
 
     def place_pending_limit(self, symbol, side, volume, price, comment='',
-                            position_ticket=None):
-        """A post-only limit: maker or nothing. With `position_ticket` it
-        CLOSES that ticket (same posSide, opposite side)."""
+                            position_ticket=None, post_only=True):
+        """A resting limit. Post-only by default (maker or nothing);
+        `post_only=False` is a plain limit, which is what the W3 maker
+        fill rests: priced passive, so it makes, but never refused for
+        touching. With `position_ticket` it CLOSES that ticket (same
+        posSide, opposite side)."""
         with self._lock:
             ticket = self._new_ticket()
             if position_ticket is not None:
@@ -956,7 +959,8 @@ class OKXBroker:
             else:
                 pos_side = 'long' if side is OrderSide.BUY else 'short'
             try:
-                body = self._order_body(symbol, side, volume, 'post_only',
+                body = self._order_body(symbol, side, volume,
+                                        'post_only' if post_only else 'limit',
                                         price, pos_side,
                                         self._cl_ord_id(ticket))
                 placed = self.client.post('/api/v5/trade/order', body)

@@ -80,6 +80,10 @@ from .models import (LegFill, OrderState, OrderType, SpreadPosition,
                      SpreadSide, new_id)
 
 
+class _NotSent(Exception):
+    """The maker fill refused before anything was sent."""
+
+
 class QuoteGroup:
     """One (pair, side, level) — and what, if anything, is at the broker.
 
@@ -923,9 +927,32 @@ class Quoter:
             md = fresh
 
         quantity = group.quantity
+        maker = getattr(self, 'maker', None)
+        if maker is not None and maker.enabled(pair):
+            # The W3 maker fill: both legs rest at the touch now. The
+            # position is booked when it fills (coordinator._maker_done),
+            # so the working order is spent here, on the hand-over.
+            result = maker.start(pair, group.side, md, quantity,
+                                 level=group.level, source='trigger')
+            if result.ok:
+                self._settle_orders(group, quantity)
+                self.groups.pop(key, None)
+                logging.info('%s: %s %g at %s reached - both legs resting '
+                             'as maker', pair.key, group.side.value,
+                             quantity, group.level)
+                return {'group': key, 'action': 'triggered', 'ok': True,
+                        'working': result.working, 'level': group.level}
+            reason = result.reason
+            result = None
+        else:
+            result = 'market'
         try:
+            if result != 'market':
+                raise _NotSent(reason)
             result = self.executor.market_entry(
                 pair, group.side, md, quantity, clicked_level=group.level)
+        except _NotSent:
+            pass
         except Exception as e:
             # A network call inside the pricing pass. Raising out of
             # `work()` would take every pair's orders down with it.

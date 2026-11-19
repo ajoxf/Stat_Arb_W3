@@ -294,6 +294,13 @@ class AlgoDesk:
                 'off. CLOSE ALL and the positions list still close; turn the '
                 'Algo off to trade by hand.')
 
+    def adopt(self, key, position_id):
+        """A LIVE entry that filled later (the W3 maker fill) is this
+        ladder's Algo's position, exactly as one booked on the spot."""
+        run = self._runs.get(key)
+        if run is not None:
+            run.mine.add(position_id)
+
     def owned(self, key):
         """The position ids this ladder's Algo owns now."""
         run = self._runs.get(key)

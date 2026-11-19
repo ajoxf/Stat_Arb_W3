@@ -179,9 +179,14 @@ class LocalLeg:
             'error': result.error,
         }
 
-    def place_limit(self, symbol, side, volume, price, comment=""):
+    def place_limit(self, symbol, side, volume, price, comment="",
+                    post_only=None):
+        if post_only is None:
+            return self.broker.place_pending_limit(
+                symbol, OrderSide(side), volume, price, comment=comment)
         return self.broker.place_pending_limit(
-            symbol, OrderSide(side), volume, price, comment=comment)
+            symbol, OrderSide(side), volume, price, comment=comment,
+            post_only=post_only)
 
     def pending_orders(self, symbol=None):
         return self.broker.pending_orders_by_magic(symbol)

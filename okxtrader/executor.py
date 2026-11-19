@@ -52,9 +52,13 @@ class ExecutionResult:
         self.naked = naked
         self.elapsed_ms = elapsed_ms
         self.legs = legs or {}
+        #: The maker-fill id while both legs rest at OKX: accepted, not
+        #: yet on. The position arrives when the fill ends.
+        self.working = None
 
     def to_dict(self):
         return {'ok': self.ok, 'reason': self.reason, 'refused': self.refused,
+                'working': self.working,
                 'naked': self.naked, 'elapsed_ms': self.elapsed_ms,
                 'position': self.position.to_dict() if self.position else None,
                 'legs': {k: (v.to_dict() if hasattr(v, 'to_dict') else v)
