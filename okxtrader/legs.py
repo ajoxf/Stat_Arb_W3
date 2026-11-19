@@ -62,6 +62,9 @@ class LocalLeg:
             'margin_so_call': getattr(info, 'margin_so_call', None),
             'margin_so_so': getattr(info, 'margin_so_so', None),
             'profit': getattr(info, 'profit', 0.0),
+            # OKX's fee tier: 'Lv1', 'Lv2'... the VIP level the fees
+            # on every ladder are priced at.
+            'fee_level': getattr(info, 'fee_level', None),
         }
 
     def ensure_symbol(self, symbol):

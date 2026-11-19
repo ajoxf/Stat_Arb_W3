@@ -3043,7 +3043,26 @@
     if (!legs || !footer) { return; }
     if (legs.parentNode !== footer) { footer.appendChild(legs); }
     legs.innerHTML = legFeed(row, market);
+    var okxacct = node.querySelector('.okxacct');
+    if (okxacct) { okxacct.textContent = okxAccountWords(row); }
 
+  }
+
+  function okxAccountWords(row) {
+    /* 'OKX VIP Lv1 · fees A 2.0/5.0 B 2.0/5.0 bp · lev A 10x B 10x' */
+    var parts = ['OKX VIP ' + (row.fee_level ? String(row.fee_level) : DASH)];
+    var fees = row.fee_bps || {};
+    function rate(leg) {
+      var f = fees[leg];
+      return f ? fmt(f.maker, 1) + '/' + fmt(f.taker, 1) : DASH;
+    }
+    if (fees.a || fees.b) {
+      parts.push('maker/taker A ' + rate('a') + ' B ' + rate('b') + ' bp');
+    }
+    function lev(x) { return x ? fmt(x, 0) + 'x' : DASH; }
+    parts.push('leverage A ' + lev(row.leverage_a) + ' B ' +
+               lev(row.leverage_b));
+    return parts.join(' \u00b7 ');
   }
 
   //: What the Algo is doing, in the trader's words. The engine's
@@ -6372,6 +6391,8 @@
     html += '<table><thead><tr><th>Account</th><th>Login</th>' +
       '<th>Equity</th><th>Balance</th><th>Credit</th><th>Open P&amp;L</th>' +
       '<th>Margin used</th><th>Free</th><th>Level</th><th>Call / Stop</th>' +
+      '<th title="OKX fee tier: the maker and taker fees every ladder on ' +
+      'this account is priced at">VIP</th>' +
       '<th>Leverage</th><th>Our legs</th><th>Our lots</th><th>Our units</th>' +
       '</tr></thead><tbody>';
     names.forEach(function (name) {
@@ -6397,14 +6418,23 @@
       html += '<td>' + (row.so_call === null || row.so_call === undefined
                         ? DASH : fmt(row.so_call, 0) + '% / ' +
                           fmt(row.so_so, 0) + '%') + '</td>';
-      html += '<td>' + (row.leverage ? row.leverage + 'x' : DASH) + '</td>';
+      html += '<td>' + escapeHtml(row.fee_level || DASH) + '</td>';
+      // OKX sets leverage per instrument: one line each.
+      var levs = row.leverage_by_symbol || {};
+      var levNames = Object.keys(levs);
+      html += '<td>' + (levNames.length
+        ? levNames.map(function (sym) {
+            return '<div>' + escapeHtml(sym) + ' ' +
+              (levs[sym] ? fmt(levs[sym], 0) + 'x' : DASH) + '</div>';
+          }).join('')
+        : (row.leverage ? row.leverage + 'x' : DASH)) + '</td>';
       html += '<td>' + row.our_legs + '</td>';
       html += '<td>' + fmt(row.our_lots, 2) + '</td>';
       html += '<td>' + fmt(row.our_units, 2) + '</td>';
       html += '</tr>';
     });
     if (!names.length) {
-      html += '<tr><td colspan="14">no accounts connected</td></tr>';
+      html += '<tr><td colspan="15">no accounts connected</td></tr>';
     }
     html += '</tbody></table>';
     var okx = state.snapshot.okx_positions || [];

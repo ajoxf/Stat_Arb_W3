@@ -3491,6 +3491,10 @@ class Coordinator:
                 'login': info.get('login'), 'server': info.get('server'),
                 'currency': info.get('currency'),
                 'leverage': info.get('leverage'),
+                'fee_level': info.get('fee_level'),
+                # OKX sets leverage PER INSTRUMENT, not per account:
+                # each instrument this desk trades on this account.
+                'leverage_by_symbol': self.account_leverage(name),
                 'balance': info.get('balance'),
                 'credit': info.get('credit'),
                 'equity': equity,
@@ -3720,6 +3724,29 @@ class Coordinator:
                            else ours - theirs),
         }
         return self._pnl_check
+
+    def leg_leverage(self, account, symbol):
+        """The leverage OKX has set for `symbol` on this account (cross
+        margin), or None where it cannot be read. OKX keeps one per
+        instrument; the broker caches it for five minutes."""
+        runner = self.legs.get(account)
+        broker = getattr(runner, 'broker', runner)
+        reader = getattr(broker, '_leverage', None)
+        if reader is None or not symbol:
+            return None
+        try:
+            return reader(symbol)
+        except Exception:
+            return None
+
+    def account_leverage(self, account):
+        out = {}
+        for pair in self.config.pairs.values():
+            for acct, symbol in ((pair.account_a, pair.symbol_a),
+                                 (pair.account_b, pair.symbol_b)):
+                if acct == account and symbol not in out:
+                    out[symbol] = self.leg_leverage(acct, symbol)
+        return out
 
     def account_info(self, name):
         """Cached ~5s. Fetching this three times a second is three IPC
@@ -3955,6 +3982,14 @@ class Coordinator:
                 # and the commission per lot they price.
                 'fee_bps': getattr(pair, 'fee_bps', None),
                 'fee_commission': getattr(pair, 'fee_settings', None),
+                # The VIP tier those fees are, and the leverage OKX has
+                # set on each leg - for the ladder's footer.
+                'fee_level': (self.account_info(pair.account_a)
+                              or {}).get('fee_level'),
+                'leverage_a': self.leg_leverage(pair.account_a,
+                                                pair.symbol_a),
+                'leverage_b': self.leg_leverage(pair.account_b,
+                                                pair.symbol_b),
                 'quoting_leg': pair.quoting_leg,
                 # The leg that will ACTUALLY rest the pending — the
                 # setting when there is one, otherwise the wider book.
