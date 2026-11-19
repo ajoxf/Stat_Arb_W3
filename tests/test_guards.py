@@ -164,46 +164,6 @@ def test_a_guard_never_prevents_a_close(engine, config, pair, legs):
     assert legs['acct_b'].broker.open_positions() == []
 
 
-def test_a_tick_is_only_read_from_a_symbol_in_market_watch():
-    """The failure this prevents: a symbol the terminal is not
-    subscribed to still answers symbol_info_tick — with the last value
-    it happened to have, for ever. The chart in front of the trader
-    updates, the API returns the same bid and ask for twenty-five
-    minutes, and this system correctly calls its own feed stale while
-    the market moves.
-    """
-    import okxtrader.broker as broker_module
-
-    class FakeMT5:
-        def __init__(self):
-            self.selected = set()
-            self.reads = []
-
-        def symbol_info(self, symbol):
-            from types import SimpleNamespace
-            return SimpleNamespace(visible=symbol in self.selected)
-
-        def symbol_select(self, symbol, on):
-            self.selected.add(symbol)
-            return True
-
-        def symbol_info_tick(self, symbol):
-            self.reads.append(symbol)
-            from types import SimpleNamespace
-            return SimpleNamespace(bid=1.0, ask=1.1, last=1.05, time=1)
-
-    fake = FakeMT5()
-    original, broker_module.mt5 = broker_module.mt5, fake
-    try:
-        from types import SimpleNamespace
-        session = broker_module.BrokerSession(SimpleNamespace(name='a'))
-        tick = session.symbol_tick('SIU6')
-    finally:
-        broker_module.mt5 = original
-
-    assert tick is not None
-    assert 'SIU6' in fake.selected, 'the tick was read from a hidden symbol'
-    assert fake.reads == ['SIU6']
 
 
 def test_the_feed_can_be_re_subscribed_and_the_age_starts_again(engine, legs,
@@ -249,84 +209,8 @@ def test_a_refresh_that_answers_with_nothing_says_so(engine, pair):
     assert 'is OKX reachable' in answer['reason']
 
 
-def test_attaching_to_the_right_terminal_does_not_log_it_in_again():
-    """`initialize(login=...)` makes the terminal re-authenticate even
-    when it is ALREADY logged into that account, and a re-login drops
-    Market Watch and interrupts the feed. With two runners on one
-    terminal that happens twice at every start — and the symptom is a
-    spread that ticks for a few seconds and then reads stale again."""
-    import okxtrader.broker as broker_module
-    from types import SimpleNamespace
-
-    class FakeMT5:
-        def __init__(self, login):
-            self.login = login
-            self.calls = []
-
-        def initialize(self, **kwargs):
-            self.calls.append(kwargs)
-            return True
-
-        def account_info(self):
-            return SimpleNamespace(login=self.login, server='S', name='n')
-
-        def shutdown(self):
-            self.calls.append('shutdown')
-
-        def last_error(self):
-            return (0, 'ok')
-
-    account = SimpleNamespace(name='a', login=100006, password='p',
-                              server='S', terminal_path=None)
-    fake = FakeMT5(login=100006)
-    original, broker_module.mt5 = broker_module.mt5, fake
-    try:
-        assert broker_module.BrokerSession(account).initialize() is True
-    finally:
-        broker_module.mt5 = original
-
-    # Attached, and NOT logged in again: one call, with no credentials.
-    assert fake.calls == [{}]
 
 
-def test_a_terminal_on_the_WRONG_account_is_logged_in():
-    """The control. Attaching to whatever is open must never mean
-    trading someone else's account."""
-    import okxtrader.broker as broker_module
-    from types import SimpleNamespace
-
-    class FakeMT5:
-        def __init__(self):
-            self.login = 999999            # not the account we want
-            self.calls = []
-
-        def initialize(self, **kwargs):
-            self.calls.append(kwargs)
-            if kwargs.get('login'):
-                self.login = kwargs['login']
-            return True
-
-        def account_info(self):
-            return SimpleNamespace(login=self.login, server='S', name='n')
-
-        def shutdown(self):
-            self.calls.append('shutdown')
-
-        def last_error(self):
-            return (0, 'ok')
-
-    account = SimpleNamespace(name='a', login=100006, password='p',
-                              server='S', terminal_path=None)
-    fake = FakeMT5()
-    original, broker_module.mt5 = broker_module.mt5, fake
-    try:
-        assert broker_module.BrokerSession(account).initialize() is True
-    finally:
-        broker_module.mt5 = original
-
-    assert fake.calls[0] == {}                       # tried attaching
-    assert 'shutdown' in fake.calls                  # let it go
-    assert fake.calls[-1]['login'] == 100006         # then logged in
 
 
 def test_a_stale_pair_re_subscribes_itself(engine, legs, pair):

@@ -2,10 +2,9 @@
 
     py -3.11 start.py
 
-It brings up everything: the web UI and the engine (the coordinator,
-which talks to OKX's API directly - and a leg runner for any MetaTrader 5
-account a desk still keeps). Three things make it the only file anyone
-has to run.
+It brings up everything: the web UI and the engine, which talks to
+OKX's API directly. Three things make it the only file anyone has to
+run.
 
 **It starts the UI FIRST, even with nothing configured.** A fresh
 install has no accounts, and the accounts are entered ON THE SCREEN —
@@ -14,8 +13,7 @@ hand. A launcher that exits with "no accounts configured" leaves the
 operator with nowhere to enter them.
 
 **It watches the config and restarts what changed.** Accounts, symbols
-and the hedge ratio are read at startup by the runners and the
-coordinator, so when the operator saves an account the engine has to
+and the hedge ratio are read at startup by the engine, so when the operator saves an account the engine has to
 come back to see it. It does that itself, within a few seconds, and
 says so — rather than making a restart the operator's job to remember.
 
@@ -35,7 +33,6 @@ import sys
 import time
 
 from okxtrader.config import TraderConfig, engine_hold_reasons
-from okxtrader.ipc import parse_endpoint
 
 #: How long a child gets to finish its own shutdown before it is killed.
 #: The coordinator's sweep is two round trips per account, so this is
@@ -92,8 +89,7 @@ def engine_fingerprint(config_path):
         return None                      # mid-write; try again next pass
     accounts = {
         name: {key: (account or {}).get(key)
-               for key in ('endpoint', 'login', 'server', 'terminal_path',
-                           'password_env', 'exchange', 'demo', 'api_key_env',
+               for key in ('exchange', 'demo', 'api_key_env',
                            'secret_env', 'passphrase_env', 'base_url')}
         for name, account in (raw.get('accounts') or {}).items()}
     pairs = {
@@ -141,18 +137,9 @@ def check_config(path):
         TraderConfig.from_raw(raw, path)
     except Exception as e:
         return [f'{path} could not be loaded: {type(e).__name__}: {e}']
-    # The clashes, and a MetaTrader 5 that is not where an account
-    # says: the same list the web screen reads to say why the engine
-    # is waiting (`config.engine_hold_reasons`).
+    # An OKX account with no key: the same list the web screen reads to
+    # say why the engine is waiting (`config.engine_hold_reasons`).
     problems.extend(engine_hold_reasons(raw))
-    for name, account in (raw.get('accounts') or {}).items():
-        account = account or {}
-        endpoint = (account.get('endpoint') or '').strip()
-        if endpoint:
-            try:
-                parse_endpoint(endpoint)
-            except ValueError as e:
-                problems.append(f"account '{name}': {e}")
     return problems
 
 
@@ -196,8 +183,8 @@ class Child:
             self.process.wait(timeout=SHUTDOWN_GRACE_SEC)
         except subprocess.TimeoutExpired:
             print(f'[launcher] {self.name} did not finish its shutdown in '
-                  f'{SHUTDOWN_GRACE_SEC:g}s — killing it. Check both '
-                  f'terminals for pendings of ours still resting.')
+                  f'{SHUTDOWN_GRACE_SEC:g}s — killing it. Check the '
+                  f'OKX app for orders of ours still resting.')
             self.process.kill()
 
 
@@ -276,7 +263,7 @@ def wait_until_serving(host, port, timeout=45.0, step=0.25,
 def port_in_use(host, port):
     """Is something already listening there?
 
-    Almost always the answer is "the last MT5-Trader, still running".
+    Almost always the answer is "the last desk, still running".
     Windows keeps that process alive when its console is closed the
     wrong way, and the browser then goes on being served by the OLD
     one — old page, old engine, and a pull that appears to do nothing
@@ -294,7 +281,7 @@ def port_in_use(host, port):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='MT5-Trader launcher')
+    parser = argparse.ArgumentParser(description='OKX spread desk launcher')
     parser.add_argument('--config', default='config.json')
     parser.add_argument('--status', default='status.json')
     parser.add_argument('--commands', default='commands.jsonl')
@@ -342,7 +329,7 @@ def main():
 
     if not args.no_web and port_in_use(args.host, args.web_port):
         print(f'\n[launcher] PORT {args.web_port} IS ALREADY IN USE.\n'
-              f'  Another MT5-Trader is almost certainly still running — '
+              f'  Another desk is almost certainly still running — '
               f'and your browser is being served by THAT one, which is why '
               f'a pull can look like it did nothing.\n'
               f'  Close the other black window (or end its python.exe in '
@@ -436,29 +423,22 @@ def main():
                 fingerprint = current
                 engine.restart()
                 if not engine.children:
-                    print('[launcher] no account has a runner endpoint yet. '
-                          f'Add your accounts on the Exchanges page at {url} '
-                          f'— the engine starts itself as soon as one is '
-                          f'saved.')
+                    print('[launcher] no OKX account is configured yet. '
+                          f'Add one on the Exchanges page at {url} — the '
+                          f'engine starts itself as soon as it is saved.')
 
             engine.supervise()
             time.sleep(1.0)
     except KeyboardInterrupt:
-        print('\n[launcher] stopping — the coordinator sweeps its pendings '
-              'first, so give it a moment')
+        print('\n[launcher] stopping — the engine sweeps its resting '
+              'orders off OKX first, so give it a moment')
         engine.stop('the launcher was stopped')
         if web is not None:
             web.stop()
 
 
 class Engine:
-    """The processes that talk to MT5: the runners and the coordinator.
-
-    Kept together because they come and go together: a runner restarted
-    without the coordinator leaves the coordinator holding a dead
-    socket, and the coordinator restarted alone re-reads a config the
-    runners have not.
-    """
+    """The engine process: the coordinator, which talks to OKX."""
 
     def __init__(self, args):
         self.args = args
@@ -477,41 +457,9 @@ class Engine:
                   f'it reads')
             self.children = []
             return
-        # A port still held is a runner from the last start, still
-        # attached to the terminal. Two clients logging one terminal in
-        # is a feed that ticks for a few seconds and then goes quiet —
-        # so it is named here rather than left to look like a broken
-        # market.
-        for name, account in config.accounts.items():
-            if not account.endpoint:
-                continue
-            try:
-                host, port = parse_endpoint(account.endpoint)
-            except ValueError:
-                continue
-            if port_in_use(host, port):
-                print(f"[launcher] account '{name}': {account.endpoint} is "
-                      f"ALREADY IN USE. A leg runner from a previous start "
-                      f"is still there — close the other window or end its "
-                      f"python.exe, or this account will have two clients "
-                      f"on one terminal and a feed that keeps dropping.")
-        self.children = [
-            Child(f'leg:{name}',
-                  [sys.executable, 'run_leg.py',
-                   '--config', self.args.config, '--account', name])
-            for name, account in config.accounts.items()
-            if account.endpoint and not account.is_okx]
-        # An OKX account has no runner: the coordinator reaches it over
-        # its API itself. The engine runs when there is either.
-        has_okx = any(a.is_okx for a in config.accounts.values())
-        if not self.children and not has_okx:
+        self.children = []
+        if not config.accounts:
             return
-        for child in self.children:
-            child.start()
-        # The coordinator last: connecting to a runner that has not
-        # bound its port yet is a retry loop nobody needs to watch.
-        if self.children:
-            time.sleep(2.0)
         coordinator = Child('coordinator',
                             [sys.executable, 'run_coordinator.py',
                              '--config', self.args.config,
@@ -530,8 +478,6 @@ class Engine:
         if not self.children:
             return
         print(f'[launcher] stopping the engine — {why}')
-        # Coordinator first: it needs its runners alive to cancel
-        # through them.
         for child in reversed(self.children):
             child.stop()
         self.children = []

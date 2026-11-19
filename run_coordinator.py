@@ -1,10 +1,10 @@
-"""Start the coordinator: two feeds in, one spread per pair out.
+"""Start the engine on its own (start.py does this for you).
 
     python run_coordinator.py --config config.json
 
-Connects to each account's leg runner, fuses their ticks into a spread
-per configured pair, and publishes one status snapshot the ladders, the
-Market Grid and the positions monitor all render from.
+Connects to each OKX account over its API, fuses the two legs' prices
+into a spread per configured pair, and publishes one status snapshot
+the ladders, the Market Grid and the Trading Monitor all render from.
 """
 
 import argparse
@@ -18,33 +18,20 @@ from okxtrader.config import TraderConfig
 from okxtrader.coordinator import Coordinator
 from okxtrader.database import Store
 from okxtrader import logsetup
-from okxtrader.legs import LocalLeg, RemoteLeg
+from okxtrader.legs import LocalLeg
 from okxtrader.shutdown import should_close
 
 
-def build_legs(config, retries=3, delay=1.0):
-    """One RemoteLeg per account with an endpoint.
-
-    An account without one has no runner: it cannot serve a leg, and
-    saying so here beats a connection error three layers down.
+def build_legs(config):
+    """One leg per OKX account, reached over its API in this process.
 
     Accounts that do not answer are simply absent. They are NOT fatal:
-    see `main`.
+    see `main`, and `leg_factory`, which tries them again.
     """
     legs = {}
     for name, account in config.accounts.items():
-        if account.is_okx:
-            leg = okx_leg(account)
-            if leg is not None:
-                legs[name] = leg
-            continue
-        if not account.endpoint:
-            logging.error(
-                "account '%s' has no endpoint — give it one (e.g. "
-                "127.0.0.1:9101) and start its leg runner", name)
-            continue
-        leg = RemoteLeg(name, account.endpoint)
-        if leg.connect(retries=retries, delay=delay):
+        leg = okx_leg(account)
+        if leg is not None:
             legs[name] = leg
     return legs
 
@@ -53,7 +40,7 @@ def okx_leg(account):
     """An OKX account is reached over its API, in this process: no leg
     runner, no terminal. One leg object serves every pair routed to it.
     None when OKX does not answer or refuses the key — retried later by
-    `leg_factory`, the same as a runner that is not up yet."""
+    `leg_factory`."""
     from okxtrader.okx_broker import OKXBroker
     leg = LocalLeg(OKXBroker(account))
     if leg.connect():
@@ -66,26 +53,20 @@ def okx_leg(account):
 
 
 def leg_factory(config):
-    """Try ONCE to bring up a leg that was not there before.
+    """Try ONCE to bring up an OKX account that was not answering.
 
     The coordinator calls this on a slow clock for every configured
-    account it has no runner for, so a terminal started late — or
-    restarted at lunchtime — is picked up without anybody restarting
-    the engine.
+    account it has no leg for, so OKX coming back - or a key fixed on
+    the Exchanges page - is picked up without restarting the engine.
     """
     def connect(name):
         account = config.accounts.get(name)
-        if account is not None and account.is_okx:
-            return okx_leg(account)
-        if account is None or not account.endpoint:
-            return None
-        leg = RemoteLeg(name, account.endpoint)
-        return leg if leg.connect(retries=1, delay=0.0) else None
+        return okx_leg(account) if account is not None else None
     return connect
 
 
 def main():
-    parser = argparse.ArgumentParser(description='MT5-Trader coordinator')
+    parser = argparse.ArgumentParser(description='OKX spread desk engine')
     parser.add_argument('--config', default='config.json')
     parser.add_argument('--status', default='status.json')
     parser.add_argument('--commands', default='commands.jsonl')
@@ -116,12 +97,10 @@ def main():
         #
         # So it runs anyway. It publishes a snapshot that says which
         # accounts are dark, the screen goes honest instead of stale,
-        # and every few seconds it tries the runners again — so a
-        # terminal started late is picked up without a restart.
+        # and every few seconds it tries OKX again.
         logging.error(
-            'no leg runner answered yet — starting anyway, and retrying. '
-            'Start them with: python run_leg.py --config %s --account '
-            '<name>', args.config)
+            'no OKX account answered yet — starting anyway, and retrying. '
+            'Check the keys on the Exchanges page (%s)', args.config)
 
     # The database is what makes a restart safe: without it the book
     # comes back empty and every live position looks like an orphan.

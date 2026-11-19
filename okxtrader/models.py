@@ -2,7 +2,7 @@
 
 A ladder trades a SPREAD. A spread order has a side (BUY or SELL the
 spread) and becomes two leg orders, one per account. Nothing here knows
-about MetaTrader5 — that lives in broker.py alone.
+about OKX — that lives in okx_api.py and okx_broker.py alone.
 """
 
 import itertools

@@ -522,15 +522,25 @@ def test_control_anything_else_is_not_and_the_old_path_still_applies():
     assert not is_ours(None)
 
 
-def test_the_broker_reports_the_comment_at_all():
+def test_the_broker_reports_the_comment_at_all(tmp_path):
     """The root cause. Without this field the guard above can never
-    fire, however correct it is."""
-    from pathlib import Path
-    source = (Path(__file__).resolve().parent.parent / 'okxtrader' /
-              'broker.py').read_text(encoding='utf-8')
-    block = source[source.index('def positions_by_magic'):]
-    block = block[:block.index('def account_is_hedging')]
-    assert "'comment': p.comment or ''," in block
+    fire, however correct it is. OKX's broker hands back the comment
+    each order was sent with, on every position it opened."""
+    import types
+    from okxtrader.models import OrderSide
+    from okxtrader.okx_api import OKXClient
+    from okxtrader.okx_broker import OKXBroker
+    from okxtrader.okx_sim import SimOKX
+    sim = SimOKX(seed=5, autostart=False)
+    broker = OKXBroker(types.SimpleNamespace(name='okx', demo=True),
+                       client=OKXClient(transport=sim.handle),
+                       ledger_path=tmp_path)
+    assert broker.initialize()
+    broker.send_market_order('BTC-USDT-SWAP', OrderSide.BUY, 0.1,
+                             comment='LADDER-X:A')
+    [position] = broker.positions_by_magic()
+    assert position['comment'] == 'LADDER-X:A'
+    sim.stop()
 
 
 def test_our_own_leg_is_never_auto_closed(config, pair, legs, tmp_path):

@@ -159,3 +159,27 @@ def test_the_pair_type_follows_the_instruments(web, a, b, kind):
                       ).get_json()
     assert answer['pair_type_suggestion'] == kind
     assert answer['fees_bps']['b']['maker'] is not None
+
+
+def test_diagnose_catches_a_beta_left_behind_by_other_instruments(web):
+    """A pair whose β was stamped for two OTHER instruments: the spread
+    it defines is not this pair's, and Diagnose says so."""
+    _save(web, api_key=KEY, secret=SECRET, passphrase=PASS)
+    raw = json.loads((web.tmp / 'config.json').read_text())
+    raw['pairs'] = {'BTC-USDT-SWAP|ETH-USDT-SWAP': {
+        'leg_a': {'account': 'desk', 'symbol': 'BTC-USDT-SWAP'},
+        'leg_b': {'account': 'desk', 'symbol': 'ETH-USDT-SWAP'},
+        'pair_type': 'RELATED', 'hedge_ratio': 0.9,
+        'hedge_ratio_for': 'BTC-USDT|BTC-USDT-SWAP'}}
+    (web.tmp / 'config.json').write_text(json.dumps(raw))
+    result = web.get('/api/accounts/desk/diagnose').get_json()
+    assert not result['ok']
+    assert any('BTC-USDT|BTC-USDT-SWAP' in c['message']
+               for c in result['checks'] if c['status'] == 'FAIL')
+
+
+def test_the_connection_banner_names_a_refused_key(web):
+    _save(web, api_key=KEY, secret='wrong', passphrase=PASS)
+    answer = web.get('/api/connection').get_json()
+    assert not answer['connected']
+    assert any('desk' in b for b in answer['blockers'])

@@ -375,39 +375,24 @@ STRUCTURAL_SETTINGS = ('POLL_INTERVAL_SEC',)
 
 
 class AccountConfig:
-    """One trading account.
+    """One OKX account, demo or live, reached over its API.
 
-    ``exchange == 'okx'`` (the default for a new account): one OKX
-    account, demo or live, reached over its API with a key, secret and
-    passphrase that live in `.env` — the account row holds only the
-    NAMES of those keys. One OKX account carries both legs of a spread
-    (spot and the perp, or two perps): that is the normal case on a
-    crypto exchange, not a clash.
-
-    ``exchange == 'mt5'``: Mirror's original MetaTrader 5 account — one
-    login, one terminal, one leg-runner port. Kept so the engine and its
-    tests are unchanged; this desk trades OKX.
+    Its key, secret and passphrase live in `.env`; the account row holds
+    only the NAMES of those keys. One OKX account carries both legs of a
+    spread (spot and the perp, or two perps): that is the normal case on
+    a crypto exchange, not a clash.
     """
 
     #: The keys the Stat_Arb_W3 desk already used, so an existing `.env`
     #: works as it is for the first OKX account.
     W3_KEYS = ('OKX_API_KEY', 'OKX_SECRET_KEY', 'OKX_PASSPHRASE')
 
-    def __init__(self, name, terminal_path=None, login=None,
-                 password_env="", server=None, endpoint=None,
-                 exchange=None, demo=None, api_key_env=None,
-                 secret_env=None, passphrase_env=None, base_url=None):
+    def __init__(self, name, demo=None, api_key_env=None, secret_env=None,
+                 passphrase_env=None, base_url=None, exchange=None,
+                 **_ignored):
         self.name = name
-        # An account with MT5 fields and no exchange named is Mirror's;
-        # anything else is OKX.
-        self.exchange = (exchange or ('mt5' if (terminal_path or login
-                                                 or endpoint) else 'okx'))
-        self.terminal_path = terminal_path
-        self.login = int(login) if login else None
-        self.password_env = password_env or env_key_for(name)
-        self.server = server
-        #: host:port where this account's leg runner listens (MT5 only).
-        self.endpoint = endpoint
+        #: Always OKX. (`exchange` is accepted so an older config reads.)
+        self.exchange = 'okx'
         keys = okx_env_keys(name)
         self.api_key_env = api_key_env or keys[0]
         self.secret_env = secret_env or keys[1]
@@ -421,11 +406,7 @@ class AccountConfig:
 
     @property
     def is_okx(self):
-        return self.exchange == 'okx'
-
-    @property
-    def password(self):
-        return os.environ.get(self.password_env) if self.password_env else None
+        return True
 
     @property
     def api_key(self):
@@ -444,30 +425,18 @@ class AccountConfig:
         return bool(self.api_key and self.api_secret and self.api_passphrase)
 
     def to_dict(self):
-        if self.is_okx:
-            out = {'exchange': 'okx', 'demo': self.demo,
-                   'api_key_env': self.api_key_env,
-                   'secret_env': self.secret_env,
-                   'passphrase_env': self.passphrase_env}
-            if self.base_url:
-                out['base_url'] = self.base_url
-            return out
-        return {'terminal_path': self.terminal_path, 'login': self.login,
-                'password_env': self.password_env, 'server': self.server,
-                'endpoint': self.endpoint}
+        out = {'exchange': 'okx', 'demo': self.demo,
+               'api_key_env': self.api_key_env,
+               'secret_env': self.secret_env,
+               'passphrase_env': self.passphrase_env}
+        if self.base_url:
+            out['base_url'] = self.base_url
+        return out
 
     @classmethod
     def from_dict(cls, name, raw):
         raw = raw or {}
-        # Cleaned on the way in: a path saved with the quotes Windows'
-        # "Copy as path" adds is still a path, and every part of the
-        # engine reads it from here.
-        return cls(name, terminal_path=(
-                       clean_terminal_path(raw.get('terminal_path')) or None),
-                   login=raw.get('login'),
-                   password_env=raw.get('password_env'),
-                   server=raw.get('server'), endpoint=raw.get('endpoint'),
-                   exchange=raw.get('exchange'), demo=raw.get('demo'),
+        return cls(name, demo=raw.get('demo'),
                    api_key_env=raw.get('api_key_env'),
                    secret_env=raw.get('secret_env'),
                    passphrase_env=raw.get('passphrase_env'),
@@ -1093,173 +1062,6 @@ def save_raw(path, raw, allow_shrink=False):
 
 # --- the three clashes, refused at SAVE time ---------------------------
 
-def endpoint_clash(raw, name, endpoint):
-    """Is another account already on this endpoint? Message or None.
-
-    Only one process can listen on a port. Two accounts sharing one
-    means the second leg runner cannot start — or, if the first won the
-    race, BOTH legs connect to it and trade the SAME MT5 account while
-    every screen reports two.
-    """
-    if not endpoint:
-        return None                # blank = no runner; any number may
-    for other, acct in (raw.get('accounts') or {}).items():
-        if other == name:
-            continue
-        if ((acct or {}).get('endpoint') or '').strip() == endpoint:
-            return (f"Endpoint {endpoint} already belongs to account "
-                    f"'{other}'. One port serves ONE leg runner — give this "
-                    f"account its own (e.g. {next_free_port(raw)}), or both "
-                    f"legs would end up on the same terminal.")
-    return None
-
-
-def login_clash(raw, name, login):
-    """Two rows with one login is the same MT5 account twice: both legs
-    would trade it and hedge against themselves."""
-    if not login:
-        return None
-    for other, acct in (raw.get('accounts') or {}).items():
-        if other == name:
-            continue
-        if str((acct or {}).get('login') or '') == str(login):
-            return (f"Login {login} already belongs to account '{other}'. "
-                    f"Two accounts on one login is the same MT5 account "
-                    f"twice — both legs would trade it and hedge against "
-                    f"themselves.")
-    return None
-
-
-#: The file an account's MetaTrader 5 is launched from.
-TERMINAL_EXE = 'terminal64.exe'
-
-
-def clean_terminal_path(value):
-    """A terminal path as it was typed or pasted, made into a path.
-
-    Windows' "Copy as path" wraps what it copies in double quotes, and
-    a path pasted from it was saved with them: the file was exactly
-    where the path said, and the desk still would not start, because
-    Windows was asked for a file whose name begins with a quote. So the
-    whitespace and any matching quotes around the path come off, here,
-    where every reader of the path goes through.
-    """
-    text = str(value or '').strip()
-    while len(text) >= 2 and text[0] == text[-1] and text[0] in '"\'':
-        text = text[1:-1].strip()
-    return text
-
-
-def terminal_file(value):
-    """The terminal64.exe a typed path means.
-
-    A FOLDER that holds terminal64.exe means that file: "the MetaTrader
-    folder" is what a person picks, and asking them to know which file
-    inside it to name is asking a trader to do a technician's job.
-    """
-    path = clean_terminal_path(value)
-    if path and os.path.isdir(path):
-        inside = os.path.join(path, TERMINAL_EXE)
-        if os.path.isfile(inside):
-            return inside
-    return path
-
-
-def terminal_missing(value):
-    """Why this account's MetaTrader 5 cannot be launched, in words that
-    say what to do - or None when it can.
-
-    Blank is NOT missing: it means attach to whichever terminal is
-    already open, which is a choice.
-    """
-    path = clean_terminal_path(value)
-    if not path:
-        return None
-    if os.path.isfile(path):
-        return None
-    if os.path.isdir(path):
-        return (f"{path} is a folder with no {TERMINAL_EXE} in it. Pick "
-                f"this account's MetaTrader 5 from the list of the ones "
-                f"installed on this PC.")
-    return (f"There is no MetaTrader 5 at {path}. Pick this account's "
-            f"MetaTrader 5 from the list of the ones installed on this PC, "
-            f"or correct the path.")
-
-
-def terminal_roots():
-    """Where a MetaTrader 5 is looked for on THIS PC: the Program Files
-    folders, and the top of the drive - where a second, portable copy
-    usually sits (C:\\MT5-A). None of it off Windows."""
-    if os.name != 'nt':
-        return []
-    roots = []
-    for key in ('ProgramFiles', 'ProgramW6432', 'ProgramFiles(x86)'):
-        folder = os.environ.get(key)
-        if folder and folder not in roots:
-            roots.append(folder)
-    drive = os.environ.get('SystemDrive', 'C:') + os.sep
-    if drive not in roots:
-        roots.append(drive)
-    return roots
-
-
-def find_terminals(raw=None, roots=None):
-    """Every MetaTrader 5 installed on this PC, for a person to PICK
-    rather than type: each folder one level under each root that holds
-    terminal64.exe, with the account already using it, if any.
-
-    One level and no deeper, on purpose: it is read every time the page
-    opens, and a walk of a whole drive is not.
-    """
-    roots = terminal_roots() if roots is None else roots
-    used = {}
-    for name, acct in ((raw or {}).get('accounts') or {}).items():
-        path = clean_terminal_path((acct or {}).get('terminal_path'))
-        if path:
-            used[os.path.normcase(os.path.normpath(path))] = name
-    found, seen = [], set()
-    for root in roots:
-        try:
-            children = sorted(os.listdir(root))
-        except OSError:
-            continue
-        for child in children:
-            path = os.path.join(root, child, TERMINAL_EXE)
-            key = os.path.normcase(os.path.normpath(path))
-            if key in seen or not os.path.isfile(path):
-                continue
-            seen.add(key)
-            found.append({'path': path, 'folder': child,
-                          'used_by': used.get(key)})
-    return found
-
-
-def terminal_clash(raw, name, path):
-    """One account needs one PORT, one LOGIN and one TERMINAL.
-
-    A terminal holds a single login, so two accounts sharing an
-    installation are one account: both leg runners attach to it, both
-    trade whatever it happens to be signed into, and the pair hedges
-    against itself.
-    """
-    path = clean_terminal_path(path)
-    if not path:
-        return None                # blank = attach to whatever is open
-    for other, acct in (raw.get('accounts') or {}).items():
-        if other == name:
-            continue
-        # Cleaned on both sides: one copy quoted and one not is still
-        # ONE installation.
-        if clean_terminal_path((acct or {}).get('terminal_path')).lower() \
-                == path.lower():
-            return (f"Account '{other}' already uses this MT5 installation. "
-                    f"One terminal serves ONE login, so both legs would end "
-                    f"up on the same account. Install a second copy of "
-                    f"MetaTrader 5 in its own folder (or use a portable "
-                    f"copy) and point this account at that one.")
-    return None
-
-
 def engine_hold_reasons(raw):
     """Why the launcher will not run the ENGINE on this config, one line
     per problem in words, or [].
@@ -1273,51 +1075,16 @@ def engine_hold_reasons(raw):
     for name, account in (raw.get('accounts') or {}).items():
         account = account or {}
         parsed = AccountConfig.from_dict(name, account)
-        if parsed.is_okx:
-            if not parsed.has_api_key and not parsed.base_url:
-                problems.append(
-                    f"account '{name}': no OKX API key saved — enter the "
-                    f"key, secret and passphrase on the Exchanges page")
-            continue
-        endpoint = (account.get('endpoint') or '').strip()
-        for problem in (endpoint_clash(raw, name, endpoint),
-                        login_clash(raw, name, account.get('login')),
-                        terminal_clash(raw, name,
-                                       account.get('terminal_path')),
-                        # A MetaTrader 5 that is not where the account
-                        # says. Held with the screen UP - the Exchanges
-                        # page is where it is picked - not refused
-                        # before the screen exists.
-                        terminal_missing(account.get('terminal_path'))):
-            if problem:
-                problems.append(f"account '{name}': {problem}")
+        if not parsed.has_api_key and not parsed.base_url:
+            problems.append(
+                f"account '{name}': no OKX API key saved — enter the "
+                f"key, secret and passphrase on the Exchanges page")
     return problems
-
-
-def next_free_port(raw, host='127.0.0.1', first=9101):
-    used = {(acct or {}).get('endpoint', '') for acct
-            in (raw.get('accounts') or {}).values()}
-    port = first
-    while f'{host}:{port}' in used:
-        port += 1
-    return f'{host}:{port}'
 
 
 # --- secrets ------------------------------------------------------------
 
 _ENV_SAFE = re.compile(r'[^A-Z0-9_]')
-
-
-def env_key_for(account_name):
-    """The .env key for an account's password.
-
-    Sanitised, because an account named `Ut 2` produced
-    `MT5_PASSWORD_UT 2` — a key with a space, which dotenv cannot parse,
-    so the password silently never loaded.
-    """
-    slug = _ENV_SAFE.sub('_', (account_name or '').upper().strip())
-    slug = re.sub(r'_+', '_', slug).strip('_') or 'ACCOUNT'
-    return f'MT5_PASSWORD_{slug}'
 
 
 def okx_env_keys(account_name):

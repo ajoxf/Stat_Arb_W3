@@ -118,7 +118,8 @@ def test_a_config_that_is_not_json_is_reported_too(tmp_path):
 def test_a_good_config_has_no_problems(tmp_path):
     """The control: the checker must not refuse a config that is fine."""
     path = _write(tmp_path, {
-        'accounts': {'a': {'endpoint': '127.0.0.1:9101'}},
+        'accounts': {'a': {'exchange': 'okx', 'demo': True,
+                           'base_url': 'http://127.0.0.1:8771'}},
         'pairs': {'K': {'leg_a': {'account': 'a', 'symbol': 'X'},
                         'leg_b': {'account': 'a', 'symbol': 'Y'}}}})
     assert start.check_config(path) == []

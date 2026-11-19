@@ -60,8 +60,7 @@ from okxtrader.commands import CommandRunner                     # noqa: E402
 from okxtrader.config import PairConfig, TraderConfig            # noqa: E402
 from okxtrader.coordinator import Coordinator                    # noqa: E402
 from okxtrader.database import Store                             # noqa: E402
-from okxtrader.leg_runner import LegServer                       # noqa: E402
-from okxtrader.legs import RemoteLeg                             # noqa: E402
+from okxtrader.legs import LocalLeg                              # noqa: E402
 from okxtrader.models import OrderSide                           # noqa: E402
 from okxtrader.webapp import create_app                          # noqa: E402
 from test_ui_browser import chromium_path                        # noqa: E402
@@ -86,17 +85,13 @@ class Desk:
                                  volume_step=0.10)
         self.brokers = {'spot': FakeBroker('spot', [self.spot]),
                         'fut': FakeBroker('fut', [self.future])}
-        self.servers = {}
-        for name, broker in self.brokers.items():
+        for broker in self.brokers.values():
             broker.initialize()
-            server = LegServer(broker, '127.0.0.1', 0)
-            threading.Thread(target=server.serve_forever, daemon=True).start()
-            self.servers[name] = server
 
         with open(self.paths['config'], 'w', encoding='utf-8') as f:
             json.dump({'accounts': {
-                name: {'endpoint': f'127.0.0.1:{server.port}'}
-                for name, server in self.servers.items()}, 'pairs': {}}, f)
+                name: {'exchange': 'okx', 'demo': True}
+                for name in self.brokers}, 'pairs': {}}, f)
 
         self.coordinator = None
         self.runner = None
@@ -126,11 +121,8 @@ class Desk:
 
     def start_engine(self):
         """Exactly what run_coordinator.py does, in-process."""
-        legs = {}
-        for name, server in self.servers.items():
-            leg = RemoteLeg(name, f'127.0.0.1:{server.port}', timeout=5.0)
-            assert leg.connect(retries=3, delay=0.1), f'{name} did not answer'
-            legs[name] = leg
+        legs = {name: LocalLeg(broker)
+                for name, broker in self.brokers.items()}
         self.coordinator = Coordinator(self.config(), legs,
                                        status_path=self.paths['status'],
                                        store=Store(self.paths['db']))
@@ -213,8 +205,6 @@ class Desk:
             self.httpd.shutdown()
         except Exception:
             pass
-        for server in self.servers.values():
-            server.stop()
 
     @staticmethod
     def wait_for(predicate, message, timeout=10.0):

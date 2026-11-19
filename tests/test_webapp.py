@@ -110,44 +110,10 @@ def test_a_command_reaches_the_log_when_the_engine_is_up(client, paths):
     assert client.get(f'/api/result/{command_id}').get_json()['ok'] is True
 
 
-def test_saving_an_account_refuses_a_clash_with_the_reason_on_the_row(client,
-                                                                      paths):
-    cfg.save_raw(paths['config'], {
-        'accounts': {'a': {'endpoint': '127.0.0.1:9101', 'login': 5001}},
-        'pairs': {}})
-
-    response = client.post('/api/accounts/b',
-                           json={'endpoint': '127.0.0.1:9101'})
-    assert response.status_code == 400
-    assert "belongs to account 'a'" in response.get_json()['error']
-
-    response = client.post('/api/accounts/b', json={'endpoint': 'nonsense'})
-    assert response.status_code == 400
-    assert 'COLON' in response.get_json()['error']
 
 
-def test_a_password_goes_to_the_env_file_and_never_to_the_config(client,
-                                                                 paths,
-                                                                 tmp_path):
-    cfg.save_raw(paths['config'], {'accounts': {'Live A': {}}, 'pairs': {}})
-    client.post('/api/accounts/Live A',
-                json={'endpoint': '127.0.0.1:9101', 'login': 5001,
-                      'password': 'two words #1'})
-
-    stored = json.load(open(paths['config'], encoding='utf-8'))
-    assert 'password' not in stored['accounts']['Live A']
-    env = (tmp_path / '.env').read_text(encoding='utf-8')
-    assert 'MT5_PASSWORD_LIVE_A="two words #1"' in env
 
 
-def test_the_accounts_page_shows_the_clash_on_the_row_itself(client, paths):
-    cfg.save_raw(paths['config'], {
-        'accounts': {'a': {'terminal_path': 'C:\\MT5\\terminal64.exe'},
-                     'b': {'terminal_path': 'C:\\MT5\\terminal64.exe'}},
-        'pairs': {}})
-    rows = client.get('/api/accounts').get_json()['accounts']
-    assert any(row['terminal_clash'] for row in rows)
-    assert 'One terminal serves ONE login' in rows[0]['terminal_clash']
 
 
 def test_a_pair_with_an_open_position_cannot_be_renamed_or_deleted(client,
@@ -214,17 +180,6 @@ def test_a_pair_key_with_a_slash_is_routable(client, paths):
     assert json.load(open(paths['config'], encoding='utf-8'))['pairs'] == {}
 
 
-def test_symbol_search_says_how_to_start_the_runner_when_it_is_down(client,
-                                                                    paths):
-    """Symbol setup must work with the coordinator down — and when the
-    RUNNER is down too, the answer is the command to start it, not a
-    stack trace."""
-    cfg.save_raw(paths['config'],
-                 {'accounts': {'a': {'endpoint': '127.0.0.1:9199'}},
-                  'pairs': {}})
-    response = client.get('/api/accounts/a/symbols?q=XAU')
-    assert response.status_code == 503
-    assert 'run_leg.py' in response.get_json()['error']
 
 
 def test_the_ui_loads_nothing_from_a_cdn():
@@ -314,267 +269,37 @@ def test_market_mode_changes_the_click_columns():
 
 # -- the settings endpoints: they must work with the ENGINE down --------
 
-class FakeRemoteLeg:
-    """A leg runner that answers, without a runner or an MT5."""
-
-    connected = True
-    symbols = {
-        'XAUUSD_': {'symbol': 'XAUUSD_', 'found': True, 'bid': 4292.00,
-                    'ask': 4292.20, 'contract_size': 100.0, 'tick_size': 0.01,
-                    'volume_min': 0.01, 'volume_step': 0.01,
-                    'volume_max': 100.0, 'depth_levels': 0},
-        'GC1226': {'symbol': 'GC1226', 'found': True, 'bid': 4351.00,
-                   'ask': 4351.40, 'contract_size': 100.0, 'tick_size': 0.01,
-                   'volume_min': 0.10, 'volume_step': 0.10,
-                   'volume_max': 100.0},
-    }
-
-    def __init__(self, name, endpoint, timeout=5.0):
-        self.name = name
-
-    def connect(self, retries=1, delay=0.0):
-        return self.connected
-
-    def close(self):
-        pass
-
-    def find_symbols(self, pattern, limit=40):
-        return [dict(spec) for name, spec in self.symbols.items()
-                if (pattern or '').upper() in name.upper()]
-
-    def symbol_report(self, symbol):
-        return dict(self.symbols.get(symbol)
-                    or {'symbol': symbol, 'found': False,
-                        'error': f'{symbol} does not exist on this broker'})
-
-    def terminal_report(self):
-        return {'library': True, 'terminal': True, 'terminal_connected': True,
-                'logged_in': True, 'algo_trading': True, 'hedging': True,
-                'trade_allowed': True, 'login': 5001, 'server': 'FakeServer',
-                'terminal_path': 'C:/MT5-A/terminal64.exe', 'ping_ms': 12.0}
-
-    def server_offset(self):
-        return 3 * 3600
-
-    def account_info(self):
-        return {'account': self.name, 'balance': 0.0, 'equity': 5000.0,
-                'profit': 0.0}
 
 
-@pytest.fixture
-def wired(client, paths, monkeypatch):
-    """Two accounts saved, and a leg runner that answers.
 
-    Both carry the login the fake runner reports. They used to carry
-    none, which is now a FAIL of its own — an account that names no
-    login cannot be checked against the terminal it attached to. A
-    fixture that leaves it out is testing a config no desk should run.
-    """
-    from okxtrader import webapp
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+def test_an_account_still_carrying_a_pair_cannot_be_deleted(client, paths):
+    wired = client
     cfg.save_raw(paths['config'], {
-        'accounts': {'spot': {'endpoint': '127.0.0.1:9101', 'login': 5001},
-                     'fut': {'endpoint': '127.0.0.1:9102', 'login': 5001}},
-        'pairs': {}})
-    monkeypatch.setattr(webapp, 'RemoteLeg', FakeRemoteLeg)
-    return client
-
-
-def test_connect_answers_the_first_question_and_says_what_to_do(wired,
-                                                                monkeypatch):
-    """Is the runner there, and is its terminal logged in? When it is
-    not, the answer is an instruction, not a status code."""
-    body = wired.get('/api/accounts/spot/connect').get_json()
-    assert body['connected'] is True and body['ok'] is True
-    names = [check['name'] for check in body['checks']]
-    assert 'MT5 terminal' in names and 'Account login' in names
-
-    monkeypatch.setattr(FakeRemoteLeg, 'connected', False)
-    response = wired.get('/api/accounts/spot/connect')
-    assert response.status_code == 503
-    body = response.get_json()
-    assert body['connected'] is False
-    assert any('run_leg.py' in step
-               for check in body['checks'] for step in check['fix'])
-
-
-def test_test_names_the_switch_that_is_off_and_how_to_turn_it_on(wired,
-                                                                 monkeypatch):
-    """`10027 AutoTrading disabled by client` is a button in THAT
-    terminal, and nothing else on the screen will say so."""
-    body = wired.get('/api/accounts/spot/test').get_json()
-    assert body['ok'] and body['problems'] == []
-    assert body['failed'] == 0
-
-    monkeypatch.setattr(FakeRemoteLeg, 'terminal_report',
-                        lambda self: {'library': True, 'terminal': True,
-                                      'logged_in': True, 'algo_trading': False,
-                                      'hedging': True})
-    body = wired.get('/api/accounts/spot/test').get_json()
-    assert body['ok'] is False
-    assert any('10027' in problem for problem in body['problems'])
-    algo = [check for check in body['checks']
-            if check['name'] == 'Algo Trading'][0]
-    assert 'turns green' in algo['fix'][0]
-
-
-def test_a_netting_account_is_called_out_before_it_is_traded(wired,
-                                                             monkeypatch):
-    monkeypatch.setattr(FakeRemoteLeg, 'terminal_report',
-                        lambda self: {'library': True, 'terminal': True,
-                                      'logged_in': True, 'algo_trading': True,
-                                      'hedging': False})
-    body = wired.get('/api/accounts/spot/test').get_json()
-    margin = [check for check in body['checks']
-              if check['name'] == 'Margin mode'][0]
-    assert margin['status'] == 'WARN'
-    assert 'NETTING' in margin['message']
-
-
-def test_diagnose_checks_the_symbols_and_whether_the_two_legs_fit(wired,
-                                                                  paths):
-    """The checks that only make sense across a pair: a beta stamped for
-    THIS pair, a spread that is a difference, a clip both legs carry."""
-    cfg.save_raw(paths['config'], {
-        'accounts': {'spot': {'endpoint': '127.0.0.1:9101', 'login': 5001},
-                     'fut': {'endpoint': '127.0.0.1:9102', 'login': 5001}},
-        'pairs': {'XAUUSD_|GC1226': {
-            'leg_a': {'account': 'spot', 'symbol': 'XAUUSD_'},
-            'leg_b': {'account': 'fut', 'symbol': 'GC1226'},
-            'hedge_ratio': 1.0, 'hedge_ratio_for': 'XAUUSD_|GC1226'}}})
-
-    body = wired.get('/api/accounts/spot/diagnose').get_json()
-
-    names = [check['name'] for check in body['checks']]
-    assert 'Symbol XAUUSD_ (leg A)' in names
-    assert 'Hedge ratio' in names and 'One Qty' in names
-    spread = [check for check in body['checks'] if check['name'] == 'Spread'][0]
-    assert spread['status'] == 'PASS'
-    clip = [check for check in body['checks']
-            if check['name'] == 'One Qty'][0]
-    assert 'per 1.00 of spread' in clip['message']
-    assert body['ok'] is True
-
-
-def test_diagnose_catches_a_beta_left_behind_by_another_instrument(wired,
-                                                                   paths):
-    """A stale beta defines a spread that does not exist — the fault
-    that turned a +3.30 oil spread into -0.05."""
-    cfg.save_raw(paths['config'], {
-        'accounts': {'spot': {'endpoint': '127.0.0.1:9101', 'login': 5001},
-                     'fut': {'endpoint': '127.0.0.1:9102', 'login': 5001}},
-        'pairs': {'XAUUSD_|GC1226': {
-            'leg_a': {'account': 'spot', 'symbol': 'XAUUSD_'},
-            'leg_b': {'account': 'fut', 'symbol': 'GC1226'},
-            'hedge_ratio': 66.93, 'hedge_ratio_for': 'XAGUSD|XAUUSD'}}})
-
-    body = wired.get('/api/accounts/spot/diagnose').get_json()
-
-    beta = [check for check in body['checks']
-            if check['name'] == 'Hedge ratio'][0]
-    assert beta['status'] == 'FAIL'
-    assert 'XAGUSD|XAUUSD' in beta['message']
-    spread = [check for check in body['checks'] if check['name'] == 'Spread'][0]
-    assert spread['status'] == 'FAIL'
-    assert 'is not a difference between' in spread['message']
-    assert body['ok'] is False
-
-
-def test_the_system_says_plainly_whether_it_is_connected(wired, paths):
-    """The operator's question is never "is endpoint 9101 bound"; it is
-    "can I trade right now"."""
-    write_status(paths)
-    body = wired.get('/api/connection').get_json()
-
-    # The engine is up in the fixture status, but that fabricated pair
-    # has no price — so it is honestly NOT ready, and it says which.
-    assert body['connected'] is False
-    assert 'Not ready to trade' in body['summary']
-    assert any('no price yet' in blocker for blocker in body['blockers'])
-    assert [row['account'] for row in body['accounts']] == ['spot', 'fut']
-    assert all(row['connected'] and row['trading'] for row in body['accounts'])
-
-
-def test_a_terminal_that_is_not_logged_in_is_the_named_blocker(wired, paths,
-                                                               monkeypatch):
-    write_status(paths)
-    monkeypatch.setattr(FakeRemoteLeg, 'terminal_report',
-                        lambda self: {'library': True, 'terminal': True,
-                                      'logged_in': False})
-    body = wired.get('/api/connection').get_json()
-    assert body['connected'] is False
-    assert 'not logged in' in body['summary']
-
-
-def test_a_symbols_contract_specs_come_from_mt5_not_from_a_form(wired):
-    body = wired.get('/api/accounts/fut/symbol/GC1226').get_json()
-    assert body['ok']
-    assert body['report']['contract_size'] == 100.0
-    assert body['report']['volume_min'] == 0.10
-
-    missing = wired.get('/api/accounts/fut/symbol/GCZ4')
-    assert missing.status_code == 404
-    assert 'does not exist' in missing.get_json()['error']
-
-
-def test_deriving_a_pair_shows_every_number_and_its_derivation(wired):
-    body = wired.post('/api/pairs/XAUUSD_|GC1226/derive', json={
-        'leg_a': {'account': 'spot', 'symbol': 'XAUUSD_'},
-        'leg_b': {'account': 'fut', 'symbol': 'GC1226'},
-        'pair_type': 'SPOT_FUTURE', 'hedge_ratio': 1.0}).get_json()
-
-    assert body['ok']
-    # Same underlying: beta is 1 and the spread IS the basis.
-    assert body['suggested_beta'] == 1.0
-    assert 'same' in body['beta_reason']
-    assert body['spread_now'] == pytest.approx(59.10, abs=0.01)
-    # max(tick B, beta x tick A), with the derivation beside it.
-    assert body['increment'] == pytest.approx(0.01)
-    assert 'max(tick B' in body['increment_derivation']
-    # What one Qty is on each leg. BOTH are the trader's now, and a
-    # pair that names neither is one lot a side.
-    assert body['clip_lots_a'] == pytest.approx(1.0)
-    assert body['clip_lots_b'] == pytest.approx(1.0)
-    assert body['spread_units'] == pytest.approx(100.0)
-    # ...and the derivation names the brokers' own minimums, which is
-    # what the trader needs in order to choose.
-    assert '1 Qty = 1 lots A / 1 lots B' in body['clip_derivation']
-    assert '0.01 and 0.1 lots' in body['clip_derivation']
-    # Leg B's 0.10-lot minimum binds, priced off leg A's MID.
-    assert body['min_notional_usd'] == pytest.approx(0.10 * 100 * 4292.10)
-    # Which leg should quote, from MEASURED widths.
-    assert body['widths']['b'] > body['widths']['a']
-    assert body['quoting_leg_suggestion'] == 'b'
-    assert 'less liquid' in body['quoting_note']
-    assert body['stamped_for'] == 'XAUUSD_|GC1226'
-
-
-def test_deriving_says_which_leg_is_wrong_rather_than_failing_blankly(wired):
-    response = wired.post('/api/pairs/x/derive', json={
-        'leg_a': {'account': 'spot', 'symbol': 'XAUUSD_'},
-        'leg_b': {'account': 'fut', 'symbol': 'GCZ4'}})
-    assert response.status_code == 404
-    assert 'GCZ4' in response.get_json()['error']
-
-    response = wired.post('/api/pairs/x/derive',
-                          json={'leg_a': {'account': 'spot'}})
-    assert response.status_code == 400
-    assert 'leg A needs an account and a symbol' in response.get_json()['error']
-
-
-def test_deriving_with_the_runner_down_says_how_to_start_it(wired,
-                                                            monkeypatch):
-    monkeypatch.setattr(FakeRemoteLeg, 'connected', False)
-    response = wired.post('/api/pairs/x/derive', json={
-        'leg_a': {'account': 'spot', 'symbol': 'XAUUSD_'},
-        'leg_b': {'account': 'fut', 'symbol': 'GC1226'}})
-    assert response.status_code == 503
-    assert 'run_leg.py' in response.get_json()['error']
-
-
-def test_an_account_still_carrying_a_pair_cannot_be_deleted(wired, paths):
-    cfg.save_raw(paths['config'], {
-        'accounts': {'spot': {'endpoint': '127.0.0.1:9101'},
-                     'fut': {'endpoint': '127.0.0.1:9102'}},
+        'accounts': {'spot': {'exchange': 'okx', 'demo': True},
+                     'fut': {'exchange': 'okx', 'demo': True}},
         'pairs': {'A|B': {'leg_a': {'account': 'spot', 'symbol': 'X'},
                           'leg_b': {'account': 'fut', 'symbol': 'Y'}}}})
 
@@ -793,25 +518,3 @@ def test_the_page_is_rebuilt_when_the_template_changes(paths, tmp_path):
     assert app.config['TEMPLATES_AUTO_RELOAD'] is True
 
 
-def test_diagnose_says_whether_the_broker_publishes_a_book(wired, paths):
-    """"Why are the size columns empty?" is a question about the BROKER,
-    and the checklist can answer it: most retail CFD accounts publish no
-    depth beyond the touch, and the ladder leaves those columns empty
-    rather than inventing a number from one leg."""
-    cfg.save_raw(paths['config'], {
-        'accounts': {'spot': {'endpoint': '127.0.0.1:9101', 'login': 5001},
-                     'fut': {'endpoint': '127.0.0.1:9102', 'login': 5001}},
-        'pairs': {'XAUUSD_|GC1226': {
-            'leg_a': {'account': 'spot', 'symbol': 'XAUUSD_'},
-            'leg_b': {'account': 'fut', 'symbol': 'GC1226'},
-            'hedge_ratio': 1.0, 'hedge_ratio_for': 'XAUUSD_|GC1226'}}})
-
-    body = wired.get('/api/accounts/spot/diagnose').get_json()
-
-    depth = [check for check in body['checks']
-             if 'depth of market' in check['name']]
-    assert depth, [check['name'] for check in body['checks']]
-    assert depth[0]['status'] == 'INFO'
-    assert 'the broker' in depth[0]['message']
-    # ...and how to see it for themselves.
-    assert any('Alt+B' in step for step in depth[0]['fix'])

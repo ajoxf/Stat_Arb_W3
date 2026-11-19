@@ -138,13 +138,11 @@ def test_the_files_are_rotated_rather_than_growing_for_ever(tmp_path):
 
 
 def test_every_process_writes_one():
-    """The launcher, the web server, the coordinator and each leg. A
-    leg's chatter must never bury a reconciler decision, so they are
-    separate files."""
+    """The launcher, the web server and the engine, each to its own
+    file."""
     sources = {
         'start.py': "logsetup.setup('launcher')",
         'run_coordinator.py': "logsetup.setup('coordinator')",
-        'okxtrader/leg_runner.py': "logsetup.setup(f'leg-{safe}')",
         'okxtrader/webapp.py': "logsetup.setup('web')",
     }
     for name, expected in sources.items():
@@ -155,12 +153,12 @@ def test_every_process_writes_one():
 def test_control_the_console_keeps_everything_it_had():
     """This ADDS a destination. A desk watching the black window must
     see exactly what it saw before."""
-    for name in ('run_coordinator.py', 'okxtrader/leg_runner.py'):
+    for name in ('run_coordinator.py',):
         text = (ROOT / name).read_text(encoding='utf-8')
         assert 'logging.StreamHandler()' in text, name
     # And the unbounded files that used to sit loose in the repo root
     # are gone - they were both a disk risk and hard to find.
-    for name in ('run_coordinator.py', 'okxtrader/leg_runner.py'):
+    for name in ('run_coordinator.py',):
         text = (ROOT / name).read_text(encoding='utf-8')
         assert "FileHandler('coordinator.log'" not in text, name
         assert "FileHandler(f'leg_" not in text, name

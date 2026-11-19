@@ -20,7 +20,6 @@ from okxtrader import algo
 from okxtrader.commands import CommandRunner
 from okxtrader.coordinator import Coordinator
 from okxtrader.database import Store
-from okxtrader.leg_runner import LegServer
 from okxtrader.models import OrderType, SpreadPosition, SpreadSide
 
 T0 = 1_800_000_450.0                     # half way into a 15-minute candle
@@ -301,18 +300,6 @@ def test_new_settings_restart_the_band_on_the_new_candle(config, pair, legs):
     assert legs['acct_b'].broker.rates_asked[-1][:2] == ('GC1226', 5)
 
 
-def test_the_leg_runner_serves_history(legs):
-    give_history(legs)
-    server = LegServer(legs['acct_a'].broker, '127.0.0.1', 0)
-    try:
-        reply = server.handle({'cmd': 'rates', 'symbol': 'XAUUSD_',
-                               'timeframe_min': 15, 'count': 5})
-        assert reply['ok'] and len(reply['rates']) == 5
-        none = server.handle({'cmd': 'rates', 'symbol': 'NOPE',
-                              'timeframe_min': 15, 'count': 5})
-        assert none['ok'] and none['rates'] is None    # unknown, not []
-    finally:
-        server.stop()
 
 
 def test_every_position_is_MANUAL_and_says_so_after_a_restart(tmp_path):

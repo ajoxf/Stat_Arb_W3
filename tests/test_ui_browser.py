@@ -893,135 +893,12 @@ def test_the_monitor_shows_margin_per_account_and_names_the_weakest(page):
     }""")
 
 
-def test_the_settings_page_edits_accounts_and_pairs(page):
-    """The one panel that must work with the ENGINE down: the
-    coordinator will not start until the symbols are right, and this is
-    where they get right."""
-    page.click('#open-settings')
-    page.wait_for_selector('.window.settings')
-    # OKX desk: the MetaTrader 5 table (and its blank row) is shown once
-    # the desk has an MT5 account - seed one through the page's own API.
-    page.evaluate("""async () => {
-        await fetch('/api/accounts/Seed MT5', {method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({endpoint: '127.0.0.1:9100',
-                                  login: '5000'})});
-        await window.MT5Settings.refresh();
-    }""")
-    page.wait_for_selector('.window.settings tr.new')
-
-    # A new account, saved from the blank row at the bottom.
-    add_account(page, 'CFI Spot', '127.0.0.1:9101', login='5001')
-    page.wait_for_selector('tr[data-account="CFI Spot"]')
-
-    # And a second one that tries to take the same port.
-    add_account(page, 'CFI Futures', '127.0.0.1:9101')
-    # An ERROR toast, which is a different thing from the success one
-    # above: it lasts far longer, and can still be dismissed by hand.
-    page.wait_for_selector('.toast:not(.ok)')
-    toast = page.text_content('.toast:not(.ok)')
-    # The refusal names the account holding the port AND the one to use.
-    assert "belongs to account 'CFI Spot'" in toast
-    assert '9102' in toast
-    page.click('.toast:not(.ok)')
-
-    add_account(page, 'CFI Futures', '127.0.0.1:9102')
-    page.wait_for_selector('tr[data-account="CFI Futures"]')
-
-    assert page.locator('.window.settings tbody tr[data-account]').count() >= 2
 
 
-def test_a_clash_already_in_the_config_is_shown_on_the_row(page):
-    """A clash was once only discoverable by running a connectivity
-    check, so an operator could look straight at two rows holding one
-    terminal and see nothing wrong with either."""
-    page.click('#open-settings')
-    page.wait_for_selector('.window.settings')
-    rows = page.locator('.window.settings tr[data-account]')
-    # Give both accounts the same terminal folder, through the API the
-    # page itself uses, then reopen.
-    page.evaluate("""async () => {
-        await fetch('/api/accounts/CFI Spot', {method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({terminal_path: 'C:/MT5/terminal64.exe'})});
-        await window.MT5Settings.refresh();
-    }""")
-    page.wait_for_timeout(200)
-    assert rows.count() >= 2
-    # The second account claiming it is refused at SAVE, with the reason
-    # on the row rather than in a log.
-    page.evaluate("""async () => {
-        const r = await fetch('/api/accounts/CFI Futures', {method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({terminal_path: 'C:/MT5/terminal64.exe'})});
-        window.__clash = (await r.json()).error;
-    }""")
-    assert 'One terminal serves ONE login' in page.evaluate('() => window.__clash')
 
 
-def test_the_exchanges_page_carries_connect_test_and_diagnose(page):
-    """The three questions an operator asks, in the order they ask them."""
-    page.click('#open-settings')
-    page.wait_for_selector('.window.settings')
-    page.wait_for_selector('tr[data-account] .connect-account', timeout=WAIT)
-
-    row = page.locator('tr[data-account]').first
-    for name in ('connect-account', 'test-account', 'diagnose-account'):
-        assert row.locator('.' + name).count() == 1
-    assert 'Exchanges' in page.text_content('.window.settings .accounts h3')
 
 
-def test_an_accounts_metatrader_is_PICKED_and_fixed_on_the_screen(
-        page, tmp_path, monkeypatch):
-    """A desk would not start because the MetaTrader path had been pasted
-    with Windows' quotes, and the person at it does not open config
-    files. The row says what is wrong; the installed terminals are a list
-    to pick from; the pick survives the page's own repaint; Save fixes
-    it."""
-    from okxtrader import config as cfg
-    root = tmp_path / 'Program Files'
-    (root / 'CFI2 MetaTrader 5 Terminal').mkdir(parents=True)
-    exe = root / 'CFI2 MetaTrader 5 Terminal' / 'terminal64.exe'
-    exe.write_text('', encoding='utf-8')
-    monkeypatch.setattr(cfg, 'terminal_roots', lambda: [str(root)])
-
-    page.click('#open-settings')
-    page.wait_for_selector('.window.settings')
-    page.evaluate("""async (gone) => {
-        await fetch('/api/accounts/CFI Spot', {method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({terminal_path: gone})});
-        await window.MT5Settings.refresh();
-    }""", '"' + str(tmp_path / 'gone' / 'terminal64.exe') + '"')
-    row = page.locator('tr[data-account="CFI Spot"]')
-    problem = page.locator('tr[data-account="CFI Spot"] + tr.problem')
-    page.wait_for_selector('tr[data-account="CFI Spot"] .f-terminal-pick',
-                           timeout=WAIT)
-    # Said on the line under the row, in words, with what to do.
-    assert 'no MetaTrader 5 at' in problem.text_content()
-    assert 'Pick' in problem.text_content()
-
-    row.locator('.f-terminal-pick').select_option(str(exe))
-    assert row.locator('.f-terminal').input_value() == str(exe)
-    # The page repaints itself every few seconds; an unsaved pick must
-    # not be wiped by it.
-    page.evaluate('() => window.MT5Settings.render()')
-    row = page.locator('tr[data-account="CFI Spot"]')
-    assert row.locator('.f-terminal').input_value() == str(exe)
-
-    page.wait_for_selector('.toast.ok:has-text("press Save")', timeout=WAIT)
-    row.locator('.save-account').click()
-    page.wait_for_selector('.toast.ok:has-text("restarts by itself")',
-                           timeout=WAIT)
-    stored = json.load(open(page.paths['config'], encoding='utf-8'))
-    assert stored['accounts']['CFI Spot']['terminal_path'] == str(exe)
-    page.evaluate('() => window.MT5Settings.refresh()')
-    page.wait_for_timeout(200)
-    row = page.locator('tr[data-account="CFI Spot"]')
-    assert page.locator(
-        'tr[data-account="CFI Spot"] + tr.problem').count() == 0
-    assert 'this account' in row.locator(
-        '.f-terminal-pick option:checked').text_content()
 
 
 def test_the_exit_costs_belong_to_ONE_LADDER_and_the_override_CLEARS(page):
@@ -1202,43 +1079,6 @@ def test_the_exchanges_page_says_where_the_per_ladder_settings_are(page):
     page.wait_for_selector('.ladder .grid tbody tr')
 
 
-def test_a_check_shows_its_answer_as_a_checklist_with_fixes(page):
-    """A checklist that only says FAIL is one that sends the operator
-    to a forum."""
-    page.click('#open-settings')
-    page.wait_for_selector('.window.settings')
-    page.evaluate("""() => {
-        window.__realFetch = window.__realFetch || window.fetch;
-        window.fetch = function (url, options) {
-            if (String(url).indexOf('/connect') >= 0) {
-                return Promise.resolve(new Response(JSON.stringify({
-                    ok: false, overall: 'FAIL', passed: 1, warnings: 0,
-                    failed: 1, connected: false,
-                    checks: [
-                        {scope: 'CFI Spot', name: 'MT5 terminal',
-                         status: 'PASS', message: 'attached', fix: []},
-                        {scope: 'CFI Spot', name: 'Algo Trading',
-                         status: 'FAIL',
-                         message: 'OFF — MT5 will refuse every order with '
-                             + '"10027 AutoTrading disabled by client"',
-                         fix: ['Press the Algo Trading button in THIS '
-                               + "terminal's toolbar (it turns green)"]}
-                    ]}), {status: 200,
-                          headers: {'Content-Type': 'application/json'}}));
-            }
-            return window.__realFetch(url, options);
-        };
-    }""")
-
-    page.locator('tr[data-account] .connect-account').first.click()
-    page.wait_for_selector('tr.checklist', timeout=WAIT)
-
-    text = page.text_content('tr.checklist')
-    assert '10027' in text                       # the broker's own words
-    assert 'turns green' in text                 # ...and what to do
-    assert page.locator('tr.c-fail').count() == 1
-    assert page.locator('tr.c-pass').count() == 1
-    page.evaluate('() => { window.fetch = window.__realFetch; }')
 
 
 def test_the_operator_is_told_when_the_system_is_connected(page):
@@ -1342,21 +1182,6 @@ def test_the_pair_form_offers_the_number_it_derived_as_a_click(page):
     page.evaluate('() => { window.fetch = window.__realFetch; }')
 
 
-def add_account(page, name, endpoint, login=''):
-    """Fill the blank row at the bottom and save it.
-
-    The row is re-created on every refresh, so the fields are filled and
-    then CHECKED before the click — a value typed into a row that has
-    since been replaced is exactly the class of fault these browser
-    tests exist to catch.
-    """
-    row = page.locator('.window.settings tr.new')
-    row.locator('.f-name').fill(name)
-    row.locator('.f-endpoint').fill(endpoint)
-    if login:
-        row.locator('.f-login').fill(login)
-    assert row.locator('.f-name').input_value() == name
-    row.locator('.save-account').click()
 
 
 # -- moving the windows ---------------------------------------------------
@@ -1753,48 +1578,6 @@ def test_ticking_lock_tells_the_ENGINE_and_not_only_the_browser(page):
                       "{ window.fetch = window.__sendReal; } }")
 
 
-def test_an_error_toast_is_given_a_timer_so_refusals_stop_stacking(page):
-    """Errors used to stay until dismissed, on purpose — so a refusal
-    could not scroll past unread. But a refusal that REPEATS (a broker
-    refusing every order) built a wall of identical boxes over the
-    ladder, each needing its own click, burying the market behind the
-    message about it.
-
-    Driven through a REAL refusal rather than a test-only hook, so it
-    also proves the toast that a live rejection produces is the one
-    that clears.
-    """
-    page.click('#open-settings')
-    page.wait_for_selector('.window.settings')
-    page.evaluate("() => document.getElementById('toasts').innerHTML = ''")
-
-    # Capture what setTimeout is asked for, and never let it fire, so
-    # the assertion does not cost ten seconds of real time.
-    page.evaluate("""() => {
-        window.__delays = [];
-        window.__realTimeout = window.setTimeout;
-        window.setTimeout = function (fn, ms) {
-            window.__delays.push(ms);
-            return window.__realTimeout(fn, 999999);
-        };
-    }""")
-    try:
-        add_account(page, 'Toast A', '127.0.0.1:9401', login='7001')
-        page.wait_for_selector('tr[data-account="Toast A"]')
-        # The same port twice: a real, engine-worded refusal.
-        add_account(page, 'Toast B', '127.0.0.1:9401')
-        page.wait_for_selector('.toast:not(.ok)')
-
-        delays = page.evaluate('() => window.__delays')
-        assert delays, 'the error toast was given no timer at all'
-        longest = max(delays)
-        assert 5000 <= longest <= 20000, (
-            f'{longest}ms is not "readable, then gone": {delays}')
-    finally:
-        page.evaluate("""() => {
-            if (window.__realTimeout) { window.setTimeout = window.__realTimeout; }
-            document.getElementById('toasts').innerHTML = '';
-        }""")
 
 
 def test_a_success_toast_still_clears_sooner_than_an_error(page):
@@ -1928,8 +1711,9 @@ def test_a_floating_ladder_is_really_lifted_out_of_the_row(page):
 
 def seed_config(page, pairs=True):
     """A saved account and pair, as a configured install has."""
-    config = {'accounts': {'acct_a': {'endpoint': '127.0.0.1:9101'},
-                           'acct_b': {'endpoint': '127.0.0.1:9102'}},
+    # OKX accounts on a closed local port: configured, never reached.
+    local = {'exchange': 'okx', 'demo': True, 'base_url': 'http://127.0.0.1:9'}
+    config = {'accounts': {'acct_a': dict(local), 'acct_b': dict(local)},
               'pairs': {}}
     if pairs:
         config['pairs'] = {'XAUUSD_|GC1226': {
@@ -6749,6 +6533,8 @@ def test_an_okx_account_is_saved_from_its_row_and_its_key_leaves_the_page(page):
     row.locator('.f-key').fill('key-abc')
     row.locator('.f-secret').fill('secret-def')
     row.locator('.f-passphrase').fill('pass-ghi')
+    # A closed local port: this desk must never reach out to OKX itself.
+    row.locator('.f-baseurl').fill('http://127.0.0.1:9')
     row.locator('.save-account').click()
     saved = 'tr[data-account="OKX Desk"][data-exchange="okx"]'
     page.wait_for_selector(saved, timeout=WAIT)
@@ -6762,3 +6548,97 @@ def test_an_okx_account_is_saved_from_its_row_and_its_key_leaves_the_page(page):
     assert page.locator(saved + ' .test-account').count() == 1
     assert page.locator(saved + ' .diagnose-account').count() == 1
     assert page.locator(saved + ' .connect-account').count() == 0
+
+
+def _okx_account(page, name='OKX Check'):
+    """An OKX account saved through the page's own API, pointed at a
+    closed local port so nothing here ever reaches OKX itself."""
+    page.evaluate("""async (name) => {
+        await fetch('/api/accounts/' + encodeURIComponent(name), {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({exchange: 'okx', demo: true,
+                                  base_url: 'http://127.0.0.1:9'})});
+        await window.MT5Settings.refresh();
+    }""", name)
+    page.wait_for_selector(f'tr[data-account="{name}"]', timeout=WAIT)
+
+
+def test_the_exchanges_page_carries_test_and_diagnose_on_an_okx_row(page):
+    page.click('#open-settings')
+    page.wait_for_selector('.window.settings')
+    _okx_account(page)
+    row = page.locator('tr[data-account="OKX Check"]')
+    for name in ('test-account', 'diagnose-account', 'save-account',
+                 'delete-account'):
+        assert row.locator('.' + name).count() == 1
+    assert 'Exchanges' in page.text_content('.window.settings .accounts h3')
+
+
+def test_a_check_shows_its_answer_as_a_checklist_with_fixes(page):
+    """A checklist that only says FAIL is one that sends the operator
+    to a forum: OKX's own code, and what to do about it."""
+    page.click('#open-settings')
+    page.wait_for_selector('.window.settings')
+    _okx_account(page)
+    page.evaluate("""() => {
+        window.__realFetch = window.__realFetch || window.fetch;
+        window.fetch = function (url, options) {
+            if (String(url).indexOf('/test') >= 0) {
+                return Promise.resolve(new Response(JSON.stringify({
+                    ok: false, overall: 'FAIL', passed: 1, warnings: 0,
+                    failed: 1, connected: false,
+                    checks: [
+                        {scope: 'OKX Check', name: 'OKX reachable',
+                         status: 'PASS', message: 'OKX demo trading answered',
+                         fix: []},
+                        {scope: 'OKX Check', name: 'API key',
+                         status: 'FAIL', message: 'OKX 50113: Invalid Sign',
+                         fix: ['The signature did not match - the SECRET '
+                               + 'KEY is wrong. Paste it again']}
+                    ]}), {status: 200,
+                          headers: {'Content-Type': 'application/json'}}));
+            }
+            return window.__realFetch(url, options);
+        };
+    }""")
+    page.locator('tr[data-account="OKX Check"] .test-account').click()
+    page.wait_for_selector('tr.checklist', timeout=WAIT)
+    text = page.text_content('tr.checklist')
+    assert '50113' in text                        # OKX's own words
+    assert 'SECRET KEY is wrong' in text          # ...and what to do
+    assert page.locator('tr.c-fail').count() == 1
+    assert page.locator('tr.c-pass').count() == 1
+    page.evaluate('() => { window.fetch = window.__realFetch; }')
+
+
+def test_an_error_toast_is_given_a_timer_so_refusals_stop_stacking(page):
+    """An error toast lasts longer than a success one, but it does not
+    stay forever: a refusal, read, then gone."""
+    page.click('#open-settings')
+    page.wait_for_selector('.window.settings .okx-accounts')
+    page.evaluate("() => document.getElementById('toasts').innerHTML = ''")
+    page.evaluate("""() => {
+        window.__delays = [];
+        window.__realTimeout = window.setTimeout;
+        window.setTimeout = function (fn, ms) {
+            window.__delays.push(ms);
+            return window.__realTimeout(fn, 999999);
+        };
+    }""")
+    try:
+        row = page.locator('.window.settings tr.okx-new')
+        row.locator('.f-name').fill('Bad URL')
+        row.locator('.f-baseurl').fill('ftp://not-okx')
+        row.locator('.save-account').click()
+        page.wait_for_selector('.toast:not(.ok)')
+        assert 'https://' in page.text_content('.toast:not(.ok)')
+        delays = page.evaluate('() => window.__delays')
+        assert delays, 'the error toast was given no timer at all'
+        longest = max(delays)
+        assert 5000 <= longest <= 20000, (
+            f'{longest}ms is not "readable, then gone": {delays}')
+    finally:
+        page.evaluate("""() => {
+            if (window.__realTimeout) { window.setTimeout = window.__realTimeout; }
+            document.getElementById('toasts').innerHTML = '';
+        }""")

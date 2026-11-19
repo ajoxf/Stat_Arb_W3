@@ -103,7 +103,6 @@ okxtrader/            the desk: engine, OKX broker, web UI, Telegram
   maker.py            the W3 maker fills and closes
 tests/                the safety suite (pytest tests -q)
 run_coordinator.py    the engine on its own (start.py runs it for you)
-run_leg.py            only for a desk that also keeps MetaTrader 5 accounts
 tools/                reports and maintenance scripts
 ```
 

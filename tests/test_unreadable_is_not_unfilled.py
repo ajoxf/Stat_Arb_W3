@@ -19,9 +19,7 @@ import logging
 
 import pytest
 
-from okxtrader import broker as broker_module
 from okxtrader.coordinator import Coordinator
-from okxtrader.legs import RemoteLeg
 from okxtrader.models import SpreadSide
 
 
@@ -54,90 +52,18 @@ def group_of(coordinator, pair):
 
 # -- the terminal's own silence -------------------------------------------
 
-class SilentMT5:
-    """A terminal that answers NOTHING — the link is down, the symbol is
-    gone, the IPC is upset. Every call returns None, which is what the
-    real library does."""
-
-    def history_deals_get(self, **kw):
-        return None
-
-    def orders_get(self, **kw):
-        return None
-
-    def positions_get(self, **kw):
-        return None
 
 
-class EmptyMT5(SilentMT5):
-    """A terminal that ANSWERED and had nothing to report. The control:
-    the difference between this and `SilentMT5` is the whole point."""
-
-    def history_deals_get(self, **kw):
-        return ()
-
-    def orders_get(self, **kw):
-        return ()
-
-    def positions_get(self, **kw):
-        return ()
 
 
-def read_state(fake, ticket=5150):
-    from types import SimpleNamespace
-    original, broker_module.mt5 = broker_module.mt5, fake
-    try:
-        session = broker_module.BrokerSession(SimpleNamespace(name='a'))
-        return session.order_fill_state(ticket)
-    finally:
-        broker_module.mt5 = original
 
 
-def test_a_terminal_that_answers_nothing_is_reported_as_UNREADABLE():
-    state = read_state(SilentMT5())
-
-    assert state['readable'] is False
-    assert state['error'], 'silence was reported without a word about it'
-    # ...and the zero is still THERE, deliberately. `cancel_pending`
-    # compares this against 0 to decide whether to re-read for a leaked
-    # fill, and a None would skip that check — a fix for one blindness
-    # opening another.
-    assert state['filled_volume'] == 0.0
 
 
-def test_CONTROL_a_terminal_that_answers_with_nothing_is_READABLE():
-    state = read_state(EmptyMT5())
-
-    assert state['readable'] is True
-    assert state['error'] is None
-    assert state['filled_volume'] == 0.0
 
 
-def test_the_IPC_fallbacks_say_unreadable_rather_than_unfilled():
-    """A leg over a socket has the same problem one layer up: no reply
-    is not "no fill". Both answers a RemoteLeg manufactures when the
-    runner cannot be reached have to carry it."""
-    leg = RemoteLeg('acct_a', '127.0.0.1:1')
-    leg._request = lambda payload: None
-
-    state = leg.order_state(9001)
-    cancelled = leg.cancel_order(9001)
-
-    assert state['readable'] is False and state['filled_volume'] == 0.0
-    assert cancelled['readable'] is False and cancelled['cancelled'] is False
-    # `still_open` TRUE on both: the order we could not ask about is
-    # assumed to be at the broker, because it probably is.
-    assert state['still_open'] and cancelled['still_open']
 
 
-def test_CONTROL_a_runner_that_answers_is_passed_through_untouched():
-    leg = RemoteLeg('acct_a', '127.0.0.1:1')
-    answer = {'ok': True, 'readable': True, 'filled_volume': 0.10,
-              'price': 4351.0, 'position_tickets': [77], 'still_open': False,
-              'error': None}
-    leg._request = lambda payload: answer
-
-    assert leg.order_state(9001) is answer
 
 
 # -- what the quoter does with it -----------------------------------------

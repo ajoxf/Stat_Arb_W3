@@ -14,37 +14,14 @@ def raw_with(**accounts):
     return {'accounts': accounts, 'pairs': {'P': {}}}
 
 
-def test_two_accounts_cannot_share_one_port():
-    raw = raw_with(a={'endpoint': '127.0.0.1:9101'}, b={})
-    message = cfg.endpoint_clash(raw, 'b', '127.0.0.1:9101')
-    assert message and "belongs to account 'a'" in message
-    # And it names the value to type instead of only refusing.
-    assert '9102' in message
 
 
-def test_two_accounts_cannot_share_one_login():
-    raw = raw_with(a={'login': 5001}, b={})
-    message = cfg.login_clash(raw, 'b', 5001)
-    assert message and 'hedge against themselves' in message
 
 
-def test_two_accounts_cannot_share_one_terminal_installation():
-    raw = raw_with(a={'terminal_path': 'C:\\MT5\\terminal64.exe'}, b={})
-    message = cfg.terminal_clash(raw, 'b', 'c:\\mt5\\TERMINAL64.EXE')
-    assert message and 'One terminal serves ONE login' in message
 
 
-def test_a_row_may_keep_the_value_it_already_holds():
-    """Refusing a value a row already has makes an existing clash
-    unfixable: every save of either row trips over the other."""
-    raw = raw_with(a={'endpoint': '127.0.0.1:9101'})
-    assert cfg.endpoint_clash(raw, 'a', '127.0.0.1:9101') is None
 
 
-def test_a_blank_terminal_or_endpoint_is_legal():
-    raw = raw_with(a={'terminal_path': '', 'endpoint': ''}, b={})
-    assert cfg.terminal_clash(raw, 'b', '') is None
-    assert cfg.endpoint_clash(raw, 'b', '') is None
 
 
 def test_a_save_that_would_drop_the_accounts_is_refused(tmp_path):
@@ -109,12 +86,6 @@ def test_the_config_is_never_written_in_place(tmp_path):
     assert seen and seen[-1]['accounts']['a']['login'] == 1
 
 
-def test_an_account_name_with_a_space_produces_a_parseable_env_key():
-    """`Ut 2` produced `MT5_PASSWORD_UT 2` — a key with a space, which
-    dotenv cannot parse, so the password silently never loaded."""
-    assert cfg.env_key_for('Ut 2') == 'MT5_PASSWORD_UT_2'
-    assert cfg.env_key_for('cfi-live!') == 'MT5_PASSWORD_CFI_LIVE'
-    assert cfg.env_key_for('') == 'MT5_PASSWORD_ACCOUNT'
 
 
 def test_a_password_with_spaces_or_a_hash_survives_the_env_file(tmp_path):
@@ -129,36 +100,26 @@ def test_a_password_with_spaces_or_a_hash_survives_the_env_file(tmp_path):
     assert 'MT5_PASSWORD_B="plain"' in body
 
 
-def test_the_password_never_lands_in_the_config_file(tmp_path):
-    path = str(tmp_path / 'config.json')
-    account = cfg.AccountConfig('Live A', login=5001)
-    cfg.save_raw(path, {'accounts': {'Live A': account.to_dict()},
-                        'pairs': {}})
-    stored = json.load(open(path, encoding='utf-8'))['accounts']['Live A']
-    # The config holds the NAME of the variable, never the secret.
-    assert 'password' not in stored
-    assert stored['password_env'] == 'MT5_PASSWORD_LIVE_A'
-    assert account.password is None            # nothing set in the env yet
 
 
 def test_structural_changes_say_restart_and_comfort_ones_do_not():
     """Crying "restart" on every save teaches the operator to ignore the
     line that matters."""
     first = cfg.TraderConfig.from_raw({
-        'accounts': {'a': {'endpoint': '127.0.0.1:9101'}},
+        'accounts': {'a': {'exchange': 'okx', 'demo': True}},
         'pairs': {'P': {'leg_a': {'account': 'a', 'symbol': 'X'},
                         'hedge_ratio': 1.0}},
         'settings': {'MARKET_PROTECTION_TICKS': 3.0}})
 
     same_but_comfort = cfg.TraderConfig.from_raw({
-        'accounts': {'a': {'endpoint': '127.0.0.1:9101'}},
+        'accounts': {'a': {'exchange': 'okx', 'demo': True}},
         'pairs': {'P': {'leg_a': {'account': 'a', 'symbol': 'X'},
                         'hedge_ratio': 1.0}},
         'settings': {'MARKET_PROTECTION_TICKS': 5.0}})
     assert first.restart_required(same_but_comfort) == []
 
     symbol_changed = cfg.TraderConfig.from_raw({
-        'accounts': {'a': {'endpoint': '127.0.0.1:9101'}},
+        'accounts': {'a': {'exchange': 'okx', 'demo': True}},
         'pairs': {'P': {'leg_a': {'account': 'a', 'symbol': 'Y'},
                         'hedge_ratio': 1.0}}})
     assert first.restart_required(symbol_changed) == ['pair P']

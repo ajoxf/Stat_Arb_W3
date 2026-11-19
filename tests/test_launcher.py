@@ -64,7 +64,7 @@ def test_only_what_the_engine_reads_at_startup_triggers_a_restart(workdir):
     reason; not restarting for a symbol change would leave the engine
     trading the wrong instrument."""
     config = {
-        'accounts': {'a': {'endpoint': '127.0.0.1:9101', 'login': 1}},
+        'accounts': {'a': {'exchange': 'okx', 'demo': True}},
         'pairs': {'X|Y': {'leg_a': {'account': 'a', 'symbol': 'X'},
                           'hedge_ratio': 1.0, 'enabled': True,
                           'increment': 0.01}},
@@ -79,7 +79,7 @@ def test_only_what_the_engine_reads_at_startup_triggers_a_restart(workdir):
     (workdir / 'config.json').write_text(json.dumps(config), encoding='utf-8')
     assert start.engine_fingerprint('config.json') == before
 
-    # A symbol is structural: the runners read it at startup.
+    # A symbol is structural: the engine reads it at startup.
     config['pairs']['X|Y']['leg_a']['symbol'] = 'Z'
     (workdir / 'config.json').write_text(json.dumps(config), encoding='utf-8')
     assert start.engine_fingerprint('config.json') != before
@@ -91,7 +91,7 @@ def test_a_new_account_is_a_restart_because_the_engine_cannot_see_it(workdir):
     empty = start.engine_fingerprint('config.json')
 
     (workdir / 'config.json').write_text(
-        json.dumps({'accounts': {'a': {'endpoint': '127.0.0.1:9101'}},
+        json.dumps({'accounts': {'a': {'exchange': 'okx', 'demo': True}},
                     'pairs': {}}), encoding='utf-8')
 
     assert start.engine_fingerprint('config.json') != empty
@@ -105,17 +105,17 @@ def test_a_half_written_config_is_not_read_as_a_change(workdir):
     assert start.engine_fingerprint('config.json') is None
 
 
-def test_the_launcher_refuses_to_run_an_engine_on_a_clashing_config(workdir):
-    """Two accounts on one port is the same MT5 account twice. The
-    screen stays up so the clash can be fixed on it."""
+def test_the_launcher_holds_the_engine_on_an_account_with_no_key(workdir):
+    """An OKX account with no API key cannot trade. The screen stays up
+    so the key can be entered on it, and the reason says where."""
     (workdir / 'config.json').write_text(json.dumps({
-        'accounts': {'a': {'endpoint': '127.0.0.1:9101'},
-                     'b': {'endpoint': '127.0.0.1:9101'}},
+        'accounts': {'okx': {'exchange': 'okx', 'demo': True}},
         'pairs': {}}), encoding='utf-8')
 
     problems = start.check_config('config.json')
 
-    assert problems and 'already belongs to account' in problems[0]
+    assert problems and 'no OKX API key saved' in problems[0]
+    assert 'Exchanges page' in problems[0]
 
 
 def test_a_config_with_no_accounts_is_not_a_problem_to_refuse(workdir):
@@ -152,36 +152,11 @@ class FakeChild:
         FakeChild.stopped.append(self.name)
 
 
-def test_the_engine_spawns_a_runner_per_account_and_one_coordinator(
-        workdir, monkeypatch):
-    (workdir / 'config.json').write_text(json.dumps({
-        'accounts': {'spot': {'endpoint': '127.0.0.1:9101'},
-                     'fut': {'endpoint': '127.0.0.1:9102'},
-                     'no-runner': {}},
-        'pairs': {}}), encoding='utf-8')
-    FakeChild.started, FakeChild.stopped = [], []
-    monkeypatch.setattr(start, 'Child', FakeChild)
-    monkeypatch.setattr(start.time, 'sleep', lambda seconds: None)
-    engine = start.Engine(_args(workdir))
-
-    engine.restart()
-
-    assert FakeChild.started == ['leg:spot', 'leg:fut', 'coordinator']
-    # An account with no endpoint has no runner — and is not an error:
-    # it is an account that has not been given a port yet.
-    assert 'leg:no-runner' not in FakeChild.started
-
-    engine.stop('test')
-    # Coordinator FIRST: it needs its runners alive to cancel through
-    # them.
-    assert FakeChild.stopped == ['coordinator', 'leg:fut', 'leg:spot']
 
 
-def test_no_endpoint_anywhere_starts_nothing_and_is_not_a_crash(workdir,
-                                                                monkeypatch):
+def test_no_account_starts_nothing_and_is_not_a_crash(workdir, monkeypatch):
     (workdir / 'config.json').write_text(
-        json.dumps({'accounts': {'a': {'exchange': 'mt5'}}, 'pairs': {}}),
-        encoding='utf-8')
+        json.dumps({'accounts': {}, 'pairs': {}}), encoding='utf-8')
     FakeChild.started = []
     monkeypatch.setattr(start, 'Child', FakeChild)
     engine = start.Engine(_args(workdir))
@@ -192,7 +167,7 @@ def test_no_endpoint_anywhere_starts_nothing_and_is_not_a_crash(workdir,
     assert FakeChild.started == []
 
 
-def test_an_okx_account_needs_no_runner_only_the_coordinator(workdir,
+def test_an_okx_account_starts_the_engine_and_nothing_else(workdir,
                                                              monkeypatch):
     """OKX is a REST API the coordinator talks to directly: there is no
     terminal to host, so no leg runner — just the coordinator."""
@@ -263,33 +238,6 @@ def test_a_second_launcher_refuses_the_port_instead_of_being_invisible(
     assert start.port_in_use('127.0.0.1', port) is False
 
 
-def test_a_runner_port_still_held_is_named_before_the_engine_starts(
-        workdir, monkeypatch, capsys):
-    """A port still held is a leg runner from the last start, still
-    attached to the terminal. Two clients logging one terminal in is a
-    feed that ticks for a few seconds and then goes quiet — it must not
-    be left to look like a broken market."""
-    import socket
-    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    listener.bind(('127.0.0.1', 0))
-    listener.listen(1)
-    port = listener.getsockname()[1]
-    (workdir / 'config.json').write_text(json.dumps({
-        'accounts': {'leg_a': {'endpoint': f'127.0.0.1:{port}'}},
-        'pairs': {}}), encoding='utf-8')
-    FakeChild.started = []
-    monkeypatch.setattr(start, 'Child', FakeChild)
-    monkeypatch.setattr(start.time, 'sleep', lambda seconds: None)
-    engine = start.Engine(_args(workdir))
-    try:
-        engine.restart()
-    finally:
-        listener.close()
-
-    printed = capsys.readouterr().out
-    assert 'ALREADY IN USE' in printed
-    assert "account 'leg_a'" in printed
-    assert 'two clients on one terminal' in printed
 
 
 # --- Opening the screen -------------------------------------------------

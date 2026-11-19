@@ -10,9 +10,8 @@ Two rules from the spec shape the endpoints here:
 
 - **Symbol setup must work with the coordinator DOWN.** Otherwise the
   system deadlocks: the coordinator will not start until the symbols
-  are right, and these are the tools for finding out. So the symbol
-  endpoints open a short-lived `RemoteLeg` straight to the account's
-  runner.
+  are right, and these are the tools for finding out. So the account
+  and symbol endpoints open a short-lived connection straight to OKX.
 - **Never send the operator to a log for a decision already made.** A
   refusal carries the broker's — or the config's — own words, in the
   response body, for the panel to print.
@@ -31,7 +30,7 @@ from flask import Flask, jsonify, render_template, request
 from . import analysis, atomicfile, config as cfg, diagnostics, fairvalue, \
     hedgeratio, signals, sizing, slippage
 from .commands import CommandLog
-from .legs import LocalLeg, RemoteLeg
+from .legs import LocalLeg
 
 #: How old the status file may be before the UI says the engine is not
 #: running. Six polls at the default 0.3s: long enough not to flicker,
@@ -768,146 +767,34 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
 
     @app.get('/api/accounts')
     def api_accounts():
+        """The OKX accounts: only WHETHER each part of a key is saved,
+        and under which .env name - never a value."""
         raw = cfg.load_raw(config_path)
         accounts = []
         for name, account in (raw.get('accounts') or {}).items():
             account = account or {}
             okx = cfg.AccountConfig.from_dict(name, account)
-            if okx.is_okx:
-                # An OKX account: an API key, not a terminal. Only
-                # WHETHER each part is saved, and under which .env key -
-                # never the value.
-                accounts.append({
-                    'name': name, 'exchange': 'okx', 'demo': okx.demo,
-                    'base_url': account.get('base_url') or '',
-                    'key_env': okx.api_key_env,
-                    'secret_env': okx.secret_env,
-                    'passphrase_env': okx.passphrase_env,
-                    'key_set': bool(okx.api_key),
-                    'secret_set': bool(okx.api_secret),
-                    'passphrase_set': bool(okx.api_passphrase)})
-                continue
             accounts.append({
-                'name': name,
-                'endpoint': account.get('endpoint'),
-                'login': account.get('login'),
-                'server': account.get('server'),
-                'terminal_path': account.get('terminal_path'),
-                'password_env': account.get('password_env')
-                or cfg.env_key_for(name),
-                'password_set': bool(os.environ.get(
-                    account.get('password_env') or cfg.env_key_for(name))),
-                # Shown ON the row: a clash was only discoverable by
-                # running a connectivity check, so an operator could look
-                # straight at two rows holding one terminal and see
-                # nothing wrong with either.
-                'endpoint_clash': cfg.endpoint_clash(
-                    raw, name, (account.get('endpoint') or '').strip()),
-                'login_clash': cfg.login_clash(raw, name,
-                                               account.get('login')),
-                'terminal_clash': cfg.terminal_clash(
-                    raw, name, account.get('terminal_path')),
-                # A MetaTrader 5 that is not where the row says - on the
-                # row, in words, because the launcher holds the engine
-                # until it is found and this is where it gets fixed.
-                'terminal_missing': cfg.terminal_missing(
-                    account.get('terminal_path')),
-            })
-        return jsonify({'accounts': accounts,
-                        'next_free_port': cfg.next_free_port(raw)})
-
-    @app.get('/api/terminals')
-    def api_terminals():
-        """Every MetaTrader 5 installed on this PC, to PICK on the
-        Exchanges page instead of typing a path - and which account, if
-        any, already uses each. Works with the engine down, which is
-        exactly when it is needed."""
-        raw = cfg.load_raw(config_path)
-        return jsonify({'ok': True,
-                        'terminals': cfg.find_terminals(raw)})
+                'name': name, 'exchange': 'okx', 'demo': okx.demo,
+                'base_url': account.get('base_url') or '',
+                'key_env': okx.api_key_env,
+                'secret_env': okx.secret_env,
+                'passphrase_env': okx.passphrase_env,
+                'key_set': bool(okx.api_key),
+                'secret_set': bool(okx.api_secret),
+                'passphrase_set': bool(okx.api_passphrase)})
+        return jsonify({'accounts': accounts})
 
     @app.post('/api/accounts/<path:name>')
     def api_save_account(name):
-        """Save one account — refusing a clash HERE, at save time.
-
-        A refusal at save is a corrected field; a refusal at startup is
-        five restart attempts with the reason scrolling past.
-        """
-        payload = request.get_json(silent=True) or {}
-        raw = cfg.load_raw(config_path)
-        raw.setdefault('accounts', {})
-        account = raw['accounts'].setdefault(name, {})
-        if payload.get('exchange') == 'okx' or (
-                account.get('exchange') == 'okx'
-                and not payload.get('exchange')):
-            return save_okx_account(raw, name, account, payload)
-        # What the row held BEFORE the edit: the guards must only refuse
-        # a value being newly CLAIMED, or an existing clash is unfixable
-        # because every save of either row trips over the other.
-        was = {'terminal_path': cfg.clean_terminal_path(
-                   account.get('terminal_path')),
-               'endpoint': (account.get('endpoint') or '').strip(),
-               'login': str(account.get('login') or '')}
-
-        endpoint = (payload.get('endpoint') or '').strip()
-        if endpoint and endpoint != was['endpoint']:
-            clash = cfg.endpoint_clash(raw, name, endpoint)
-            if clash:
-                return jsonify({'ok': False, 'error': clash}), 400
-            try:
-                from .ipc import parse_endpoint
-                host, port = parse_endpoint(endpoint)
-                endpoint = f'{host}:{port}'
-            except ValueError as e:
-                return jsonify({'ok': False, 'error': str(e)}), 400
-        # What was PASTED, made into the file it means: the quotes
-        # Windows' "Copy as path" adds come off, and a MetaTrader folder
-        # becomes the terminal64.exe inside it.
-        path = cfg.terminal_file(payload.get('terminal_path'))
-        if path and path.lower() != was['terminal_path'].lower():
-            clash = cfg.terminal_clash(raw, name, path)
-            if clash:
-                return jsonify({'ok': False, 'error': clash}), 400
-        login = payload.get('login')
-        if login and str(login) != was['login']:
-            clash = cfg.login_clash(raw, name, login)
-            if clash:
-                return jsonify({'ok': False, 'error': clash}), 400
-
-        account.update({
-            'endpoint': endpoint or account.get('endpoint'),
-            # Saving the row also cleans a path saved BEFORE this was
-            # cleaned: the quotes come off the file, not only the read.
-            'terminal_path': path or cfg.clean_terminal_path(
-                account.get('terminal_path')) or None,
-            'login': int(login) if login else account.get('login'),
-            'server': payload.get('server') or account.get('server'),
-            'password_env': account.get('password_env')
-            or cfg.env_key_for(name),
-        })
-        cfg.save_raw(config_path, raw)
-
-        password = payload.get('password')
-        if password:
-            # Into .env, quoted, and NEVER into the config or a log line.
-            env_path = os.path.join(os.path.dirname(
-                os.path.abspath(config_path)) or '.', '.env')
-            cfg.write_env_value(env_path, account['password_env'], password)
-        return jsonify({'ok': True, 'account': name,
-                        'restart_required': True,
-                        # The launcher watches the accounts and restarts
-                        # the engine itself; nobody has to.
-                        'note': 'saved — the engine restarts by itself to '
-                                'pick it up',
-                        'terminal_path': account.get('terminal_path'),
-                        'terminal_missing': cfg.terminal_missing(
-                            account.get('terminal_path'))})
-
-    def save_okx_account(raw, name, account, payload):
         """An OKX account: demo or live, an optional base URL, and the
         three parts of its API key - which go to .env (and this
         process's environment, so Test works at once), never to the
         config and never to a log line."""
+        payload = request.get_json(silent=True) or {}
+        raw = cfg.load_raw(config_path)
+        raw.setdefault('accounts', {})
+        account = raw['accounts'].setdefault(name, {})
         account['exchange'] = 'okx'
         if 'demo' in payload:
             account['demo'] = bool(payload.get('demo'))
@@ -919,19 +806,15 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
                                      '- leave it blank for www.okx.com'}), 400
         account['base_url'] = url or None
         keys = cfg.okx_env_keys(name)
-        for env, field in zip(keys, ('api_key', 'secret', 'passphrase')):
-            account[{'api_key': 'api_key_env', 'secret': 'secret_env',
-                     'passphrase': 'passphrase_env'}[field]] = \
-                account.get({'api_key': 'api_key_env',
-                             'secret': 'secret_env',
-                             'passphrase': 'passphrase_env'}[field]) or env
-        for field, key_field in (('api_key', 'api_key_env'),
-                                 ('secret', 'secret_env'),
-                                 ('passphrase', 'passphrase_env')):
+        fields = (('api_key', 'api_key_env'), ('secret', 'secret_env'),
+                  ('passphrase', 'passphrase_env'))
+        for env, (_field, key_field) in zip(keys, fields):
+            account[key_field] = account.get(key_field) or env
+        env_path = os.path.join(os.path.dirname(
+            os.path.abspath(config_path)) or '.', '.env')
+        for field, key_field in fields:
             value = (payload.get(field) or '').strip()
             if value:
-                env_path = os.path.join(os.path.dirname(
-                    os.path.abspath(config_path)) or '.', '.env')
                 cfg.write_env_value(env_path, account[key_field], value)
                 os.environ[account[key_field]] = value
         cfg.save_raw(config_path, raw)
@@ -941,13 +824,10 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
                                 'pick it up'})
 
     def okx_config(name):
-        """This account as an AccountConfig when it is an OKX one."""
+        """This account as an AccountConfig, or None."""
         raw = cfg.load_raw(config_path)
         row = (raw.get('accounts') or {}).get(name)
-        if row is None:
-            return None
-        account = cfg.AccountConfig.from_dict(name, row)
-        return account if account.is_okx else None
+        return None if row is None else cfg.AccountConfig.from_dict(name, row)
 
     def open_okx_leg(account):
         """A short-lived direct connection to OKX for this account.
@@ -972,155 +852,61 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
             leg.close()
         return checklist
 
+    def no_account(name):
+        return jsonify({'ok': False,
+                        'error': f"no account '{name}' - add it on the "
+                                 f"Exchanges page"}), 404
+
     @app.get('/api/accounts/<path:name>/symbols')
     def api_find_symbols(name):
-        """Search an account's symbols with the coordinator DOWN.
-
-        Brokers spell gold XAUUSD, GOLD, XAUUSD.r — this is how the
-        operator finds out which, and it must not need the engine that
-        will not start until the answer is right.
-        """
+        """Every SPOT, SWAP and FUTURES instrument OKX lists, searched by
+        name: BTC, ETH-USDT, -SWAP, 2612... Works with the engine down,
+        and needs no key."""
         okx = okx_config(name)
-        if okx is not None:
-            # Every SPOT, SWAP and FUTURES instrument OKX lists, searched
-            # by name: BTC, ETH-USDT, -SWAP, 2612... No key needed.
-            leg = open_okx_leg(okx)
-            try:
-                found = leg.find_symbols(request.args.get('q', ''), 60)
-            finally:
-                leg.close()
-            return jsonify({'ok': True, 'symbols': found or [],
-                            'terminal': {'server': 'OKX demo' if okx.demo
-                                         else 'OKX live'}})
-        raw = cfg.load_raw(config_path)
-        account = (raw.get('accounts') or {}).get(name)
-        if not account or not account.get('endpoint'):
-            return jsonify({'ok': False,
-                            'error': f"account '{name}' has no endpoint — "
-                                     f"give it one, then start its leg "
-                                     f"runner"}), 400
-        leg = RemoteLeg(name, account['endpoint'], timeout=5.0)
-        if not leg.connect(retries=1, delay=0.0):
-            return jsonify({'ok': False,
-                            'error': f"leg runner for '{name}' is not "
-                                     f"answering at {account['endpoint']} — "
-                                     f"start it with: python run_leg.py "
-                                     f"--config config.json --account "
-                                     f"{name}"}), 503
+        if okx is None:
+            return no_account(name)
+        leg = open_okx_leg(okx)
         try:
-            found = leg.find_symbols(request.args.get('q', ''), 40)
-            report = leg.terminal_report()
+            found = leg.find_symbols(request.args.get('q', ''), 60)
         finally:
             leg.close()
         return jsonify({'ok': True, 'symbols': found or [],
-                        'terminal': report})
-
-    def configured_login(name):
-        """What the config says this account IS, for comparison with
-        whatever terminal the runner actually reached."""
-        raw = cfg.load_raw(config_path)
-        return ((raw.get('accounts') or {}).get(name) or {}).get('login')
-
-    @app.get('/api/accounts/<path:name>/connect')
-    def api_connect_account(name):
-        """Is the leg runner there, and is its terminal attached?
-
-        The first question, and the one whose answer is usually an
-        instruction: start the runner, open the terminal, log in.
-        """
-        okx = okx_config(name)
-        if okx is not None:
-            result = okx_checklist(name, okx).result()
-            return jsonify(dict(result, account=name,
-                                connected=result['ok']))
-        leg, error, code = open_leg(name)
-        checklist = diagnostics.Checklist()
-        if leg is None:
-            diagnostics.check_account(checklist, name, {'error': error})
-            return jsonify(dict(checklist.result(), connected=False,
-                                account=name)), code
-        try:
-            terminal = leg.terminal_report()
-            offset = leg.server_offset()
-        finally:
-            leg.close()
-        diagnostics.check_account(
-            checklist, name, terminal, offset=offset,
-            expect_login=configured_login(name))
-        result = checklist.result()
-        return jsonify(dict(result, account=name,
-                            connected=bool(terminal.get('logged_in')),
-                            terminal=terminal))
+                        'terminal': {'server': 'OKX demo' if okx.demo
+                                     else 'OKX live'}})
 
     @app.get('/api/accounts/<path:name>/test')
+    @app.get('/api/accounts/<path:name>/connect')
     def api_test_account(name):
-        """Can this account TRADE?
-
-        Everything Connect asks, plus the switches that decide whether
-        an order will be accepted — in the operator's words, because
-        `10027 AutoTrading disabled by client` is a button in that
-        terminal and nothing else on the screen will say so.
-        """
+        """Can this account TRADE? OKX reachable, the key accepted and
+        allowed to trade, the account set up the way the desk trades -
+        in OKX's own words and codes."""
         okx = okx_config(name)
-        if okx is not None:
-            result = okx_checklist(name, okx).result()
-            return jsonify(dict(result, account=name,
-                                connected=result['ok'],
-                                problems=[c['message'] for c in
-                                          result['checks']
-                                          if c['status'] == 'FAIL']))
-        leg, error, code = open_leg(name)
-        checklist = diagnostics.Checklist()
-        if leg is None:
-            diagnostics.check_account(checklist, name, {'error': error})
-            return jsonify(dict(checklist.result(), account=name)), code
-        try:
-            terminal = leg.terminal_report()
-            account = leg.account_info()
-            offset = leg.server_offset()
-        finally:
-            leg.close()
-        diagnostics.check_account(checklist, name, terminal, account, offset,
-                                  expect_login=configured_login(name))
-        result = checklist.result()
-        return jsonify(dict(result, account=name, terminal=terminal,
-                            connected=bool(terminal.get('logged_in')),
-                            problems=[check['message'] for check in
-                                      result['checks']
-                                      if check['status'] == 'FAIL']))
+        if okx is None:
+            return no_account(name)
+        result = okx_checklist(name, okx).result()
+        return jsonify(dict(result, account=name, connected=result['ok'],
+                            problems=[c['message'] for c in result['checks']
+                                      if c['status'] == 'FAIL']))
 
     @app.get('/api/accounts/<path:name>/diagnose')
     def api_diagnose_account(name):
-        """Everything — the account, every symbol it carries, and every
-        pair that routes through it.
-
-        This is the one to run before the first trade of the day, and
-        the one to read when something is refusing and nobody can say
-        why.
-        """
+        """Everything Test checks, plus every instrument on this account
+        and every pair that routes through it. The one to run before the
+        first trade of the day."""
         raw = cfg.load_raw(config_path)
-        leg, error, code = open_leg(name)
+        okx = okx_config(name)
+        if okx is None:
+            return no_account(name)
+        leg = open_okx_leg(okx)
         checklist = diagnostics.Checklist()
-        if leg is None:
-            diagnostics.check_account(checklist, name, {'error': error})
-            return jsonify(dict(checklist.result(), account=name)), code
-
         pairs = {key: cfg.PairConfig.from_dict(key, row)
                  for key, row in (raw.get('pairs') or {}).items()}
         reports = {}
         try:
-            terminal = leg.terminal_report()
+            diagnostics.check_okx_account(
+                checklist, name, leg.broker,
+                has_keys=okx.has_api_key or bool(okx.base_url))
             account_info = leg.account_info()
-            offset = leg.server_offset()
-            okx = okx_config(name)
-            if okx is not None:
-                diagnostics.check_okx_account(
-                    checklist, name, leg.broker,
-                    has_keys=okx.has_api_key or bool(okx.base_url))
-            else:
-                diagnostics.check_account(checklist, name, terminal,
-                                          account_info, offset,
-                                          expect_login=configured_login(name))
             for key, pair in pairs.items():
                 for symbol, role in ((pair.symbol_a, 'leg A'),
                                      (pair.symbol_b, 'leg B')):
@@ -1132,46 +918,27 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
                         reports[symbol] = leg.symbol_report(symbol)
                     diagnostics.check_symbol(checklist, name,
                                              reports[symbol], role)
+            for key, pair in pairs.items():
+                if name not in (pair.account_a, pair.account_b):
+                    continue
+                report_a = reports.get(pair.symbol_a) or \
+                    leg.symbol_report(pair.symbol_a)
+                report_b = reports.get(pair.symbol_b) or \
+                    leg.symbol_report(pair.symbol_b)
+                diagnostics.check_pair(checklist, pair, report_a or {},
+                                       report_b or {},
+                                       account_currency=(account_info or {})
+                                       .get('currency'))
         finally:
             leg.close()
-
-        # The pair checks need BOTH legs, so the other account's runner
-        # is opened too — and its absence is reported rather than
-        # silently skipping the check.
-        for key, pair in pairs.items():
-            if name not in (pair.account_a, pair.account_b):
-                continue
-            other = pair.account_b if pair.account_a == name else pair.account_a
-            other_leg, other_error, _code = open_leg(other)
-            if other_leg is None:
-                checklist.add(f'Pair {key}', 'Other leg', diagnostics.FAIL,
-                              other_error,
-                              ['Start that account\'s leg runner too — a '
-                               'pair needs both'])
-                continue
-            try:
-                report_a = (reports.get(pair.symbol_a)
-                            or (other_leg.symbol_report(pair.symbol_a)
-                                if pair.account_a == other else {}))
-                report_b = (reports.get(pair.symbol_b)
-                            or (other_leg.symbol_report(pair.symbol_b)
-                                if pair.account_b == other else {}))
-            finally:
-                other_leg.close()
-            diagnostics.check_pair(checklist, pair, report_a or {},
-                                   report_b or {},
-                                   account_currency=(account_info or {})
-                                   .get('currency'))
-
-        return jsonify(dict(checklist.result(), account=name,
-                            terminal=terminal,
-                            connected=bool(terminal.get('logged_in'))))
+        result = checklist.result()
+        return jsonify(dict(result, account=name, connected=result['ok']))
 
     @app.get('/api/connection')
     def api_connection():
         """Is the SYSTEM connected — plainly, in one answer.
 
-        The operator's real question is never "is endpoint 9101 bound";
+        The operator's real question is never "did a request go out";
         it is "can I trade right now". This answers that, and when the
         answer is no it names the one thing to fix.
         """
@@ -1195,10 +962,10 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
                     'server': terminal.get('server'),
                     'error': None})
                 if not row['connected']:
-                    blockers.append(f'{name}: the terminal is not logged in')
+                    blockers.append(f'{name}: OKX refused the key - '
+                                    f'{terminal.get("error") or "press Test"}')
                 elif not row['trading']:
-                    blockers.append(f'{name}: Algo Trading is off in that '
-                                    f'terminal')
+                    blockers.append(f'{name}: {terminal.get("error") or "the key cannot trade"}')
             else:
                 blockers.append(f'{name}: {error}')
             accounts.append(row)
@@ -1254,7 +1021,7 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
 
     @app.get('/api/accounts/<path:name>/symbol/<path:symbol>')
     def api_symbol(name, symbol):
-        """One symbol's contract specs, read from MT5 — never typed in.
+        """One instrument's contract specs, read from OKX — never typed in.
 
         Contract size, volume minimum and step and tick size are what the
         hedge arithmetic is built on; a typed-in contract size is a hedge
@@ -1273,31 +1040,16 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
         return jsonify({'ok': True, 'report': report})
 
     def open_leg(name):
-        """A short-lived RemoteLeg to one account, or why there is none.
-
-        (leg, error, status) — the caller closes it. This is the path
-        that must work with the COORDINATOR down.
-        """
+        """A short-lived direct connection to one OKX account, or why
+        there is none: (leg, error, status) - the caller closes it."""
         okx = okx_config(name)
-        if okx is not None:
-            leg = open_okx_leg(okx)
-            if not leg.broker.connected:
-                error = leg.broker.last_error
-                leg.close()
-                return None, f'OKX did not answer for {name}: {error}', 503
-            return leg, None, 200
-        raw = cfg.load_raw(config_path)
-        account = (raw.get('accounts') or {}).get(name)
-        if not account or not account.get('endpoint'):
-            return None, (f"account '{name}' has no endpoint — give it one "
-                          f"(e.g. {cfg.next_free_port(raw)}), then start its "
-                          f"leg runner"), 400
-        leg = RemoteLeg(name, account['endpoint'], timeout=5.0)
-        if not leg.connect(retries=1, delay=0.0):
-            return None, (f"leg runner for '{name}' is not answering at "
-                          f"{account['endpoint']} — start it with: python "
-                          f"run_leg.py --config config.json --account "
-                          f"{name}"), 503
+        if okx is None:
+            return None, f"no account '{name}'", 404
+        leg = open_okx_leg(okx)
+        if not leg.broker.connected:
+            error = leg.broker.last_error
+            leg.close()
+            return None, f'OKX did not answer for {name}: {error}', 503
         return leg, None, 200
 
     @app.delete('/api/accounts/<path:name>')

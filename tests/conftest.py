@@ -1,7 +1,8 @@
-"""Fakes. MetaTrader5 is Windows-only; the whole system is testable on
-Linux, and nothing in here needs a terminal, a network or a clock.
+"""Fakes. The whole desk is testable with nothing in here needing OKX,
+a network or a clock (the OKX broker itself is tested against the
+simulated exchange, okx_sim).
 
-`FakeBroker` keeps a real HEDGING-mode book: an opposite market order
+`FakeBroker` keeps a real long/short book: an opposite market order
 opens a SECOND position and does not close the first. That is the
 behaviour the executor's ticket-based closes exist for, so faking it
 any other way would make the tests agree with a bug.
@@ -16,7 +17,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from okxtrader.broker import OrderResult                        # noqa: E402
+from okxtrader.okx_broker import OrderResult                        # noqa: E402
 from okxtrader.config import PairConfig, TraderConfig           # noqa: E402
 from okxtrader.legs import LocalLeg                             # noqa: E402
 from okxtrader.models import MAGIC_NUMBER, OrderSide            # noqa: E402

@@ -51,152 +51,22 @@ def resolved(pair, legs):
 
 # -- layer 1: the broker's own retcodes ---------------------------------
 
-class FakeResult:
-    def __init__(self, retcode, order=0, volume=0.0, price=0.0, comment='ok'):
-        self.retcode = retcode
-        self.order = order
-        self.volume = volume
-        self.price = price
-        self.comment = comment
 
 
-class FakeMT5:
-    """Just enough of the package for the send paths."""
-
-    TRADE_ACTION_DEAL = 1
-    TRADE_ACTION_PENDING = 5
-    ORDER_TYPE_BUY = 0
-    ORDER_TYPE_SELL = 1
-    ORDER_TYPE_BUY_LIMIT = 2
-    ORDER_TYPE_SELL_LIMIT = 3
-    ORDER_FILLING_FOK = 0
-    ORDER_FILLING_IOC = 1
-    ORDER_FILLING_RETURN = 2
-    ORDER_TIME_GTC = 0
-    TRADE_RETCODE_DONE = 10009
-
-    def __init__(self, result):
-        self.result = result
-        self.requests = []
-
-    def symbol_info(self, symbol):
-        return types.SimpleNamespace(point=0.01, filling_mode=2,
-                                     trade_tick_size=0.01,
-                                     trade_stops_level=0, volume_min=0.01,
-                                     volume_step=0.01, visible=True)
-
-    def symbol_info_tick(self, symbol):
-        return types.SimpleNamespace(bid=92.0, ask=92.02, last=92.01,
-                                     time=0, time_msc=0)
-
-    def symbol_select(self, symbol, on=True):
-        return True
-
-    def order_send(self, request):
-        self.requests.append(dict(request))
-        return self.result
-
-    def last_error(self):
-        return (1, 'no error')
 
 
-def broker_with(monkeypatch, result):
-    from okxtrader import broker as broker_mod
-    fake = FakeMT5(result)
-    monkeypatch.setattr(broker_mod, 'mt5', fake)
-    session = broker_mod.BrokerSession(
-        types.SimpleNamespace(name='LegA', login=1, password='x', server='S',
-                              terminal_path=None))
-    return session, fake
 
 
-def test_a_partial_fill_is_a_FILL_not_a_refusal(monkeypatch):
-    """10010 DONE_PARTIAL: the broker filled 0.4 of the 1.0 asked for,
-    and a position is open for the 0.4. Calling that 'Order failed'
-    is what left the leg at the broker with nobody accounting for it."""
-    session, _ = broker_with(
-        monkeypatch,
-        FakeResult(10010, order=3677, volume=0.4, price=92.02,
-                   comment='Only part of the request was completed'))
-
-    result = session.send_market_order('USOILX6.c', OrderSide.BUY, 1.0)
-
-    assert result.success, result.error
-    assert result.volume == pytest.approx(0.4), 'it hedged to the wrong size'
-    assert result.ticket == 3677
 
 
-def test_control_a_real_rejection_is_still_a_rejection(monkeypatch):
-    """Without this, the fix above would be 'call everything a fill'."""
-    session, _ = broker_with(
-        monkeypatch,
-        FakeResult(10027, order=0, volume=0.0,
-                   comment='AutoTrading disabled by client'))
-
-    result = session.send_market_order('USOILX6.c', OrderSide.BUY, 1.0)
-
-    assert not result.success
-    # The broker's own words, never "check the log" (spec §11).
-    assert '10027' in result.error
-    assert 'AutoTrading disabled by client' in result.error
 
 
-def test_a_refusal_carries_the_ticket_the_broker_gave_it(monkeypatch):
-    """A rejection that named an order is a rejection with something to
-    go and look at. Dropping the ticket is what made 'refused'
-    unfalsifiable."""
-    session, _ = broker_with(
-        monkeypatch,
-        FakeResult(10008, order=3690, volume=0.0, comment='Order placed'))
-
-    result = session.send_market_order('USOILX6.c', OrderSide.BUY, 1.0)
-
-    assert not result.success
-    assert result.ticket == 3690, 'the only handle on what it left behind'
 
 
-def test_a_partial_CLOSE_is_a_close_of_that_much(monkeypatch):
-    """A close that came back 10010 was reported as a total failure, so
-    the whole ticket stayed on our books while part of it was already
-    gone at the broker."""
-    session, _ = broker_with(
-        monkeypatch,
-        FakeResult(10010, order=90, volume=0.03, price=92.0,
-                   comment='Only part of the request was completed'))
-
-    result = session.close_position_ticket('USOILX6.c', 3677, 0.1,
-                                           OrderSide.BUY)
-
-    assert result.success, result.error
-    assert result.volume == pytest.approx(0.03)
 
 
-def test_a_pending_the_broker_PLACED_is_resting_not_refused(monkeypatch):
-    """MT5 answers PLACED for an order that rests and DONE only where it
-    filled on arrival. Only DONE was accepted, so on a broker that
-    answers PLACED every working order was written off while it sat
-    live at the broker."""
-    session, _ = broker_with(
-        monkeypatch,
-        FakeResult(10008, order=4001, comment='Order placed'))
-
-    result = session.place_pending_limit('USOILX6.c', OrderSide.BUY, 0.1,
-                                         90.0)
-
-    assert result['ok'], result['error']
-    assert result['ticket'] == 4001
 
 
-def test_control_a_rejected_pending_is_still_rejected(monkeypatch):
-    session, _ = broker_with(
-        monkeypatch,
-        FakeResult(10015, order=0, comment='Invalid price'))
-
-    result = session.place_pending_limit('USOILX6.c', OrderSide.BUY, 0.1,
-                                         90.0)
-
-    assert not result['ok']
-    assert '10015' in result['error']
 
 
 # -- layer 2: the leg reports what is AT THE BROKER ---------------------

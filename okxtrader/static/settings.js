@@ -20,14 +20,12 @@
 
   var local = {
     accounts: [],
-    nextPort: '127.0.0.1:9101',
     pairs: {},
     editing: null,          // the pair key being edited, '' for a new one
     draft: {},              // the pair form's current values
-    derived: null,          // what MT5 says about the draft's two legs
+    derived: null,          // what OKX says about the draft's two legs
     symbols: {},            // account -> last search result
     tests: {},              // account -> last connectivity answer
-    terminals: [],          // the MetaTrader 5s installed on this PC
     settings: null,         // the engine's tunables, with their defaults
     hot: [],                // ...and which of them apply without a restart
     connection: null,       // is the SYSTEM connected, in one answer
@@ -71,11 +69,9 @@
   function refresh() {
     return Promise.all([
       api('/api/accounts'), api('/api/pairs'), api('/api/settings'),
-      api('/api/lock'), api('/api/terminals')
+      api('/api/lock')
     ]).then(function (results) {
       local.accounts = results[0].body.accounts || [];
-      local.terminals = (results[4].body || {}).terminals || [];
-      local.nextPort = results[0].body.next_free_port || local.nextPort;
       local.pairs = results[1].body.pairs || {};
       local.settings = results[2].body.settings || {};
       local.defaults = results[2].body.defaults || {};
@@ -171,16 +167,15 @@
   }
 
   //: The blank "new account" row's fields, in render order.
-  var NEW_ACCOUNT_FIELDS = ['f-name', 'f-terminal', 'f-login', 'f-server',
-                            'f-endpoint', 'f-password', 'f-key', 'f-secret',
-                            'f-passphrase', 'f-baseurl'];
+  var NEW_ACCOUNT_FIELDS = ['f-name', 'f-key', 'f-secret', 'f-passphrase',
+                            'f-baseurl'];
 
   function newAccountDraft(section) {
-    // Both blank rows - OKX's and, where there are MT5 accounts, MT5's.
+    // The blank row at the bottom of the OKX accounts.
     if (!section) { return null; }
     var drafts = {};
     var any = false;
-    ['tr.new', 'tr.okx-new'].forEach(function (selector) {
+    ['tr.okx-new'].forEach(function (selector) {
       var draft = oneDraft(section, selector);
       if (draft) { drafts[selector] = draft; any = true; }
     });
@@ -558,106 +553,11 @@
   }
 
   function accountsHtml() {
-    var okx = local.accounts.filter(function (a) {
-      return a.exchange === 'okx';
-    });
-    var mt5 = local.accounts.filter(function (a) {
-      return a.exchange !== 'okx';
-    });
     var html = '<h3>Exchanges <small>OKX accounts: one API key each, ' +
       'demo or live</small></h3>';
     html += connectionHtml();
-    if (mt5.length) {
-      // A desk that still has MetaTrader 5 accounts keeps Mirror's own
-      // table for them, blank row and all.
-      html += '<h4>MetaTrader 5 accounts</h4>';
-      html += '<table class="grid-form"><thead><tr><th>Name</th>' +
-        '<th>Terminal (terminal64.exe)</th><th>Login</th><th>Server</th>' +
-        '<th>Runner endpoint</th><th>Password</th><th></th></tr></thead>' +
-        '<tbody>';
-      mt5.forEach(function (account) {
-        html += accountRow(account);
-      });
-      html += accountRow({name: '', endpoint: local.nextPort, isNew: true});
-      html += '</tbody></table><h4>OKX accounts</h4>';
-    }
-    html += okxAccountsHtml(okx);
+    html += okxAccountsHtml(local.accounts);
     return html;
-  }
-
-  function accountRow(account) {
-    var clashes = [account.terminal_missing, account.endpoint_clash,
-                   account.login_clash,
-                   account.terminal_clash].filter(Boolean);
-    var test = local.tests[account.name];
-    var html = '<tr data-account="' + escape(account.name) + '"' +
-      (account.isNew ? ' class="new"' : '') + '>';
-    html += '<td>' + (account.isNew
-      ? '<input class="f-name" placeholder="e.g. CFI Spot">'
-      : escape(account.name)) + '</td>';
-    html += '<td><input class="f-terminal" value="' +
-      escape(account.terminal_path) + '" placeholder="blank = attach to ' +
-      'whichever terminal is open">' + terminalPicker(account) + '</td>';
-    html += '<td><input class="f-login" value="' + escape(account.login) +
-      '"></td>';
-    html += '<td><input class="f-server" value="' + escape(account.server) +
-      '"></td>';
-    html += '<td><input class="f-endpoint" value="' +
-      escape(account.endpoint) + '" placeholder="127.0.0.1:9101"></td>';
-    html += '<td><input class="f-password" type="password" placeholder="' +
-      (account.password_set ? 'set — type to replace' : 'not set') +
-      '"><div class="hint">' + (account.isNew
-        ? 'goes to .env under a key derived from the name'
-        : '→ ' + escape(account.password_env) + ' in .env') +
-      '</div></td>';
-    html += '<td class="actions">' +
-      '<button class="btn save-account">Save</button>' +
-      (account.isNew ? '' :
-        // The three questions an operator actually asks, in the order
-        // they ask them.
-        '<button class="btn connect-account" title="Is the leg runner ' +
-        'there, and is its terminal logged in?">Connect</button>' +
-        '<button class="btn test-account" title="Can this account ' +
-        'trade — Algo Trading, permissions, hedging?">Test</button>' +
-        '<button class="btn diagnose-account" title="Everything: the ' +
-        'account, its symbols, and whether the two legs fit">Diagnose' +
-        '</button>' +
-        '<button class="btn danger delete-account">Delete</button>') +
-      '</td></tr>';
-
-    if (clashes.length) {
-      html += '<tr class="problem"><td colspan="7">' +
-        clashes.map(escape).join('<br>') + '</td></tr>';
-    }
-    if (test) {
-      html += '<tr class="checklist"><td colspan="7">' +
-        checklistHtml(test) + '</td></tr>';
-    }
-    return html;
-  }
-
-  function terminalPicker(account) {
-    // PICK, don't type. The MetaTrader 5s actually installed on this
-    // PC, read off the disk by the server. A path typed by hand is how
-    // a desk ended up unable to start: pasted with the quotes Windows'
-    // "Copy as path" adds, the file was exactly where it said and still
-    // could not be found. Choosing from this list fills the box; Save
-    // then saves it, and the engine restarts by itself.
-    if (!local.terminals.length) { return ''; }
-    var current = String(account.terminal_path || '').toLowerCase();
-    var html = '<select class="f-terminal-pick" title="The MetaTrader 5 ' +
-      'installations found on this PC">' +
-      '<option value="">pick an installed MetaTrader 5\u2026</option>';
-    local.terminals.forEach(function (terminal) {
-      var mine = terminal.path.toLowerCase() === current;
-      var other = terminal.used_by && terminal.used_by !== account.name;
-      html += '<option value="' + escape(terminal.path) + '"' +
-        (mine ? ' selected' : '') + '>' + escape(terminal.folder) +
-        (mine ? ' \u2014 this account' :
-          (other ? ' \u2014 used by ' + escape(terminal.used_by) : '')) +
-        '</option>';
-    });
-    return html + '</select>';
   }
 
   function checklistHtml(result) {
@@ -803,7 +703,7 @@
   }
 
   function legText(leg) {
-    /* The symbol, and the ACCOUNT it trades on — by name, MT5 login and
+    /* The symbol, and the ACCOUNT it trades on — by name, OKX account and
      * server. Two accounts is the whole architecture of this thing, and
      * which login a leg is actually on is the first question anyone
      * asks of a spread that has gone wrong. Reading it off the account
@@ -1012,15 +912,6 @@
 
   function onChange(e) {
     if (e.target.closest('.pair-form')) { readDraft(); }
-    if (e.target.classList.contains('f-terminal-pick')) {
-      var row = e.target.closest('tr');
-      var box = row && row.querySelector('.f-terminal');
-      if (box && e.target.value) {
-        box.value = e.target.value;
-        UI.toast('picked ' + e.target.options[e.target.selectedIndex].text +
-                 ' \u2014 press Save to use it', 'ok');
-      }
-    }
   }
 
   function savePin(panel) {
@@ -1240,19 +1131,13 @@
       UI.toast('an account needs a name before it can be saved');
       return;
     }
-    var body = row.dataset.exchange === 'okx' ? {
+    var body = {
       exchange: 'okx',
       demo: row.querySelector('.f-demo').value === 'demo',
       api_key: row.querySelector('.f-key').value,
       secret: row.querySelector('.f-secret').value,
       passphrase: row.querySelector('.f-passphrase').value,
       base_url: row.querySelector('.f-baseurl').value
-    } : {
-      terminal_path: row.querySelector('.f-terminal').value,
-      login: row.querySelector('.f-login').value,
-      server: row.querySelector('.f-server').value,
-      endpoint: row.querySelector('.f-endpoint').value,
-      password: row.querySelector('.f-password').value
     };
     return api('/api/accounts/' + encodeURIComponent(name),
                {method: 'POST', headers: {'Content-Type': 'application/json'},
