@@ -44,6 +44,29 @@ or a pair, it restarts the engine by itself.
    perpetuals and futures. **Read both legs from OKX** takes contract
    sizes, ticks and minimums from OKX, sets the pair type and suggests β.
 
+## Check it against your OKX demo account
+
+Before trading, run the end-to-end check on a **Demo trading** key:
+
+```
+python tools/okx_demo_check.py
+```
+
+It uses the account saved on the Exchanges page, places the smallest
+orders OKX accepts and takes them off again. It checks:
+
+- the account itself;
+- OKX's live WebSocket price feed;
+- an order on and off by ticket, and that a second close sends nothing;
+- post-only orders: refused when crossing, resting, amended, cancelled;
+- a full W3 maker spread fill and maker close;
+- a spot buy and close;
+- the fills journal;
+- that nothing of the check is left on OKX.
+
+It refuses a LIVE account. Stop the desk while it runs. It writes
+`okx_demo_check_report.txt` beside config.json, with no keys in it.
+
 ## What is on the screen
 
 - **Ladders.** One per pair; the spread is `B − β × A`. H → L is where
