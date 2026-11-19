@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+  <!-- The Nexus mark: two nodes — two accounts, two legs, bid blue and
+       ask red — joined into one. -->
+  <rect width="16" height="16" fill="#d4d0c8"/>
+  <rect x="4" y="7.2" width="8" height="1.6" fill="#1a1a1a"/>
+  <circle cx="4.6" cy="8" r="2.6" fill="#2f6fb0"/>
+  <circle cx="11.4" cy="8" r="2.6" fill="#c0342f"/>
+</svg>

@@ -1,0 +1,787 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Nexus</title>
+<!-- Everything is self-hosted. A blocked CDN has already taken a
+     trading UI down once, and the dialog that reports "could not save"
+     must work when the network is what failed. -->
+<link rel="icon" href="{{ url_for('static', filename='favicon.svg') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='ladder.css') }}?v={{ asset_version }}">
+</head>
+<body>
+
+<!-- The name of the system, top left, where a name belongs.
+     The mark is the thing this system does: two nodes — two accounts,
+     two legs, bid blue and ask red — joined into one. It is inline
+     rather than a file: everything here is self-hosted, and a mark
+     that arrives one request later than the page is a mark that
+     flickers on every reload.
+
+     One title-bar height and no more. Every pixel spent here is a
+     pixel off the ladders. -->
+<div id="brand" title="Nexus — spread terminal">
+  <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true">
+    <rect x="6.5" y="10.9" width="11" height="2.2" fill="#1c1c1c"/>
+    <circle cx="7" cy="12" r="3.4" fill="#5a9bd8"/>
+    <circle cx="17" cy="12" r="3.4" fill="#c0342f"/>
+  </svg>
+  <span class="brand-name">NEXUS</span>
+  <span class="brand-note">spread terminal</span>
+  <!-- The padlock, in the one place that is always on screen. TT puts
+       it in the corner of the workspace for the same reason: a lock
+       you have to go and find is a lock nobody uses on the way out.
+       Hidden until a PIN exists - locking a screen with no way back in
+       is an outage, not a safety feature. -->
+  <button id="lock-now" type="button" hidden
+          aria-label="Lock the screen">&#128274;</button>
+</div>
+
+<!-- The engine banner. A dead coordinator must never be mistaken for a
+     quiet market: that is the confusion that gets orders clicked into a
+     screen with nothing behind it. -->
+<div id="engine-banner" class="banner hidden" role="status"></div>
+
+<!-- Any naked leg, on any pair: the loudest thing on the screen, and it
+     does not auto-hide. It clears when the exposure does. -->
+<div id="naked-banner" class="banner critical hidden" role="alert"></div>
+
+<!-- Positions at the broker that our book cannot explain. Never closed
+     automatically; put here for a person to decide. -->
+<div id="unclaimed-banner" class="banner critical hidden" role="alert"></div>
+<!-- Two legs on ONE MT5 account: no hedge, twice the exposure, and a
+     screen that otherwise looks perfectly normal. -->
+<div id="same-login-banner" class="banner critical hidden" role="alert"></div>
+
+<div id="desktop"></div>
+
+<!-- The bottom taskbar: one tab per open panel, a working-order count
+     badge on each, and + to open the Market Grid and pick another. -->
+<div id="taskbar">
+  <button id="add-panel" class="tab plus" title="Open a ladder, the Market Grid or the Trading Monitor">+</button>
+  <!-- Every ladder this installation has, in one list. A desk trades
+       several spreads at once — Spot vs Future, WTI vs Brent — and each
+       one is a window on this desktop. -->
+  <div id="add-menu" class="menu hidden"></div>
+  <div id="tabs"></div>
+  <div class="taskbar-right">
+    <!-- One line that says whether this thing is actually working:
+         both terminals attached, and quotes arriving on every enabled
+         ladder. Green only when BOTH are true. -->
+    <span id="link-badge" class="link unknown" title="Both accounts, and whether quotes are arriving">checking…</span>
+    <button id="sound-toggle" class="tab" title="A blip when an order is placed, two rising notes when one fills, a low note when one is cancelled">Sound: on</button>
+    <button id="keys-toggle" class="tab" title="Turn the one-key shortcuts (B, S, F, X…) off or on">Keys: on</button>
+    <button id="tidy" class="tab" title="Put every window back in a row">Tidy</button>
+    <button id="open-settings" class="tab" title="Accounts, pairs and connection">Exchanges</button>
+    <span id="loop-stat" class="stat" title="The coordinator's achieved loop interval, and how old this snapshot is">—</span>
+    <button id="help" class="tab" title="Keyboard shortcuts (?)">?</button>
+    <button id="kill" class="kill">KILL ALL</button>
+  </div>
+</div>
+
+<!-- THE SCREEN LOCK. Covers everything, takes every click and every
+     key, and is the last thing in the document so nothing can sit on
+     top of it. The ladder goes on ticking behind it, exactly as it
+     does behind TT's - a locked screen still shows the market, it just
+     will not trade it.
+
+     The real guard is in webapp.py, which refuses every state-changing
+     request while the server says locked. This is what the trader
+     sees; it is not what stops the order. -->
+<div id="lock-overlay" class="lock-overlay hidden" role="dialog"
+     aria-modal="true" aria-label="Screen locked">
+  <div class="lock-box">
+    <div class="lock-icon">&#128274;</div>
+    <h2 id="lock-title">Screen Locked</h2>
+    <p id="lock-why">Nothing on this screen will trade until it is
+      unlocked.</p>
+    <form id="lock-form" autocomplete="off">
+      <input id="lock-pin" type="password" inputmode="numeric"
+             autocomplete="off" placeholder="PIN" aria-label="PIN">
+      <button id="lock-go" class="btn" type="submit">Unlock</button>
+    </form>
+    <p id="lock-error" class="lock-error"></p>
+  </div>
+</div>
+
+<!-- One shared modal. No native confirm() / alert() / prompt(), ever —
+     a test fails the build if they come back. -->
+<div id="modal" class="modal hidden" role="dialog" aria-modal="true">
+  <div class="modal-box">
+    <h2 id="modal-title"></h2>
+    <p id="modal-body"></p>
+    <div class="modal-actions">
+      <button id="modal-cancel" class="btn">Cancel</button>
+      <!-- A second answer, for the one question that has two: what
+           to do with the Algo's position when it is turned off. Hidden
+           for every other question. -->
+      <button id="modal-alt" class="btn" hidden></button>
+      <button id="modal-confirm" class="btn danger"></button>
+    </div>
+  </div>
+</div>
+
+<!-- Errors live here until they are dismissed. A failure that vanishes
+     in 3 seconds is one the operator misses. -->
+<div id="toasts"></div>
+
+<!-- The shortcuts, on the screen rather than in a manual. One click is
+     one order; one key is one order too. -->
+<div id="help-overlay" class="modal hidden">
+  <div class="modal-box">
+    <h2>One click, one order</h2>
+    <table class="keys">
+      <tr><th>B</th><td>buy the spread at the offer, on the focused ladder</td></tr>
+      <tr><th>S</th><td>sell the spread at the bid</td></tr>
+      <tr><th>F</th><td>flatten this pair, at market, by ticket (asks once)</td></tr>
+      <tr><th>X</th><td>cancel every working order on this ladder</td></tr>
+      <tr><th>1 2 3 4 5</th><td>arm 1 / 5 / 10 / 50 / 100 spreads</td></tr>
+      <tr><th>0</th><td>clear the armed quantity (back to the ladder default)</td></tr>
+      <tr><th>L</th><td>lock the ladder so it stops re-centring under your click</td></tr>
+      <tr><th>M</th><td>switch this ladder between LIMIT and MARKET</td></tr>
+      <tr><th>Tab</th><td>focus the next ladder</td></tr>
+      <tr><th>Esc</th><td>close this, or any open dialog</td></tr>
+      <tr><th>Work</th><td>your RESTING orders — appears when a click is
+        accepted, goes when it fills or is pulled. Click the cell to add
+        one more at that level; right-click it to pull one</td></tr>
+      <tr><th>LTQ</th><td>the last FILL at that price, in green. A
+        print, not an order: it means the trade happened, not that
+        anything is still working</td></tr>
+      <tr><th>Drag</th><td>move a window by its title bar — it stays
+        where you put it, and comes back there after a reload.
+        <b>Tidy</b> in the taskbar puts them all back in a row</td></tr>
+    </table>
+    <p class="fine">In MARKET mode a click and B/S/F cross both accounts
+    immediately — no confirmation, by design. Turn on “confirm market
+    clicks” in settings if you want the extra gesture.</p>
+    <div class="modal-actions">
+      <button id="help-close" class="btn">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- Fair value and the exit, in their OWN window.
+     Off by default and per pair: the ladder is for the price, and a
+     panel of derived figures beside it is a panel between the trader
+     and the market. Turned on for a ladder, this floats where it is
+     put — and the pair is named across the top of it, because two of
+     these open at once are otherwise two identical tables of numbers
+     with nothing to say which instrument either belongs to. -->
+<template id="fair-template">
+  <section class="window fairwin">
+    <div class="titlebar">
+      <span class="swatch"></span>
+      <span class="title fw-pair"></span>
+      <span class="winbtns"><button class="winbtn fw-cog" title="This ladder&#8217;s own settings">&#9881;</button><button class="winbtn close" title="Close — and turn this window off for this ladder">&times;</button></span>
+    </div>
+    <div class="fw-body">
+      <!-- What the CARRY says this spread should be: the swap per day
+           to expiry. Not a signal — a number beside the market, which
+           is the question the instrument is about. -->
+      <div class="fair" title="What the carry says this basis should be: the broker's own swap over the nights to expiry, divided by k. A reference reading — it feeds nothing.">
+        <label class="rail-label">Fair spread<button type="button" class="cog open-exits" title="Set the swap, the expiry and the carry rate — this ladder&#8217;s own settings">&#9881;</button></label>
+        <table class="exits fairs">
+          <tr class="heads"><th></th><th class="col-b" title="Buying the spread">B</th><th class="col-s" title="Selling the spread">S</th></tr>
+          <tr><th>Fair</th><td class="fair-buy">—</td><td class="fair-sell">—</td></tr>
+          <tr><th>Gap</th><td class="gap-buy">—</td><td class="gap-sell">—</td></tr>
+        </table>
+        <div class="fair-kind hint"></div>
+        <div class="fair-note hint"></div>
+        <!-- A conclusion drawn from an input that can be proven wrong
+             does not render at all: the warning REPLACES the reading,
+             and names the field and the value that would fix it. -->
+        <div class="fair-warn" hidden>
+          <span class="fair-warn-text"></span>
+          <button type="button" class="fair-fix" hidden></button>
+        </div>
+      </div>
+      <!-- Where to get out: break-even, and break-even plus a target
+           on the margin one spread ties up. A price on the screen —
+           nothing is sent to the broker, and no leg ever carries a
+           broker-side stop. -->
+      <div class="exit">
+        <label class="rail-label">Exit<button type="button" class="cog open-exits" title="Set commission, the slippage allowance, nights held and the take-profit % — this ladder&#8217;s own settings">&#9881;</button></label>
+        <table class="exits">
+          <tr><th>B-A Sp</th><td class="x-width" colspan="2">—</td></tr>
+          <tr><th>Comm</th><td class="x-comm" colspan="2">—</td></tr>
+          <tr hidden><th>Slip</th><td class="x-slip" colspan="2">—</td></tr>
+          <tr hidden><th>Swap</th><td class="x-swap" colspan="2">—</td></tr>
+          <tr><th>P% on M</th><td class="x-target" colspan="2">—</td></tr>
+          <tr hidden><th title="target distance in spread, against the session range">Reach</th><td class="x-reach" colspan="2">—</td></tr>
+          <tr class="heads"><th></th><th class="col-b" title="Buying the spread">B</th><th class="col-s" title="Selling the spread">S</th></tr>
+          <tr><th>B/E</th><td class="be-buy">—</td><td class="be-sell">—</td></tr>
+          <tr><th>TP</th><td class="tp-buy">—</td><td class="tp-sell">—</td></tr>
+          <!-- The other thing that decides where a position ends,
+               read-only beside the two that price it. -->
+          <tr><th>o/n</th><td class="x-overnight" colspan="2">—</td></tr>
+        </table>
+        <div class="exit-note hint"></div>
+      </div>
+    </div>
+  </section>
+</template>
+
+<!-- The pair's chart: the Algo's z with its entry and stop lines, and
+     the spread, over time. Opened and closed from the Chart button on
+     the ladder's title bar. Reads only. -->
+<template id="chart-template">
+  <section class="window chartwin">
+    <div class="titlebar">
+      <span class="swatch"></span>
+      <span class="title cw-pair"></span>
+      <span class="winbtns"><button class="winbtn close" title="Close the chart">&times;</button></span>
+    </div>
+    <div class="cw-body">
+      <div class="cw-bar">
+        <span class="cw-tfs" title="Candle size. 15m is the Algo&#8217;s own candle when its timeframe is 15 minutes.">
+          <button type="button" data-tf="15">15m</button><button type="button" data-tf="60">1h</button><button type="button" data-tf="240">4h</button>
+        </span>
+        <span class="cw-size hint"></span>
+        <span class="cw-now"></span>
+      </div>
+      <div class="cw-card">
+        <div class="cw-head">Z-Score
+          <span class="cw-key"><b class="k-candle up"></b><b class="k-candle down"></b>z <i class="k-up"></i>+entry <i class="k-down"></i>&minus;entry <span class="cw-key-stop"><i class="k-stop"></i>&plusmn;stop</span></span>
+        </div>
+        <div class="cw-plot cw-z"></div>
+      </div>
+      <div class="cw-card">
+        <div class="cw-head">Spread
+          <span class="cw-key"><i class="k-mean"></i>mean <i class="k-up"></i><i class="k-down"></i>&plusmn;entry</span>
+          <span class="cw-badges"><span class="cw-badge cw-min">Min: &mdash;</span><span class="cw-badge cw-max">Max: &mdash;</span></span>
+        </div>
+        <div class="cw-plot cw-spread"></div>
+      </div>
+      <div class="cw-note hint"></div>
+    </div>
+  </section>
+</template>
+
+<!-- The Algo, one window per ladder while it is on: SIGNAL & POSITION,
+     STATISTICS, FILTERS. Filled from the engine's Algo block on every
+     poll; nothing in it trades — the switch is on the ladder's title
+     bar, and closing this window turns the Algo off. -->
+<template id="algo-template">
+  <section class="window algowin">
+    <div class="titlebar">
+      <span class="swatch"></span>
+      <span class="title aw-pair"></span>
+      <span class="aw-mode"></span>
+      <span class="winbtns"><button class="winbtn aw-cog" title="This ladder&#8217;s Algo settings">&#9881;</button><button class="winbtn close" title="Close — and turn the Algo off for this ladder">&times;</button></span>
+    </div>
+    <div class="aw-body">
+      <!-- Which account, at which broker, each leg is on: two accounts
+           is the whole architecture, and which is which should not be
+           looked up elsewhere. -->
+      <div class="aw-legs"></div>
+      <div class="aw-section aw-signal"></div>
+      <div class="aw-section aw-stats"></div>
+      <div class="aw-section aw-filters"></div>
+      <!-- What THESE settings would have done on MT5's own history —
+           and without the trend protections, beside it. Sends nothing. -->
+      <div class="aw-section aw-backtest">
+        <div class="aw-head">Backtest</div>
+        <div class="aw-bt-controls">
+          <select class="aw-bt-days" title="How much history, from MT5's own bars">
+            <option value="3">last 3 days</option>
+            <option value="5" selected>last 5 days</option>
+            <option value="10">last 10 days</option>
+          </select>
+          <button type="button" class="aw-bt-run" title="Replay the history through this ladder's Algo, with its settings as they are now. Nothing is sent.">Run backtest</button>
+        </div>
+        <div class="aw-bt-out hint">What these settings would have done — nothing is sent.</div>
+      </div>
+    </div>
+  </section>
+</template>
+
+<template id="ladder-template">
+  <section class="window ladder">
+    <div class="titlebar">
+      <span class="swatch"></span>
+      <span class="title"></span>
+      <span class="route"></span>
+      <span class="mode-badge"></span>
+      <!-- The Algo's switch, where the ladder is: OFF / SIGNALS / LIVE,
+           one click to the menu. LIVE still asks to confirm, and the
+           engine still refuses what it cannot do. -->
+      <span class="algo-switch">
+        <button type="button" class="algo-btn" title="This ladder's Algo — click to turn it off, to Signals, or LIVE">ALGO OFF</button>
+        <span class="algo-menu" hidden>
+          <button type="button" data-algo="NONE">Off</button>
+          <button type="button" data-algo="ALGO">Signals — the Algo signals, you trade</button>
+          <button type="button" data-algo="ALGO_LIVE" class="live">LIVE — it trades</button>
+        </span>
+      </span>
+      <button type="button" class="chart-btn" title="Open or close this ladder&#8217;s chart: the Algo&#8217;s z with its entry and stop lines, and the spread">Chart</button>
+      <span class="winbtns"><button class="winbtn ladder-cog" title="This ladder's own settings — mode, exit costs, carry, Algo">&#9881;</button><button class="winbtn close" title="Close this ladder">&times;</button></span>
+    </div>
+    <div class="quotestrip">
+      <span class="netchg">—</span>
+      <div class="stats">
+        <span><label>H:</label><b class="stat-h">—</b></span>
+        <span><label>L:</label><b class="stat-l">—</b></span>
+      </div>
+      <div class="stats">
+        <span><label>O:</label><b class="stat-o">—</b></span>
+        <span title="Volume is per LEG: one lot of the spot and one of the future are not two lots of anything, so they are never added"><label>V1:</label><b class="stat-v1">—</b> <label>V2:</label><b class="stat-v2">—</b></span>
+      </div>
+      <span class="ours" title="Where the two terminals publish session figures, H/L/O are the LEGS' own — B − β × A, the same convention as every other price here. Where they do not, they are our own mid series since this process started, and this badge says so.">ours</span>
+    </div>
+    <!-- Algo or Manual, never both: while this ladder's Algo is LIVE
+         the order controls are off, and the ladder SAYS so rather
+         than letting a click fail afterwards. -->
+    <div class="algo-lock" hidden>ALGO LIVE — manual orders are off on this ladder. CLOSE ALL and Close @ LMT still close. Turn the Algo off in the title bar to trade by hand.</div>
+    <div class="body">
+      <div class="rail">
+        <!-- Which two accounts this ladder is routed across, with their
+             MT5 logins: two accounts is the whole architecture, and
+             which one a leg is on is not something to go and look up. -->
+        <div class="route-box row" title="Leg A and leg B, with the MT5 login each is on">
+          <div class="route-leg route-a">A <b>—</b></div>
+          <div class="route-leg route-b">B <b>—</b></div>
+        </div>
+        <!-- Mode and time in force on ONE row. Both are read at a
+             glance and set rarely, and the title bar carries the
+             answer too. -->
+        <div class="mode-row">
+          <select class="order-type">
+            <option value="LIMIT">Limit</option>
+            <option value="MARKET">Market</option>
+          </select>
+        <!-- The honest caveat has to be ON THE SCREEN. A synthetic
+             order lives in THIS process; nothing at the broker knows
+             what a spread is, so neither DAY nor GTC survives this
+             system stopping — both are swept at shutdown and do not
+             resume. Read as exchange-resident, GTC would be a promise
+             nothing could keep. -->
+        <select class="tif" title="DAY: cancelled at the session cutoff, on the broker's clock. GTC: until you cancel it — OR UNTIL THIS SYSTEM STOPS. Nothing at the broker knows what a spread is, so no working order survives a shutdown, and none resumes on a restart.">
+          <option value="DAY" title="cancelled at the session cutoff">Day</option>
+          <option value="GTC" title="until cancelled, or until this system stops">GTC</option>
+          </select>
+        </div>
+        <!-- WHICH LEG the real pending rests on. In LIMIT mode one leg
+             quotes and the other is crossed at market when it fills, so
+             a leg with no order at the broker is the mode working, not
+             a fault. It was nowhere on the screen. -->
+        <div class="quoting-note" title="LIMIT mode rests a real pending on ONE leg and crosses the other at market when it fills. This is the leg your broker will show an order on.">—</div>
+        <!-- The three fastest actions on the ladder, without hunting
+             for a row: lift the offer, hit the bid, close what is on. -->
+        <button class="quick buy-touch" title="Buy the spread at the offer (B)">BUY</button>
+        <button class="quick sell-touch" title="Sell the spread at the bid (S)">SELL</button>
+        <!-- The exit type is chosen in this ladder's settings, not
+             here: the rail has no row to spare, and it is a decision
+             made once rather than during the move. What the rail
+             shows is the RESULT — a ring round whichever of these two
+             F will press. Both stay on the screen whichever is set:
+             the way out must not change meaning under the button
+             pressed in a hurry. -->
+        <button class="quick flatten" title="Close every open position on this pair, at market, by ticket, NOW. It does not touch working orders — use Cancel all for those. Asks once">CLOSE ALL</button>
+        <!-- The other way to close: name a price and wait there. Same
+             machinery as an AutoRouting target — one working order per
+             position, carrying that position's ticket so it CLOSES
+             rather than opening a second one. -->
+        <div class="close-lmt-row">
+          <input class="close-limit" type="number" step="0.0001"
+                 placeholder="Close @ limit"
+                 title="The SPREAD level to close every open position at. It rests as a working order per position, carrying that position's ticket, and waits there — CLOSE ALL crosses now.">
+          <button class="quick close-limit-go" title="Rest a closing order for every open position on this pair at the price in the box, instead of crossing now. A target, and no stop.">@ LMT</button>
+        </div>
+        <!-- One box per side, each labelled and tinted with the side
+             it sends. The keypad sets both; type in one to differ. -->
+        <label class="inline-field qty-row"><span class="qty-buy">Qty BUY</span>
+          <input class="armed qty-box buy" type="number" min="0.01" step="0.01"
+                 title="The size a BUY sends. The keypad sets both sides; type here to buy a different size from the one you sell."></label>
+        <div class="keypad">
+          <button class="qty" data-qty="1">1</button>
+          <button class="qty" data-qty="5">5</button>
+          <button class="qty" data-qty="10">10</button>
+          <button class="qty" data-qty="50">50</button>
+          <button class="qty" data-qty="100">100</button>
+          <button class="qty clr" data-qty="">CLR</button>
+        </div>
+        <label class="inline-field qty-row"><span class="qty-sell">Qty SELL</span>
+          <input class="sell-qty qty-box sell" type="number" min="0.01" step="0.01"
+                 title="The size a SELL sends. The keypad sets both sides; type here to sell a different size from the one you buy."></label>
+        <!-- One row, not three: the rail is read top to bottom while
+             the market moves, and every row it does not need is a row
+             between the trader and the price. -->
+        <div class="rail-label">Working orders</div>
+        <div class="cxl-row">
+          <button class="cxl cxl-s" title="Cancel this ladder's working SELL orders">S<sup class="count-s"></sup></button>
+          <button class="cxl cxl-all" title="Cancel every working order on this ladder (X)">CXL All<sup class="count-all"></sup></button>
+          <button class="cxl cxl-b" title="Cancel this ladder's working BUY orders">B<sup class="count-b"></sup></button>
+        </div>
+        <label class="inline-field"><span>Increment</span>
+          <input class="increment" type="number" min="0" step="0.0001"></label>
+        <div class="centre-row">
+          <label class="check lock" title="Hold the ladder exactly where it is — no automatic re-centring at all"><input type="checkbox" class="lock-scroll"> Lock</label>
+          <label class="check" title="Show only the rows that have something on them"><input type="checkbox" class="filter"> Filter</label>
+          <button class="btn recentre" title="Put the window back around the market now">Centre</button>
+        </div>
+      </div>
+      <div class="grid">
+        <table>
+          <thead>
+            <tr>
+              <th class="c-work" title="Work — YOUR resting orders at this level, blue for a buy and red for a sell. It appears the moment the click is accepted and stays until the order fills or is pulled. CLICK to add one more at this level; RIGHT-CLICK to pull one.">Work</th>
+              <th class="c-bid" title="Bids — the size the two books can do on the SELL side, in spreads. Click here to sell the spread at that level.">Bids</th>
+              <th class="c-price" title="The spread, B − β × A, one row per increment.">Price</th>
+              <th class="c-ask" title="Asks — the size the two books can do on the BUY side, in spreads. Click here to buy the spread at that level.">Asks</th>
+              <th class="c-ltq" title="LTQ — last traded quantity: the size of the most recent FILL at this price. It is a print, not an order: history, and it never means anything is still working.">LTQ</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+        <div class="counts"><span class="cnt-b">B:0</span><span class="cnt-s">S:0</span><span class="cnt-w">W:0</span></div>
+      </div>
+    </div>
+    <!-- THIS LADDER's settings. Every field here belongs to this pair
+         and no other: one ladder can arm AutoRouting while the next
+         does not, and a gold basis and an oil differential are charged
+         different commissions and held for different lengths of time.
+         A single set of numbers covering both is a set that is wrong
+         for at least one of them.
+
+         It sits OVER the ladder rather than in the rail, because the
+         rail is read top to bottom while the market moves. -->
+    <div class="ladder-settings" hidden>
+      <div class="ls-head">
+        <b>Ladder settings</b><span class="ls-pair"></span>
+        <button type="button" class="btn ls-close">Close</button>
+      </div>
+      <div class="ls-body">
+        <div class="ls-group">
+          <h4>Trading</h4>
+          <label class="lsf"><span>Mode</span>
+            <select class="ls-order-type">
+              <option value="LIMIT">Limit</option>
+              <option value="MARKET">Market</option>
+            </select></label>
+          <label class="lsf"><span>Time in force</span>
+            <select class="ls-tif" title="Neither survives this system stopping: nothing at the broker knows what a spread is.">
+              <option value="DAY">Day</option>
+              <option value="GTC">GTC</option>
+            </select></label>
+          <label class="lsf"><span>Increment</span>
+            <input class="ls-increment" type="number" min="0" step="0.0001"></label>
+          <label class="lsf"><span>Rows</span>
+            <input class="ls-rows" type="number" min="5" max="200" step="1"></label>
+          <label class="lsf"><span>Default qty</span>
+            <input class="ls-qty" type="number" min="0.01" step="0.01"
+                   title="How many SPREADS one click sends. It is not lots — see Lots/spread below for what one spread is worth in each leg."></label>
+          <!-- WHAT ONE QTY IS, ON EACH LEG. Both typed: Qty is the
+               lots. Leg B used to be derived — from the hedge
+               arithmetic, or lot for lot, or by equal notional — and
+               every one of those could round a leg to zero or size a
+               pair the desk had not asked for. -->
+          <label class="lsf"><span>Leg A lots</span>
+            <input class="ls-clip-a" type="number" min="0" step="0.01"
+                   title="How many LOTS of leg A one unit of Qty is. Qty 100 at 1 sends 100 lots. Blank reads as 1."></label>
+          <label class="lsf"><span>Leg B lots</span>
+            <input class="ls-clip-b" type="number" min="0" step="0.01"
+                   title="How many LOTS of leg B one unit of Qty is. Set it different from leg A for a ratio — 1 and 2 sends twice as many lots of B as of A. Blank reads as 1."></label>
+          <!-- The contract size is MT5's, read on every resolve. This
+               overrides it, for the one case where the broker's own
+               number is wrong — and it is loud when it is set. -->
+          <label class="lsf"><span>Contract A</span>
+            <input class="ls-contract-a" type="number" min="0" step="1"
+                   placeholder="from MT5"
+                   title="What ONE LOT of leg A is, in the instrument's own units — 100 oz of gold, 1,000 barrels of oil. Leave it blank: MT5 reports this and it is right almost always. Set it only when the broker's own number is wrong, because every money figure on this ladder runs through it."></label>
+          <label class="lsf"><span>Contract B</span>
+            <input class="ls-contract-b" type="number" min="0" step="1"
+                   placeholder="from MT5"
+                   title="What ONE LOT of leg B is, in the instrument's own units. Leave it blank to use MT5's."></label>
+          <div class="lsf-note ls-clip-note"></div>
+          <label class="lsf"><span>Quoting leg</span>
+            <select class="ls-quoting" title="Which leg rests the real pending in LIMIT mode. Default: the wider bid-ask — that is the spread you earn.">
+              <option value="">wider book</option>
+              <option value="a">Leg A</option>
+              <option value="b">Leg B</option>
+            </select></label>
+        </div>
+        <div class="ls-group">
+          <h4>Exit</h4>
+          <label class="lsf"><span>Exit type</span>
+            <select class="ls-exit-type" title="What F and the emphasised close button do. MARKET crosses both legs now; LIMIT rests one closing order per open position and waits at the price on the rail. Either way what reaches the broker is a market close by ticket — a closing PENDING would open a second position on a hedging account. CLOSE ALL always crosses now.">
+              <option value="MARKET">Market</option>
+              <option value="LIMIT">Limit</option>
+            </select></label>
+          <label class="lsf"><span>Overnight</span>
+            <select class="ls-overnight" title="What happens to an OPEN POSITION at the session cutoff. It governs positions; DAY/GTC governs working orders, and the two are not the same thing.">
+              <option value="ALLOW">Hold overnight</option>
+              <option value="EXIT_IF_PROFIT">Exit if in profit</option>
+              <option value="EXIT_ALWAYS">Exit anyway</option>
+            </select></label>
+          <!-- THIS LADDER'S HOURS, on the broker's clock. An oil future
+               and a gold CFD do not keep the same day: blank close is
+               the desk-wide cutoff, blank open is any time before it,
+               and the break takes both ends or neither. -->
+          <label class="lsf" title="When this ladder's session starts, HH:MM broker time. Before it, the Algo takes no new entry and a silent feed is not a fault. Blank: any time before the close. An open after the close is a session that runs over midnight.">
+            <span>Session open</span>
+            <input class="ls-session-open" type="text" inputmode="numeric" placeholder="any" maxlength="5"></label>
+          <label class="lsf" title="This ladder's session cutoff, HH:MM broker time: DAY orders are cancelled, the Overnight rule runs and the Algo's last entry is before it. Blank: the desk-wide cutoff.">
+            <span>Session close</span>
+            <input class="ls-session-close" type="text" inputmode="numeric" placeholder="desk cutoff" maxlength="5"></label>
+          <label class="lsf" title="A daily break (a futures maintenance pause), HH:MM broker time: no Algo entries, and a silent feed is expected rather than a fault. Exits are never held. Both ends or neither.">
+            <span>Break start</span>
+            <input class="ls-break-start" type="text" inputmode="numeric" placeholder="none" maxlength="5"></label>
+          <label class="lsf" title="When the daily break ends, HH:MM broker time.">
+            <span>Break end</span>
+            <input class="ls-break-end" type="text" inputmode="numeric" placeholder="none" maxlength="5"></label>
+          <label class="lsf"><span>Comm/lot A</span>
+            <input class="ls-comm-a" type="number" min="0" step="0.01" placeholder="default"></label>
+          <label class="lsf"><span>Comm/lot B</span>
+            <input class="ls-comm-b" type="number" min="0" step="0.01" placeholder="default"></label>
+          <!-- HOW LONG THIS PAIR MAY BE QUIET. The desk-wide number is
+               15s, tuned on a leg that ticks several times a second. A
+               dated oil future trades a few times a minute, and on it
+               that guard fires all day and withholds every order. -->
+          <label class="lsf"><span>Stale after (s)</span>
+            <input class="ls-stale" type="number" min="0" step="1"
+                   placeholder="default"
+                   title="How long EITHER leg of this pair may go unchanged before the spread is called stale and orders are withheld. Blank uses the desk-wide setting. Raise it for an instrument that is simply quiet — a dated future trading a few times a minute is not a dead feed. 0 turns the guard off for this pair, which also stops it catching a leg that has genuinely STOPPED."></label>
+          <label class="lsf"><span>Slippage allowance</span>
+            <input class="ls-slip" type="number" min="0" step="0.01" placeholder="default"></label>
+          <label class="lsf"><span>Nights held</span>
+            <input class="ls-nights" type="number" min="0" step="1" placeholder="default"></label>
+          <label class="lsf"><span>TP % of margin</span>
+            <input class="ls-tp" type="number" min="0" step="0.1" placeholder="default"></label>
+        </div>
+        <div class="ls-group">
+          <h4>Carry <small class="ls-pairtype"></small></h4>
+          <!-- DECLARED, not inferred. Two futures with two expiries are
+               not a calendar: UKOILV6 against USOILV6 is Brent against
+               WTI, which is two different instruments with no carry
+               between them, and nothing in an expiry says whether two
+               contracts share an underlying. -->
+          <label class="lsf"><span>Pair type</span>
+            <select class="ls-pair-type" title="Spot vs Future and Calendar have a fair spread — the carry to expiry. Related does not: nothing forces two different instruments together, so there is nothing to quote.">
+              <option value="SPOT_FUTURE">Spot vs Future</option>
+              <option value="FUTURE_FUTURE">Calendar (same underlying)</option>
+              <option value="RELATED">Related (no fair spread)</option>
+            </select></label>
+          <!-- An expiry belongs to a CONTRACT. Spot has none, and a
+               field asking for one is a field the operator will either
+               fill in wrongly or spend a minute deciding to leave
+               blank. Which leg has one follows the pair type, so the
+               row says which of the two it is. -->
+          <label class="lsf row-expiry-a"><span>Expiry A</span>
+            <input class="ls-expiry-a" type="text" placeholder="from MT5"></label>
+          <label class="lsf row-expiry-b"><span>Expiry B</span>
+            <input class="ls-expiry" type="text" placeholder="from MT5"></label>
+          <label class="lsf"><span>Swap A long</span>
+            <input class="ls-swap-a-long" type="number" step="0.01" placeholder="from MT5"></label>
+          <label class="lsf"><span>Swap A short</span>
+            <input class="ls-swap-a-short" type="number" step="0.01" placeholder="from MT5"></label>
+          <label class="lsf"><span>Swap B long</span>
+            <input class="ls-swap-b-long" type="number" step="0.01" placeholder="from MT5"></label>
+          <label class="lsf"><span>Swap B short</span>
+            <input class="ls-swap-b-short" type="number" step="0.01" placeholder="from MT5"></label>
+          <label class="lsf"><span>Carry rate % a year</span>
+            <input class="ls-carry-rate" type="number" step="0.1" placeholder="no cross-check"></label>
+        </div>
+        <!-- ONE control for one decision: what this ladder's window
+             reads. Fair spread is the carry; Algo is the z-score signal
+             on Bollinger bands of the spread. One at a time.
+
+             Both READ. Neither places, modifies or cancels an order,
+             and a click on the ladder behaves identically whichever is
+             picked. Algo is switched on in the running engine and is
+             OFF again after every restart; Fair spread is saved. -->
+        <div class="ls-group">
+          <h4>Algo <small class="ls-algo-state"></small></h4>
+          <label class="lsf"
+                 title="Turn this ladder&#8217;s Algo on or off. Signals: it signals entries and watches YOUR position&#8217;s TP and SL, with an alert and a chime; it sends nothing and you trade on the ladder. LIVE: it trades this ladder by its rules, and manual orders on it are off. Fair spread: no Algo, the carry reading only.">
+            <span>Algo</span>
+            <select class="ls-algo">
+              <option value="NONE">Off</option>
+              <option value="FAIR_SPREAD">Fair spread</option>
+              <option value="ALGO">Signals</option>
+              <option value="ALGO_LIVE">LIVE (trades)</option>
+            </select></label>
+          <label class="lsf" title="Enter when the executable spread is this many sigma from the middle line: SELL at +z or above, BUY at &#8722;z or below.">
+            <span>Entry z</span>
+            <input class="ls-az-entry" type="number" min="0.1" step="0.1"></label>
+          <label class="lsf" title="Which way the Algo may ENTER. H to L sells the spread (the bid side, when it stretches up); L to H buys it (the offer side, when it stretches down). Exits are never restricted.">
+            <span>Direction</span>
+            <select class="ls-az-direction">
+              <option value="BOTH">Both</option>
+              <option value="H_TO_L">H to L only</option>
+              <option value="L_TO_H">L to H only</option>
+            </select></label>
+          <label class="lsf" title="The candle the band is built from. MT5&#8217;s own bars are loaded for it when the Algo is turned on.">
+            <span>Candle</span>
+            <select class="ls-az-tf">
+              <option value="1">1 min</option>
+              <option value="5">5 min</option>
+              <option value="15">15 min</option>
+              <option value="30">30 min</option>
+              <option value="60">1 hour</option>
+              <option value="240">4 hours</option>
+            </select></label>
+          <label class="lsf" title="N: the EMA middle line and the sigma are over this many candles, the forming one included.">
+            <span>Length (candles)</span>
+            <input class="ls-az-length" type="number" min="2" step="1"></label>
+          <label class="lsf" title="The entry must hold for this many fresh prices in a row, so one flicker does not signal.">
+            <span>Confirm (ticks)</span>
+            <input class="ls-az-confirm" type="number" min="1" step="1"></label>
+          <label class="lsf" title="No entry signal past this |z| — that is a blow-out, not a stretch. 0 = no cap.">
+            <span>Max entry z</span>
+            <input class="ls-az-max" type="number" min="0" step="0.1"></label>
+          <label class="lsf check-row" title="Re-entry: do not enter on the TOUCH of the band. A side is armed when its stretch reaches Entry z, and enters when it comes back inside by this much (2.0 armed, 1.5 enters). A spread riding the band in a trend never comes back, so it gives no entry. Lost if the spread reaches the mean first.">
+            <span>Re-entry back by</span>
+            <input type="checkbox" class="ls-az-reentry-on">
+            <input class="ls-az-reentry" type="number" min="0.05" step="0.1"></label>
+          <label class="lsf" title="Re-entry window: how much of the way from where it enters back to the mean still counts as an entry, in %. 50 with entry z 2.0 and back 0.5: enters between 1.50 and 0.75, and past 0.75 the side disarms - so nothing near the mean is ever an entry. 100 = all the way to the mean.">
+            <span>Re-entry window %</span>
+            <input class="ls-az-reentry-window" type="number" min="5" max="100" step="5"></label>
+          <label class="lsf" title="No entry signal in the last this-many minutes before the session cutoff, or after it. 0 = off.">
+            <span>Cutoff (min)</span>
+            <input class="ls-az-buffer" type="number" min="0" step="1"></label>
+          <label class="lsf" title="No new entry signal for this long after an exit signal or a close.">
+            <span>Cooldown (min)</span>
+            <input class="ls-az-cooldown" type="number" min="0" step="1"></label>
+          <label class="lsf" title="No entry until the Algo has watched this many minutes of LIVE prices since it was turned on — even when MT5's history fills the band at once. Time with no price does not count. Signals counts: warm up in Signals, then switch to LIVE. 0 = off.">
+            <span>Warm-up (min)</span>
+            <input class="ls-az-warmup" type="number" min="0" step="1"></label>
+          <label class="lsf check-row" title="Also signal EXIT if the spread runs against the position to this |z|.">
+            <span>Z-stop at</span>
+            <input type="checkbox" class="ls-az-stop-on">
+            <input class="ls-az-stop" type="number" min="0" step="0.1"></label>
+          <label class="lsf check-row" title="Also signal EXIT when z crosses back through 0 while the position is at or above break-even after costs.">
+            <span>Back to mean</span>
+            <input type="checkbox" class="ls-az-revert-on"></label>
+          <label class="lsf" title="One Algo trade, in spreads: 1 = this ladder&#8217;s Leg A lots / Leg B lots. Its own number — the keypad does not change it.">
+            <span>Algo qty</span>
+            <input class="ls-az-qty" type="number" min="0.01" step="0.01"></label>
+          <label class="lsf" title="Entries stop for the rest of the day after this many Algo trades. 0 = no limit.">
+            <span>Max trades/day</span>
+            <input class="ls-az-maxtrades" type="number" min="0" step="1"></label>
+          <label class="lsf" title="Entries stop for the day when the Algo&#8217;s P&amp;L today (closed + open) reaches minus this. 0 = off.">
+            <span>Daily loss limit</span>
+            <input class="ls-az-loss" type="number" min="0" step="1"></label>
+          <label class="lsf" title="Entries stop for the day after this many losing Algo trades in a row. 0 = off.">
+            <span>Losses in a row</span>
+            <input class="ls-az-losses" type="number" min="0" step="1"></label>
+          <label class="lsf check-row" title="Edge filter: no entry unless the expected capture (capture fraction x |z| x sigma, in money) is at least this many times the round-trip cost — crossing + commission + slippage.">
+            <span>Edge filter &#215;</span>
+            <input type="checkbox" class="ls-az-edge-on">
+            <input class="ls-az-edge" type="number" min="0" step="0.1"></label>
+          <label class="lsf" title="How much of the full reversion (|z| x sigma) a trade is expected to capture. 0.5 = half.">
+            <span>Capture fraction</span>
+            <input class="ls-az-capture" type="number" min="0.05" max="1" step="0.05"></label>
+          <label class="lsf check-row" title="No entry while the spread is TRENDING: a high efficiency ratio and few crossings of its mean.">
+            <span>Regime filter</span>
+            <input type="checkbox" class="ls-az-regime-on"></label>
+          <label class="lsf check-row" title="Trend direction: when the band's middle has moved more than this many sigma over the lookback, no entry AGAINST it — no H to L while it rises, no L to H while it falls. The other side stays open.">
+            <span>Trend filter (σ)</span>
+            <input type="checkbox" class="ls-az-trend-on">
+            <input class="ls-az-trend" type="number" min="0.1" step="0.1"></label>
+          <label class="lsf" title="How far back the trend filter measures the middle's move, in minutes.">
+            <span>Trend lookback (min)</span>
+            <input class="ls-az-trend-look" type="number" min="15" step="15"></label>
+          <label class="lsf" title="No entry when the spread reverts faster than this (minutes) — noise. 0 = off.">
+            <span>Half-life min (min)</span>
+            <input class="ls-az-hl-min" type="number" min="0" step="1"></label>
+          <label class="lsf" title="No entry when the spread reverts slower than this (minutes) — it will not revert inside a hold. 0 = off.">
+            <span>Half-life max (min)</span>
+            <input class="ls-az-hl-max" type="number" min="0" step="1"></label>
+          <label class="lsf check-row" title="Signal EXIT when the position falls to break-even less this % of the margin one spread ties up — the mirror of TP % of margin.">
+            <span>SL % margin</span>
+            <input type="checkbox" class="ls-az-sl-on">
+            <input class="ls-az-sl" type="number" min="0" step="0.1"></label>
+          <!-- HOW THE STOP AND THE TARGET ARE SIZED. A % of margin is the
+               same distance on a quiet day and a wild one; an ATR stop
+               sizes itself to the market. Measured from break-even and
+               frozen when the trade opens, either way. -->
+          <label class="lsf" title="How the stop loss is sized. % of margin: the SL % margin above. ATR: a multiple of the spread's average true range (close to close, on the Algo's candles) - wider when the spread is busy, tighter when it is quiet. Frozen when the trade opens.">
+            <span>Stop sized by</span>
+            <select class="ls-az-stop-mode">
+              <option value="MARGIN">% of margin</option>
+              <option value="ATR">ATR</option>
+            </select></label>
+          <label class="lsf" title="How the take-profit is sized. % of margin: this ladder's TP % of margin. ATR: a multiple of the spread's ATR. Frozen when the trade opens.">
+            <span>Target sized by</span>
+            <select class="ls-az-target-mode">
+              <option value="MARGIN">% of margin</option>
+              <option value="ATR">ATR</option>
+            </select></label>
+          <label class="lsf" title="How many candles the ATR averages over - 14 is the usual, 21 is slower and steadier. The Algo takes no entry in ATR mode until it has this many closed candles plus one.">
+            <span>ATR period (candles)</span>
+            <input class="ls-az-atr-period" type="number" min="2" step="1"></label>
+          <label class="lsf" title="Stop loss = break-even less this many ATRs (ATR mode). 2.0 is the usual start.">
+            <span>Stop x ATR</span>
+            <input class="ls-az-atr-stop" type="number" min="0.1" step="0.1"></label>
+          <label class="lsf" title="Take-profit = break-even plus this many ATRs (ATR mode).">
+            <span>Target x ATR</span>
+            <input class="ls-az-atr-target" type="number" min="0.1" step="0.1"></label>
+          <!-- EACH SIDE'S OWN EXITS. Blank is the ladder's own value
+               above; a trade keeps the levels it was given when it
+               opened. -->
+          <div class="lsf-side-note hint">Per side - H to L | L to H. Blank uses the value above.</div>
+          <label class="lsf side-pair" title="Stop sized by for H to L (left) and L to H (right). Blank = the ladder&#39;s own.">
+            <span>SL by</span>
+            <select class="ls-az-stop-mode-sell" title="blank = the ladder&#39;s own"><option value="">same</option><option value="MARGIN">%</option><option value="ATR">ATR</option></select>
+            <select class="ls-az-stop-mode-buy" title="blank = the ladder&#39;s own"><option value="">same</option><option value="MARGIN">%</option><option value="ATR">ATR</option></select></label>
+          <label class="lsf side-pair" title="Target sized by for H to L (left) and L to H (right). Blank = the ladder&#39;s own.">
+            <span>TP by</span>
+            <select class="ls-az-target-mode-sell" title="blank = the ladder&#39;s own"><option value="">same</option><option value="MARGIN">%</option><option value="ATR">ATR</option></select>
+            <select class="ls-az-target-mode-buy" title="blank = the ladder&#39;s own"><option value="">same</option><option value="MARGIN">%</option><option value="ATR">ATR</option></select></label>
+          <label class="lsf side-pair" title="SL % margin for H to L (left) and L to H (right). Blank = the ladder&#39;s own.">
+            <span>SL %</span>
+            <input class="ls-az-sl-sell" type="number" min="0" step="0.1" placeholder="H to L">
+            <input class="ls-az-sl-buy" type="number" min="0" step="0.1" placeholder="L to H"></label>
+          <label class="lsf side-pair" title="TP % margin for H to L (left) and L to H (right). Blank = the ladder&#39;s own.">
+            <span>TP %</span>
+            <input class="ls-az-tp-sell" type="number" min="0" step="0.1" placeholder="H to L">
+            <input class="ls-az-tp-buy" type="number" min="0" step="0.1" placeholder="L to H"></label>
+          <label class="lsf side-pair" title="Stop x ATR for H to L (left) and L to H (right). Blank = the ladder&#39;s own.">
+            <span>SL ATR</span>
+            <input class="ls-az-atr-stop-sell" type="number" min="0" step="0.1" placeholder="H to L">
+            <input class="ls-az-atr-stop-buy" type="number" min="0" step="0.1" placeholder="L to H"></label>
+          <label class="lsf side-pair" title="Target x ATR for H to L (left) and L to H (right). Blank = the ladder&#39;s own.">
+            <span>TP ATR</span>
+            <input class="ls-az-atr-target-sell" type="number" min="0" step="0.1" placeholder="H to L">
+            <input class="ls-az-atr-target-buy" type="number" min="0" step="0.1" placeholder="L to H"></label>
+          <label class="lsf check-row" title="While a position is on: a bar from the stop loss to the take-profit, with the entry marked and the closing price on it.">
+            <span>Progress bar</span>
+            <input type="checkbox" class="ls-az-progress"></label>
+          <label class="lsf check-row" title="Also signal EXIT after the position has been on this many candles, whatever its P&amp;L.">
+            <span>Time stop</span>
+            <input type="checkbox" class="ls-az-time-on">
+            <input class="ls-az-time" type="number" min="1" step="1"></label>
+          <div class="lsf-note hint">Signals: the Algo signals, you trade —
+            nothing is sent, clicks on the ladder work, and your position
+            gets the Algo's TP and SL as alerts. LIVE: the Algo
+            trades this ladder (MARKET in, closes by ticket) and manual
+            orders on it are OFF; closes still work. Off again after a
+            restart.</div>
+        </div>
+      </div>
+      <div class="ls-actions">
+        <button type="button" class="btn ls-save">Apply</button>
+        <span class="ls-note hint">Applies at once — blank means the
+          system default, and 0 is a real number.</span>
+      </div>
+    </div>
+    <div class="footer">
+      <span class="feed" title="The staleness and jump guards (a guard may withhold an order; it never prevents a close)">—</span>
+      <!-- The thing to DO about a stale feed: take both symbols out of
+           Market Watch and put them back. -->
+      <button class="btn refresh-feed" title="Re-subscribe both legs in their terminals. Use this when the price is moving in MT5 but the age here keeps climbing.">↻ Feed</button>
+      <!-- The two legs' own quotes, in ONE place. A spread that is not
+           moving is one leg that is not moving, and this says which. -->
+      <span class="legs" title="Each leg's own bid/ask and how long since it last changed">—</span>
+      <span class="pos">flat</span>
+      <span class="pnl">—</span>
+      <span class="clip" title="One spread, in leg lots, and the dollars per 1.00 of spread">—</span>
+      <span class="errors"></span>
+    </div>
+  </section>
+</template>
+
+<script src="{{ url_for('static', filename='app.js') }}?v={{ asset_version }}"></script>
+<script src="{{ url_for('static', filename='settings.js') }}?v={{ asset_version }}"></script>
+</body>
+</html>

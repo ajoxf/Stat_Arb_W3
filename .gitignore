@@ -51,3 +51,11 @@ Thumbs.db
 .coverage
 htmlcov/
 data/
+
+# OKX desk runtime files
+config.json
+status.json
+commands.jsonl
+results.json
+okxtrader.db*
+logs/

@@ -1,0 +1,56 @@
+{
+  "accounts": {
+    "leg_a": {
+      "terminal_path": "C:\\Program Files\\MetaTrader 5 - A\\terminal64.exe",
+      "login": 5000001,
+      "password_env": "MT5_PASSWORD_LEG_A",
+      "server": "YourBroker-Live",
+      "endpoint": "127.0.0.1:9101"
+    },
+    "leg_b": {
+      "terminal_path": "C:\\Program Files\\MetaTrader 5 - B\\terminal64.exe",
+      "login": 5000002,
+      "password_env": "MT5_PASSWORD_LEG_B",
+      "server": "YourBroker-Live",
+      "endpoint": "127.0.0.1:9102"
+    }
+  },
+  "pairs": {
+    "XAUUSD_|GC1226": {
+      "name": "Gold spot vs Dec future",
+      "leg_a": {
+        "account": "leg_a",
+        "symbol": "XAUUSD_"
+      },
+      "leg_b": {
+        "account": "leg_b",
+        "symbol": "GC1226"
+      },
+      "pair_type": "SPOT_FUTURE",
+      "hedge_ratio": 1.0,
+      "hedge_ratio_for": "XAUUSD_|GC1226",
+      "increment": null,
+      "clip_lots_a": null,
+      "clip_lots_b": null,
+      "default_quantity": 1.0,
+      "order_type": "LIMIT",
+      "time_in_force": "DAY",
+      "overnight": "ALLOW",
+      "quoting_leg": null,
+      "enabled": true,
+      "rows": 30
+    }
+  },
+  "settings": {
+    "POLL_INTERVAL_SEC": 0.3,
+    "LEG_DEADLINE_SEC": 2.0,
+    "MARKET_PROTECTION_TICKS": 3.0,
+    "CLICK_CONVENTION": "TT",
+    "REPEG_DEAD_BAND_TICKS": 1.0,
+    "MAX_QUOTE_AGE_SEC": 15.0,
+    "MAX_SPREAD_JUMP_SIGMA": 5.0,
+    "OVERNIGHT_CLOSE_HOUR": 16,
+    "OVERNIGHT_CLOSE_MINUTE": 55,
+    "SHUTDOWN_CLOSE_POSITIONS": "ask"
+  }
+}

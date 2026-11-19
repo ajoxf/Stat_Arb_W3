@@ -1,0 +1,817 @@
+"""The web process: it renders, and it asks. It never trades.
+
+Plus the UI rules the spec makes non-negotiable, asserted as tests
+rather than trusted: no CDN, no native dialogs, and a refusal that
+carries its own words.
+"""
+
+import json
+import os
+import re
+from pathlib import Path
+
+import pytest
+
+from okxtrader import config as cfg
+from okxtrader.webapp import create_app
+
+STATIC = Path(__file__).resolve().parent.parent / 'okxtrader' / 'static'
+TEMPLATES = Path(__file__).resolve().parent.parent / 'okxtrader' / 'templates'
+
+
+@pytest.fixture
+def paths(tmp_path):
+    return {
+        'status': str(tmp_path / 'status.json'),
+        'commands': str(tmp_path / 'commands.jsonl'),
+        'results': str(tmp_path / 'results.json'),
+        'config': str(tmp_path / 'config.json'),
+    }
+
+
+@pytest.fixture
+def client(paths):
+    app = create_app(paths['status'], paths['commands'], paths['results'],
+                     paths['config'])
+    app.config.update(TESTING=True)
+    return app.test_client()
+
+
+def write_status(paths, **overrides):
+    import time
+    snapshot = {
+        'at': time.time(), 'loop_interval_sec': 0.3,
+        'accounts': {'acct_a': {'profit': 0.0}},
+        'pairs': {'A|B': {'key': 'A|B', 'name': 'A vs B', 'enabled': True,
+                          'net_position': 0.0, 'working_buys': 0,
+                          'working_sells': 0, 'positions': [], 'orders': [],
+                          'rows': [], 'errors': []}},
+    }
+    snapshot.update(overrides)
+    with open(paths['status'], 'w', encoding='utf-8') as f:
+        json.dump(snapshot, f)
+    # The app re-reads the file when (mtime, size) changes. Windows'
+    # clock is coarse: two writes in a row of the same size kept one
+    # mtime, and the second status was never read. A stamp of its own.
+    global _LAST_STAMP
+    _LAST_STAMP = max(time.time_ns(), _LAST_STAMP + 10_000_000)
+    os.utime(paths['status'], ns=(_LAST_STAMP, _LAST_STAMP))
+    return snapshot
+
+
+_LAST_STAMP = 0
+
+
+def test_a_dead_coordinator_is_never_mistaken_for_a_quiet_market(client,
+                                                                  paths):
+    """That confusion is what gets orders clicked into a screen with
+    nothing behind it."""
+    body = client.get('/api/status').get_json()
+    assert body['engine'] == 'down'
+    assert 'a click would go nowhere' in body['engine_note']
+
+    write_status(paths, at=0)                    # an ancient snapshot
+    body = client.get('/api/status').get_json()
+    assert body['engine'] == 'stalled'
+    assert 'Nothing on this screen is live' in body['engine_note']
+
+
+def test_a_command_is_refused_while_the_engine_is_down(client, paths):
+    """Refuse rather than queue: a command written while nothing is
+    running would be executed by whatever starts next, at prices from
+    another hour."""
+    response = client.post('/api/command',
+                           json={'kind': 'click',
+                                 'payload': {'pair': 'A|B', 'side': 'BUY',
+                                             'level': 1.0}})
+    assert response.status_code == 409
+    assert 'not running' in response.get_json()['error']
+    assert not Path(paths['commands']).exists()
+
+
+def test_a_command_reaches_the_log_when_the_engine_is_up(client, paths):
+    write_status(paths)
+    response = client.post('/api/command',
+                           json={'kind': 'click',
+                                 'payload': {'pair': 'A|B', 'side': 'BUY',
+                                             'level': 58.4}})
+    assert response.status_code == 200
+    command_id = response.get_json()['id']
+
+    written = [json.loads(line) for line in
+               open(paths['commands'], encoding='utf-8').read().splitlines()]
+    assert written[0]['kind'] == 'click'
+    assert written[0]['payload']['level'] == 58.4
+
+    # The result is pending until the coordinator has run it.
+    assert client.get(f'/api/result/{command_id}').get_json()['pending']
+    with open(paths['results'], 'w', encoding='utf-8') as f:
+        json.dump({command_id: {'ok': True, 'data': {'order': {}}}}, f)
+    assert client.get(f'/api/result/{command_id}').get_json()['ok'] is True
+
+
+def test_saving_an_account_refuses_a_clash_with_the_reason_on_the_row(client,
+                                                                      paths):
+    cfg.save_raw(paths['config'], {
+        'accounts': {'a': {'endpoint': '127.0.0.1:9101', 'login': 5001}},
+        'pairs': {}})
+
+    response = client.post('/api/accounts/b',
+                           json={'endpoint': '127.0.0.1:9101'})
+    assert response.status_code == 400
+    assert "belongs to account 'a'" in response.get_json()['error']
+
+    response = client.post('/api/accounts/b', json={'endpoint': 'nonsense'})
+    assert response.status_code == 400
+    assert 'COLON' in response.get_json()['error']
+
+
+def test_a_password_goes_to_the_env_file_and_never_to_the_config(client,
+                                                                 paths,
+                                                                 tmp_path):
+    cfg.save_raw(paths['config'], {'accounts': {'Live A': {}}, 'pairs': {}})
+    client.post('/api/accounts/Live A',
+                json={'endpoint': '127.0.0.1:9101', 'login': 5001,
+                      'password': 'two words #1'})
+
+    stored = json.load(open(paths['config'], encoding='utf-8'))
+    assert 'password' not in stored['accounts']['Live A']
+    env = (tmp_path / '.env').read_text(encoding='utf-8')
+    assert 'MT5_PASSWORD_LIVE_A="two words #1"' in env
+
+
+def test_the_accounts_page_shows_the_clash_on_the_row_itself(client, paths):
+    cfg.save_raw(paths['config'], {
+        'accounts': {'a': {'terminal_path': 'C:\\MT5\\terminal64.exe'},
+                     'b': {'terminal_path': 'C:\\MT5\\terminal64.exe'}},
+        'pairs': {}})
+    rows = client.get('/api/accounts').get_json()['accounts']
+    assert any(row['terminal_clash'] for row in rows)
+    assert 'One terminal serves ONE login' in rows[0]['terminal_clash']
+
+
+def test_a_pair_with_an_open_position_cannot_be_renamed_or_deleted(client,
+                                                                   paths):
+    """A leftover row is one resolving symbol away from a second live
+    position — but a pair carrying money must not be removed out from
+    under it either."""
+    cfg.save_raw(paths['config'], {'accounts': {'a': {}},
+                                   'pairs': {'A|B': {'name': 'A vs B'}}})
+    write_status(paths, pairs={'A|B': {'net_position': -2.0}})
+
+    response = client.post('/api/pairs/A|B', json={'name': 'renamed'})
+    assert response.status_code == 409
+    assert 'Flatten it first' in response.get_json()['error']
+
+    response = client.delete('/api/pairs/A|B')
+    assert response.status_code == 409
+
+    # The control: flat, and both go through.
+    write_status(paths, pairs={'A|B': {'net_position': 0.0}})
+    assert client.post('/api/pairs/A|B', json={'name': 'renamed'}).status_code \
+        == 200
+    assert client.delete('/api/pairs/A|B').status_code == 200
+
+
+def test_what_one_spread_MEANS_cannot_be_changed_under_a_position(client,
+                                                                  paths):
+    """The exit levels of an open position are computed from the pair's
+    CURRENT lots-per-spread. Move it and a position entered at 0.01
+    silently acquires the take-profit of a 0.10 one — the position
+    would still be there, and the number it was aiming at would not."""
+    cfg.save_raw(paths['config'], {
+        'accounts': {'a': {}},
+        'pairs': {'A|B': {'name': 'A vs B', 'clip_lots_a': 0.01}}})
+    write_status(paths, pairs={'A|B': {'net_position': 2.0}})
+
+    response = client.post('/api/pairs/A|B', json={'clip_lots_a': 0.10})
+    assert response.status_code == 409
+    error = response.get_json()['error']
+    assert 'what one spread MEANS' in error and 'Flatten it first' in error
+    assert json.load(open(paths['config'], encoding='utf-8'))[
+        'pairs']['A|B']['clip_lots_a'] == 0.01
+
+    # The control 1: the SAME value is not a change, so a save of
+    # anything else on the pane still goes through with a position on.
+    assert client.post('/api/pairs/A|B',
+                       json={'clip_lots_a': 0.01,
+                             'increment': 0.02}).status_code == 200
+
+    # The control 2: flat, and it goes through.
+    write_status(paths, pairs={'A|B': {'net_position': 0.0}})
+    assert client.post('/api/pairs/A|B',
+                       json={'clip_lots_a': 0.10}).status_code == 200
+    assert json.load(open(paths['config'], encoding='utf-8'))[
+        'pairs']['A|B']['clip_lots_a'] == 0.10
+
+
+def test_a_pair_key_with_a_slash_is_routable(client, paths):
+    """The pair that most needs deleting has a slash in its key."""
+    cfg.save_raw(paths['config'], {'accounts': {'a': {}},
+                                   'pairs': {'XAU/USD|GC': {'name': 'x'}}})
+    write_status(paths, pairs={})
+    assert client.delete('/api/pairs/XAU/USD|GC').status_code == 200
+    assert json.load(open(paths['config'], encoding='utf-8'))['pairs'] == {}
+
+
+def test_symbol_search_says_how_to_start_the_runner_when_it_is_down(client,
+                                                                    paths):
+    """Symbol setup must work with the coordinator down — and when the
+    RUNNER is down too, the answer is the command to start it, not a
+    stack trace."""
+    cfg.save_raw(paths['config'],
+                 {'accounts': {'a': {'endpoint': '127.0.0.1:9199'}},
+                  'pairs': {}})
+    response = client.get('/api/accounts/a/symbols?q=XAU')
+    assert response.status_code == 503
+    assert 'run_leg.py' in response.get_json()['error']
+
+
+def test_the_ui_loads_nothing_from_a_cdn():
+    """A blocked CDN has taken this kind of UI down once. The dialog that
+    reports 'could not save' must work when the network is what failed."""
+    html = (TEMPLATES / 'index.html').read_text(encoding='utf-8')
+    for source in re.findall(r'(?:src|href)="([^"]+)"', html):
+        assert '//' not in source, source
+    assert '@import' not in (STATIC / 'ladder.css').read_text(encoding='utf-8')
+
+
+def strip_comments(script):
+    """Code only. The house rule is written in a comment at the top of
+    the file, and a guard that trips over its own documentation is a
+    guard nobody keeps."""
+    script = re.sub(r'/\*.*?\*/', '', script, flags=re.S)
+    return re.sub(r'(^|\s)//[^\n]*', ' ', script)
+
+
+def test_no_native_confirm_alert_or_prompt_ever_comes_back():
+    """One shared modal, and a test that fails the build if they return."""
+    script = strip_comments((STATIC / 'app.js').read_text(encoding='utf-8'))
+    native = re.compile(r'(?<![\w.$])(confirm|alert|prompt)\s*\(')
+    found = native.search(script)
+    assert found is None, found.group(0)
+    assert 'window.confirm' not in script
+    assert 'window.alert' not in script
+
+
+def test_the_ladder_is_the_reference_screens_five_columns():
+    """`Work | Bids | Price | Asks | LTQ`, in that order — the layout is
+    a specification, not a preference."""
+    html = (TEMPLATES / 'index.html').read_text(encoding='utf-8')
+    # The headers carry tooltips now, so match the class and the text
+    # without assuming nothing sits between them.
+    headers = re.findall(r'<th class="c-(\w+)"[^>]*>([^<]+)</th>', html)
+    assert [name for name, _ in headers] == ['work', 'bid', 'price', 'ask',
+                                             'ltq']
+    assert [label for _, label in headers] == ['Work', 'Bids', 'Price',
+                                               'Asks', 'LTQ']
+
+
+def test_bid_is_blue_and_ask_is_red_everywhere():
+    """The reference screen's convention, global: a price must not change
+    colour depending on which table it sits in."""
+    css = (STATIC / 'ladder.css').read_text(encoding='utf-8')
+    # The exact shades are a comfort decision and have been softened
+    # once already; what must not move is that there is ONE blue and ONE
+    # red, defined here, and that every table takes them from here.
+    assert re.search(r'--bid: #[0-9a-f]{6}', css)
+    assert re.search(r'--ask: #[0-9a-f]{6}', css)
+    # Every place a bid or ask cell is painted uses those variables.
+    for rule in re.findall(r'td\.(bid|ask)[^{]*\{[^}]*background:\s*([^;]+);',
+                           css):
+        assert 'var(--' + rule[0] in rule[1], rule
+
+
+def test_the_market_is_marked_by_ONE_rule_and_it_is_the_mid():
+    """A rule at the inside AND a rule at the mid meant neither read as
+    "the market is here". The mid keeps the rule — it is also what the
+    ladder centres on — and the inside is drawn by the two bands
+    meeting, which carries the same information."""
+    css = (STATIC / 'ladder.css').read_text(encoding='utf-8')
+    assert re.search(r'tr\.mid-line\s*>\s*td\s*\{\s*\n?\s*'
+                     r'border-top:\s*2px solid', css)
+    assert not re.search(r'tr\.market-line\s*>\s*td\s*\{\s*border-top',
+                         css)
+    assert '--inside: #000000' in css
+
+
+def test_market_mode_changes_the_click_columns():
+    """The expensive misclick on any ladder is a market order the trader
+    thought was a working order.
+
+    The M rides the cursor over EVERY price cell while the mode is
+    MARKET — the mode is what it names, and the mode does not change
+    halfway down the ladder. The two touch rows keep a box of their
+    own, because they are the only ones that can cross NOW; a click
+    away from them rests, and the toast says so when it happens.
+    """
+    css = (STATIC / 'ladder.css').read_text(encoding='utf-8')
+    assert '.window.mode-market td.bid' in css
+    assert "font-size='15' font-weight='700'" in css      # the M cursor
+    # ...and the touch rows are still marked out from the rest.
+    assert '.window.mode-market tr.market-line td.bid' in css
+
+
+# -- the settings endpoints: they must work with the ENGINE down --------
+
+class FakeRemoteLeg:
+    """A leg runner that answers, without a runner or an MT5."""
+
+    connected = True
+    symbols = {
+        'XAUUSD_': {'symbol': 'XAUUSD_', 'found': True, 'bid': 4292.00,
+                    'ask': 4292.20, 'contract_size': 100.0, 'tick_size': 0.01,
+                    'volume_min': 0.01, 'volume_step': 0.01,
+                    'volume_max': 100.0, 'depth_levels': 0},
+        'GC1226': {'symbol': 'GC1226', 'found': True, 'bid': 4351.00,
+                   'ask': 4351.40, 'contract_size': 100.0, 'tick_size': 0.01,
+                   'volume_min': 0.10, 'volume_step': 0.10,
+                   'volume_max': 100.0},
+    }
+
+    def __init__(self, name, endpoint, timeout=5.0):
+        self.name = name
+
+    def connect(self, retries=1, delay=0.0):
+        return self.connected
+
+    def close(self):
+        pass
+
+    def find_symbols(self, pattern, limit=40):
+        return [dict(spec) for name, spec in self.symbols.items()
+                if (pattern or '').upper() in name.upper()]
+
+    def symbol_report(self, symbol):
+        return dict(self.symbols.get(symbol)
+                    or {'symbol': symbol, 'found': False,
+                        'error': f'{symbol} does not exist on this broker'})
+
+    def terminal_report(self):
+        return {'library': True, 'terminal': True, 'terminal_connected': True,
+                'logged_in': True, 'algo_trading': True, 'hedging': True,
+                'trade_allowed': True, 'login': 5001, 'server': 'FakeServer',
+                'terminal_path': 'C:/MT5-A/terminal64.exe', 'ping_ms': 12.0}
+
+    def server_offset(self):
+        return 3 * 3600
+
+    def account_info(self):
+        return {'account': self.name, 'balance': 0.0, 'equity': 5000.0,
+                'profit': 0.0}
+
+
+@pytest.fixture
+def wired(client, paths, monkeypatch):
+    """Two accounts saved, and a leg runner that answers.
+
+    Both carry the login the fake runner reports. They used to carry
+    none, which is now a FAIL of its own — an account that names no
+    login cannot be checked against the terminal it attached to. A
+    fixture that leaves it out is testing a config no desk should run.
+    """
+    from okxtrader import webapp
+    cfg.save_raw(paths['config'], {
+        'accounts': {'spot': {'endpoint': '127.0.0.1:9101', 'login': 5001},
+                     'fut': {'endpoint': '127.0.0.1:9102', 'login': 5001}},
+        'pairs': {}})
+    monkeypatch.setattr(webapp, 'RemoteLeg', FakeRemoteLeg)
+    return client
+
+
+def test_connect_answers_the_first_question_and_says_what_to_do(wired,
+                                                                monkeypatch):
+    """Is the runner there, and is its terminal logged in? When it is
+    not, the answer is an instruction, not a status code."""
+    body = wired.get('/api/accounts/spot/connect').get_json()
+    assert body['connected'] is True and body['ok'] is True
+    names = [check['name'] for check in body['checks']]
+    assert 'MT5 terminal' in names and 'Account login' in names
+
+    monkeypatch.setattr(FakeRemoteLeg, 'connected', False)
+    response = wired.get('/api/accounts/spot/connect')
+    assert response.status_code == 503
+    body = response.get_json()
+    assert body['connected'] is False
+    assert any('run_leg.py' in step
+               for check in body['checks'] for step in check['fix'])
+
+
+def test_test_names_the_switch_that_is_off_and_how_to_turn_it_on(wired,
+                                                                 monkeypatch):
+    """`10027 AutoTrading disabled by client` is a button in THAT
+    terminal, and nothing else on the screen will say so."""
+    body = wired.get('/api/accounts/spot/test').get_json()
+    assert body['ok'] and body['problems'] == []
+    assert body['failed'] == 0
+
+    monkeypatch.setattr(FakeRemoteLeg, 'terminal_report',
+                        lambda self: {'library': True, 'terminal': True,
+                                      'logged_in': True, 'algo_trading': False,
+                                      'hedging': True})
+    body = wired.get('/api/accounts/spot/test').get_json()
+    assert body['ok'] is False
+    assert any('10027' in problem for problem in body['problems'])
+    algo = [check for check in body['checks']
+            if check['name'] == 'Algo Trading'][0]
+    assert 'turns green' in algo['fix'][0]
+
+
+def test_a_netting_account_is_called_out_before_it_is_traded(wired,
+                                                             monkeypatch):
+    monkeypatch.setattr(FakeRemoteLeg, 'terminal_report',
+                        lambda self: {'library': True, 'terminal': True,
+                                      'logged_in': True, 'algo_trading': True,
+                                      'hedging': False})
+    body = wired.get('/api/accounts/spot/test').get_json()
+    margin = [check for check in body['checks']
+              if check['name'] == 'Margin mode'][0]
+    assert margin['status'] == 'WARN'
+    assert 'NETTING' in margin['message']
+
+
+def test_diagnose_checks_the_symbols_and_whether_the_two_legs_fit(wired,
+                                                                  paths):
+    """The checks that only make sense across a pair: a beta stamped for
+    THIS pair, a spread that is a difference, a clip both legs carry."""
+    cfg.save_raw(paths['config'], {
+        'accounts': {'spot': {'endpoint': '127.0.0.1:9101', 'login': 5001},
+                     'fut': {'endpoint': '127.0.0.1:9102', 'login': 5001}},
+        'pairs': {'XAUUSD_|GC1226': {
+            'leg_a': {'account': 'spot', 'symbol': 'XAUUSD_'},
+            'leg_b': {'account': 'fut', 'symbol': 'GC1226'},
+            'hedge_ratio': 1.0, 'hedge_ratio_for': 'XAUUSD_|GC1226'}}})
+
+    body = wired.get('/api/accounts/spot/diagnose').get_json()
+
+    names = [check['name'] for check in body['checks']]
+    assert 'Symbol XAUUSD_ (leg A)' in names
+    assert 'Hedge ratio' in names and 'One Qty' in names
+    spread = [check for check in body['checks'] if check['name'] == 'Spread'][0]
+    assert spread['status'] == 'PASS'
+    clip = [check for check in body['checks']
+            if check['name'] == 'One Qty'][0]
+    assert 'per 1.00 of spread' in clip['message']
+    assert body['ok'] is True
+
+
+def test_diagnose_catches_a_beta_left_behind_by_another_instrument(wired,
+                                                                   paths):
+    """A stale beta defines a spread that does not exist — the fault
+    that turned a +3.30 oil spread into -0.05."""
+    cfg.save_raw(paths['config'], {
+        'accounts': {'spot': {'endpoint': '127.0.0.1:9101', 'login': 5001},
+                     'fut': {'endpoint': '127.0.0.1:9102', 'login': 5001}},
+        'pairs': {'XAUUSD_|GC1226': {
+            'leg_a': {'account': 'spot', 'symbol': 'XAUUSD_'},
+            'leg_b': {'account': 'fut', 'symbol': 'GC1226'},
+            'hedge_ratio': 66.93, 'hedge_ratio_for': 'XAGUSD|XAUUSD'}}})
+
+    body = wired.get('/api/accounts/spot/diagnose').get_json()
+
+    beta = [check for check in body['checks']
+            if check['name'] == 'Hedge ratio'][0]
+    assert beta['status'] == 'FAIL'
+    assert 'XAGUSD|XAUUSD' in beta['message']
+    spread = [check for check in body['checks'] if check['name'] == 'Spread'][0]
+    assert spread['status'] == 'FAIL'
+    assert 'is not a difference between' in spread['message']
+    assert body['ok'] is False
+
+
+def test_the_system_says_plainly_whether_it_is_connected(wired, paths):
+    """The operator's question is never "is endpoint 9101 bound"; it is
+    "can I trade right now"."""
+    write_status(paths)
+    body = wired.get('/api/connection').get_json()
+
+    # The engine is up in the fixture status, but that fabricated pair
+    # has no price — so it is honestly NOT ready, and it says which.
+    assert body['connected'] is False
+    assert 'Not ready to trade' in body['summary']
+    assert any('no price yet' in blocker for blocker in body['blockers'])
+    assert [row['account'] for row in body['accounts']] == ['spot', 'fut']
+    assert all(row['connected'] and row['trading'] for row in body['accounts'])
+
+
+def test_a_terminal_that_is_not_logged_in_is_the_named_blocker(wired, paths,
+                                                               monkeypatch):
+    write_status(paths)
+    monkeypatch.setattr(FakeRemoteLeg, 'terminal_report',
+                        lambda self: {'library': True, 'terminal': True,
+                                      'logged_in': False})
+    body = wired.get('/api/connection').get_json()
+    assert body['connected'] is False
+    assert 'not logged in' in body['summary']
+
+
+def test_a_symbols_contract_specs_come_from_mt5_not_from_a_form(wired):
+    body = wired.get('/api/accounts/fut/symbol/GC1226').get_json()
+    assert body['ok']
+    assert body['report']['contract_size'] == 100.0
+    assert body['report']['volume_min'] == 0.10
+
+    missing = wired.get('/api/accounts/fut/symbol/GCZ4')
+    assert missing.status_code == 404
+    assert 'does not exist' in missing.get_json()['error']
+
+
+def test_deriving_a_pair_shows_every_number_and_its_derivation(wired):
+    body = wired.post('/api/pairs/XAUUSD_|GC1226/derive', json={
+        'leg_a': {'account': 'spot', 'symbol': 'XAUUSD_'},
+        'leg_b': {'account': 'fut', 'symbol': 'GC1226'},
+        'pair_type': 'SPOT_FUTURE', 'hedge_ratio': 1.0}).get_json()
+
+    assert body['ok']
+    # Same underlying: beta is 1 and the spread IS the basis.
+    assert body['suggested_beta'] == 1.0
+    assert 'same' in body['beta_reason']
+    assert body['spread_now'] == pytest.approx(59.10, abs=0.01)
+    # max(tick B, beta x tick A), with the derivation beside it.
+    assert body['increment'] == pytest.approx(0.01)
+    assert 'max(tick B' in body['increment_derivation']
+    # What one Qty is on each leg. BOTH are the trader's now, and a
+    # pair that names neither is one lot a side.
+    assert body['clip_lots_a'] == pytest.approx(1.0)
+    assert body['clip_lots_b'] == pytest.approx(1.0)
+    assert body['spread_units'] == pytest.approx(100.0)
+    # ...and the derivation names the brokers' own minimums, which is
+    # what the trader needs in order to choose.
+    assert '1 Qty = 1 lots A / 1 lots B' in body['clip_derivation']
+    assert '0.01 and 0.1 lots' in body['clip_derivation']
+    # Leg B's 0.10-lot minimum binds, priced off leg A's MID.
+    assert body['min_notional_usd'] == pytest.approx(0.10 * 100 * 4292.10)
+    # Which leg should quote, from MEASURED widths.
+    assert body['widths']['b'] > body['widths']['a']
+    assert body['quoting_leg_suggestion'] == 'b'
+    assert 'less liquid' in body['quoting_note']
+    assert body['stamped_for'] == 'XAUUSD_|GC1226'
+
+
+def test_deriving_says_which_leg_is_wrong_rather_than_failing_blankly(wired):
+    response = wired.post('/api/pairs/x/derive', json={
+        'leg_a': {'account': 'spot', 'symbol': 'XAUUSD_'},
+        'leg_b': {'account': 'fut', 'symbol': 'GCZ4'}})
+    assert response.status_code == 404
+    assert 'GCZ4' in response.get_json()['error']
+
+    response = wired.post('/api/pairs/x/derive',
+                          json={'leg_a': {'account': 'spot'}})
+    assert response.status_code == 400
+    assert 'leg A needs an account and a symbol' in response.get_json()['error']
+
+
+def test_deriving_with_the_runner_down_says_how_to_start_it(wired,
+                                                            monkeypatch):
+    monkeypatch.setattr(FakeRemoteLeg, 'connected', False)
+    response = wired.post('/api/pairs/x/derive', json={
+        'leg_a': {'account': 'spot', 'symbol': 'XAUUSD_'},
+        'leg_b': {'account': 'fut', 'symbol': 'GC1226'}})
+    assert response.status_code == 503
+    assert 'run_leg.py' in response.get_json()['error']
+
+
+def test_an_account_still_carrying_a_pair_cannot_be_deleted(wired, paths):
+    cfg.save_raw(paths['config'], {
+        'accounts': {'spot': {'endpoint': '127.0.0.1:9101'},
+                     'fut': {'endpoint': '127.0.0.1:9102'}},
+        'pairs': {'A|B': {'leg_a': {'account': 'spot', 'symbol': 'X'},
+                          'leg_b': {'account': 'fut', 'symbol': 'Y'}}}})
+
+    response = wired.delete('/api/accounts/spot')
+    assert response.status_code == 409
+    assert 'A|B' in response.get_json()['error']
+
+    # The control: with the pair gone, the account goes.
+    wired.delete('/api/pairs/A|B')
+    assert wired.delete('/api/accounts/spot').status_code == 200
+    assert 'spot' not in cfg.load_raw(paths['config'])['accounts']
+
+
+def test_the_settings_panel_ships_no_native_dialogs_either():
+    script = strip_comments((STATIC / 'settings.js').read_text(encoding='utf-8'))
+    native = re.compile(r'(?<![\w.$])(confirm|alert|prompt)\s*\(')
+    found = native.search(script)
+    assert found is None, found.group(0)
+
+
+def test_a_setting_is_saved_and_pushed_to_the_running_engine(client, paths):
+    """Written to config.json so it survives a restart, and sent as a
+    command so the NEXT CLICK already obeys it."""
+    write_status(paths)
+    cfg.save_raw(paths['config'], {'accounts': {}, 'pairs': {}})
+
+    response = client.post('/api/settings',
+                           json={'fields': {'CONFIRM_MARKET_CLICKS': True,
+                                            'ROW_HEIGHT_PX': 22}})
+    body = response.get_json()
+    assert body['ok']
+    assert body['applied_now'] == ['CONFIRM_MARKET_CLICKS', 'ROW_HEIGHT_PX']
+    assert body['restart_required'] == []
+
+    saved = cfg.load_raw(paths['config'])['settings']
+    assert saved['CONFIRM_MARKET_CLICKS'] is True
+    written = [json.loads(line) for line in
+               open(paths['commands'], encoding='utf-8').read().splitlines()]
+    assert written[-1]['kind'] == 'set_setting'
+    assert written[-1]['payload']['fields']['ROW_HEIGHT_PX'] == 22
+
+
+def test_a_setting_the_launcher_only_reads_at_startup_says_so(client, paths):
+    """Crying 'restart' on every save teaches the operator to ignore the
+    line that matters — so only the ones that mean it say it."""
+    write_status(paths)
+    cfg.save_raw(paths['config'], {'accounts': {}, 'pairs': {}})
+    body = client.post('/api/settings',
+                       json={'fields': {'POLL_INTERVAL_SEC': 0.5}}).get_json()
+    assert body['restart_required'] == ['POLL_INTERVAL_SEC']
+    assert body['applied_now'] == []
+
+
+def test_a_typo_is_not_quietly_saved_as_a_new_setting(client, paths):
+    write_status(paths)
+    cfg.save_raw(paths['config'], {'accounts': {}, 'pairs': {}})
+    response = client.post('/api/settings',
+                           json={'fields': {'CONFRIM_MARKET_CLICKS': True}})
+    assert response.status_code == 400
+    assert 'not a setting' in response.get_json()['error']
+    assert 'settings' not in cfg.load_raw(paths['config'])
+
+
+def test_the_engine_publishes_what_a_click_will_do(config, legs, tmp_path):
+    """The UI arms itself from the ENGINE's answer, never from its own
+    idea of what was last selected."""
+    from okxtrader.coordinator import Coordinator
+    coordinator = Coordinator(config, legs, sleep=lambda s: None)
+    coordinator.start()
+    coordinator.poll_once()
+
+    snapshot = coordinator.snapshot()
+    assert snapshot['confirm_market_clicks'] is False    # one click, one order
+    assert snapshot['row_height_px'] == 17
+    assert snapshot['command_poll_sec'] == 0.02
+
+    config.settings['CONFIRM_MARKET_CLICKS'] = True
+    assert coordinator.snapshot()['confirm_market_clicks'] is True
+
+
+def test_margin_is_reported_per_account_and_the_weakest_one_is_named(
+        config, legs, tmp_path):
+    """With two brokers there is no combined margin: each posts its own,
+    and a pair can only be carried by the WEAKER of the two."""
+    from okxtrader.coordinator import Coordinator
+    from okxtrader.models import SpreadSide
+    coordinator = Coordinator(config, legs, sleep=lambda s: None)
+    coordinator.start()
+    coordinator.poll_once()
+    pair = list(config.pairs.values())[0]
+    pair.order_type = type(pair.order_type)('MARKET')
+    coordinator.click(pair.key, SpreadSide.SELL, None)
+
+    health = coordinator.snapshot()['account_health']
+
+    assert set(health['accounts']) == {'acct_a', 'acct_b'}
+    row = health['accounts']['acct_a']
+    assert row['equity'] == pytest.approx(100_000.0)
+    assert row['credit'] == pytest.approx(0.0)
+    # Our own exposure, in the units the operator sized in.
+    assert row['our_legs'] == 1
+    assert row['our_lots'] == pytest.approx(0.1)
+    assert row['our_units'] == pytest.approx(10.0)
+    # Nothing is levered here, so no account is tight and none is weakest
+    # by margin level — and that reads as unmeasured, not as healthy.
+    assert row['margin_level'] is None
+    assert health['weakest'] is None
+
+
+def test_a_tight_account_is_flagged_against_the_level_you_set(config, legs):
+    from types import SimpleNamespace
+    from okxtrader.coordinator import Coordinator
+    coordinator = Coordinator(config, legs, sleep=lambda s: None)
+    coordinator.start()
+    # Leg B is nearly out of margin; leg A is fine.
+    legs['acct_b'].broker.account_info = lambda: SimpleNamespace(
+        login=2, server='S', name='b', currency='USD', leverage=100,
+        balance=1000.0, credit=0.0, equity=1000.0, margin=800.0,
+        margin_free=200.0, margin_level=125.0, margin_so_call=100.0,
+        margin_so_so=50.0, profit=0.0)
+    coordinator.poll_once()
+
+    health = coordinator.snapshot()['account_health']
+
+    assert health['weakest'] == 'acct_b'
+    assert health['weakest_level'] == pytest.approx(125.0)
+    assert health['accounts']['acct_b']['tight'] is True
+    assert health['accounts']['acct_a']['tight'] is False
+
+
+def test_an_account_that_cannot_be_read_is_unknown_not_funded(config, legs):
+    from okxtrader.coordinator import Coordinator
+    coordinator = Coordinator(config, legs, sleep=lambda s: None)
+    coordinator.start()
+    legs['acct_a'].account_info = lambda: None
+    coordinator._account_cache.clear()
+
+    health = coordinator.snapshot()['account_health']
+
+    assert health['unknown'] == ['acct_a']
+    assert health['accounts']['acct_a']['equity'] is None
+
+
+def test_the_page_stamps_its_css_and_js_so_a_stale_cache_cannot_mix(client):
+    """A browser serving last week's app.js against today's HTML is not
+    merely stale, it is MIXED: new markup with old handlers, and one
+    missing element takes out every button wired after it. The stamp is
+    what makes `git pull` enough, without a hard refresh nobody
+    remembers."""
+    body = client.get('/').get_data(as_text=True)
+
+    stamps = re.findall(r"(app\.js|ladder\.css)\?v=(\d+)", body)
+    assert {name for name, _ in stamps} == {'app.js', 'ladder.css'}
+    assert all(int(value) > 0 for _, value in stamps)
+    # And the page itself must never be the cached thing: it carries the
+    # stamp.
+    assert 'no-store' in client.get('/').headers.get('Cache-Control', '')
+
+
+def test_the_snapshot_is_only_re_read_when_it_has_actually_changed(
+        client, paths, monkeypatch):
+    """Every open of the status file on Windows is a moment the
+    coordinator's own os.replace cannot land — and that collision
+    failed its whole poll. Asking "has it changed?" costs nothing;
+    opening it does.
+
+    Counted at `atomicfile.read_text`, which is where a read of this
+    file actually happens on BOTH platforms. Counting `builtins.open`
+    only worked on POSIX: on Windows `read_text` goes through
+    CreateFileW and msvcrt.open_osfhandle to get FILE_SHARE_DELETE, so
+    `open` is never called, the count stayed at nought, and the test
+    failed on the one operating system it is about.
+    """
+    import time as clock
+    from okxtrader import atomicfile
+    write_status(paths)
+    first = client.get('/api/status').get_json()
+
+    reads = {'n': 0}
+    real_read_text = atomicfile.read_text
+    wanted = os.path.normcase(os.path.abspath(paths['status']))
+
+    def counting_read_text(path, *args, **kwargs):
+        if os.path.normcase(os.path.abspath(str(path))) == wanted:
+            reads['n'] += 1
+        return real_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(atomicfile, 'read_text', counting_read_text)
+
+    for _ in range(5):
+        client.get('/api/status')
+    assert reads['n'] == 0, 'an unchanged snapshot was re-read'
+
+    # ...and a NEW snapshot is picked up at once, not on a timer.
+    # The sleep is for Windows: its file timestamps move in ~15ms steps,
+    # so two writes inside one tick can share an mtime.
+    clock.sleep(0.05)
+    write_status(paths, loop_interval_sec=0.9)
+    body = client.get('/api/status').get_json()
+    assert body['loop_interval_sec'] == 0.9
+    assert reads['n'] == 1
+    assert first['pairs']
+
+
+def test_the_page_is_rebuilt_when_the_template_changes(paths, tmp_path):
+    """Jinja compiles a template once and caches it for the life of the
+    process. Without auto-reload a `git pull` updated the CSS and the JS
+    — those are fetched by URL with a stamp — while the HTML stayed on
+    the version the process started with: new handlers against old
+    markup, elements missing, and a screen that looks like the pull
+    never landed."""
+    app = create_app(paths['status'], paths['commands'], paths['results'],
+                     paths['config'])
+
+    assert app.jinja_env.auto_reload is True
+    assert app.config['TEMPLATES_AUTO_RELOAD'] is True
+
+
+def test_diagnose_says_whether_the_broker_publishes_a_book(wired, paths):
+    """"Why are the size columns empty?" is a question about the BROKER,
+    and the checklist can answer it: most retail CFD accounts publish no
+    depth beyond the touch, and the ladder leaves those columns empty
+    rather than inventing a number from one leg."""
+    cfg.save_raw(paths['config'], {
+        'accounts': {'spot': {'endpoint': '127.0.0.1:9101', 'login': 5001},
+                     'fut': {'endpoint': '127.0.0.1:9102', 'login': 5001}},
+        'pairs': {'XAUUSD_|GC1226': {
+            'leg_a': {'account': 'spot', 'symbol': 'XAUUSD_'},
+            'leg_b': {'account': 'fut', 'symbol': 'GC1226'},
+            'hedge_ratio': 1.0, 'hedge_ratio_for': 'XAUUSD_|GC1226'}}})
+
+    body = wired.get('/api/accounts/spot/diagnose').get_json()
+
+    depth = [check for check in body['checks']
+             if 'depth of market' in check['name']]
+    assert depth, [check['name'] for check in body['checks']]
+    assert depth[0]['status'] == 'INFO'
+    assert 'the broker' in depth[0]['message']
+    # ...and how to see it for themselves.
+    assert any('Alt+B' in step for step in depth[0]['fix'])
