@@ -171,6 +171,7 @@ class OKXBroker:
         self._bal_cache = None                 # (at, row)
         self._fee_cache = {}                   # instType -> (at, (m, t))
         self._lever_cache = {}                 # instId -> (at, lever)
+        self._borrow_cache = {}                # ccy -> (at, hourly rate)
         self._funding_cache = {}               # instId -> (at, row)
         self._shortfall = {}                   # key -> first seen short
         self._config = None
@@ -707,6 +708,24 @@ class OKXBroker:
         result = (round(maker, 4), round(taker, 4))
         self._fee_cache[kind] = (now, result)
         return result
+
+    def borrow_rate(self, ccy):
+        """The HOURLY interest rate this account pays to borrow `ccy`
+        (what selling spot it does not hold costs in Multi-currency
+        margin mode), as OKX quotes it for this account; None when it
+        cannot be read. Cached for an hour - OKX re-sets it hourly."""
+        now = time.time()
+        cached = self._borrow_cache.get(ccy)
+        if cached and now - cached[0] < 3600:
+            return cached[1]
+        try:
+            rows = self.client.get('/api/v5/account/interest-rate',
+                                   {'ccy': ccy}, private=True)
+        except OKXError:
+            return cached[1] if cached else None
+        rate = _f(rows[0].get('interestRate')) if rows else None
+        self._borrow_cache[ccy] = (now, rate)
+        return rate
 
     def fee_level(self):
         return (self._config or {}).get('level')

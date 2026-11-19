@@ -2002,11 +2002,19 @@ class Coordinator:
                 be + params['atr_target_mult'] * atr
                 if position.side is SpreadSide.BUY
                 else be - params['atr_target_mult'] * atr)
+        # A stop crosses at MARKET, so it pays TAKER on the way out where
+        # break-even assumed maker. The stop is brought in by that
+        # difference, so what it actually loses is the % asked for -
+        # not the % plus a fee nobody counted.
+        taker_extra = self.stop_taker_points(pair, md, position)
+        if stop is not None and taker_extra:
+            stop = max(stop - taker_extra, 0.1 * stop)
         sl = None
         if stop is not None and be is not None:
             sl = be - stop if position.side is SpreadSide.BUY \
                 else be + stop
         return {'break_even': be, 'tp': tp, 'sl': sl, 'stop': stop,
+                'stop_taker_points': taker_extra,
                 'pct': pct, 'settings': settings, 'params': params}
 
     def _algo_positions(self, pair, md):
@@ -2365,6 +2373,29 @@ class Coordinator:
                 cutoff)['summary']
         return answer
 
+    def stop_taker_points(self, pair, md, position):
+        """What a stop's market exit costs OVER the maker exit break-
+        even priced, in spread points: (taker - maker) bps on both legs'
+        closing value. 0 under the taker fill (break-even already has
+        taker) or where the fees are not known yet."""
+        if not self.maker.enabled(pair):
+            return 0.0
+        fees = getattr(pair, 'fee_bps', None) or {}
+        quantity = float(position.quantity or 1.0)
+        money = 0.0
+        for leg, lots, meta in (('a', pair.clip_lots_a, pair.meta_a),
+                                ('b', pair.clip_lots_b, pair.meta_b)):
+            rate = fees.get(leg) or {}
+            mid = (md or {}).get(f'leg_{leg}_mid')
+            contract = (meta or {}).get('contract_size')
+            if rate.get('taker') is None or rate.get('maker') is None \
+                    or not mid or not contract:
+                return 0.0
+            money += ((rate['taker'] - rate['maker']) / 1e4
+                      * float(lots or 1.0) * quantity * contract * mid)
+        return takeprofit.points(money, takeprofit.one_spread_units(position),
+                                 quantity) or 0.0
+
     def _algo_stop_points(self, pair, quantity, units, margin=None,
                           params=None):
         """The stop loss's distance from break-even, in spread points:
@@ -2485,10 +2516,58 @@ class Coordinator:
         rather than silently dropping the term.
         """
         if not nights:
-            return {'money': 0.0, 'reason': None}
-        return carry.carry_money(pair.meta_a, pair.meta_b, direction,
-                                 pair.clip_lots_a, pair.clip_lots_b, nights,
-                                 pair.swap_overrides())
+            out = {'money': 0.0, 'reason': None}
+        else:
+            out = dict(carry.carry_money(pair.meta_a, pair.meta_b,
+                                         direction, pair.clip_lots_a,
+                                         pair.clip_lots_b, nights,
+                                         pair.swap_overrides()))
+        out['borrow'] = self.borrow_cost(pair, direction, nights)
+        return out
+
+    def borrow_cost(self, pair, direction, nights):
+        """Interest on the coin borrowed to SELL a spot leg, for one
+        spread, over `nights` days (an hour at the least: OKX charges
+        each hour begun). Buying the spread sells A; selling it sells B.
+        None when this direction sells no spot leg; {'money': None,
+        'reason'} when it does and the rate cannot be read."""
+        if str(direction).upper().endswith('BUY'):
+            account, symbol, lots, meta, leg = (pair.account_a,
+                                                pair.symbol_a,
+                                                pair.clip_lots_a,
+                                                pair.meta_a, 'a')
+        else:
+            account, symbol, lots, meta, leg = (pair.account_b,
+                                                pair.symbol_b,
+                                                pair.clip_lots_b,
+                                                pair.meta_b, 'b')
+        runner = self.legs.get(account)
+        broker = getattr(runner, 'broker', runner)
+        kind = getattr(broker, 'inst_type', None)
+        if kind is None or not symbol:
+            return None
+        try:
+            if kind(symbol) != 'SPOT':
+                return None
+        except Exception:
+            return None
+        ccy = symbol.split('-')[0]
+        try:
+            rate = broker.borrow_rate(ccy)
+        except Exception:
+            rate = None
+        mid = (self.market.get(pair.key) or {}).get(f'leg_{leg}_mid')
+        contract = (meta or {}).get('contract_size') or 1.0
+        hours = max(1.0, float(nights or 0.0) * 24.0)
+        if rate is None or not mid:
+            return {'money': None, 'ccy': ccy, 'hours': hours,
+                    'reason': f'the borrow rate for {ccy} could not be read '
+                              f'from OKX, so break-even for the side that '
+                              f'sells {symbol} cannot be quoted'}
+        units = float(lots or 1.0) * float(contract)
+        return {'money': units * float(mid) * rate * hours, 'ccy': ccy,
+                'rate_hourly': rate, 'hours': hours, 'symbol': symbol,
+                'reason': None}
 
     def leg_depth(self, account, symbol):
         """One leg's market depth, cached for a fraction of a second.

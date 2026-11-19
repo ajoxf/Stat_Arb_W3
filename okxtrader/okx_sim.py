@@ -205,6 +205,7 @@ class SimOKX:
             ('GET', '/api/v5/account/positions'): self.account_positions,
             ('GET', '/api/v5/account/trade-fee'): self.trade_fee,
             ('GET', '/api/v5/account/leverage-info'): self.leverage_info,
+            ('GET', '/api/v5/account/interest-rate'): self.interest_rate,
             ('POST', '/api/v5/account/set-leverage'): self.set_leverage,
             ('POST', '/api/v5/trade/order'): self.place_order,
             ('POST', '/api/v5/trade/amend-order'): self.amend_order,
@@ -474,6 +475,18 @@ class SimOKX:
                 'ccy': 'USDT', 'cTime': str(p['cTime']),
                 'uTime': str(int(time.time() * 1000)),
             })
+        return _ok(rows)
+
+    #: Hourly borrow rates, about what OKX charges: coins near 1% a
+    #: year, stablecoins near 10%.
+    BORROW_HOURLY = {'BTC': '0.00000114', 'ETH': '0.00000114',
+                     'USDT': '0.0000114', 'USDC': '0.0000114'}
+
+    def interest_rate(self, params):
+        ccy = (params or {}).get('ccy')
+        rows = [{'ccy': c, 'interestRate': r}
+                for c, r in self.BORROW_HOURLY.items()
+                if not ccy or c == ccy]
         return _ok(rows)
 
     def trade_fee(self, params):

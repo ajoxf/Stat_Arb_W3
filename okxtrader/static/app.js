@@ -3879,6 +3879,21 @@
       exit.nights ? exit.nights + ' night(s) of swap, both legs, signed: ' +
         'a credit reduces what has to be recovered'
         : 'set BREAK_EVEN_NIGHTS to price a holding period');
+    // Borrow interest belongs to ONE direction - the one that sells a
+    // spot leg - so it is shown with which.
+    var borrowB = exit.borrow_money, borrowS = exit.borrow_money_sell;
+    var borrowInfo = exit.borrow || exit.borrow_sell || {};
+    showTerm(node, '.x-borrow', borrowB || borrowS || null,
+      'interest on ' + (borrowInfo.ccy || 'the coin') + ' borrowed to sell ' +
+      'the spot leg, ' + (borrowInfo.hours || 1) + ' hour(s) at OKX\u2019s ' +
+      'hourly rate' + (borrowInfo.rate_hourly
+        ? ' (' + (borrowInfo.rate_hourly * 100).toFixed(5) + '%/h)' : '') +
+      ' \u2014 only ' + (borrowB ? 'buying (B)' : 'selling (S)') +
+      ' the spread pays it');
+    if (!borrowB && !borrowS) {
+      var bcell = node.querySelector('.x-borrow');
+      if (bcell) { bcell.parentNode.hidden = true; }
+    }
     var target = node.querySelector('.x-target');
     target.textContent = exit.target_money === null ||
       exit.target_money === undefined ? DASH : money(exit.target_money);

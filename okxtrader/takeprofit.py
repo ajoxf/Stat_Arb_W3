@@ -85,6 +85,7 @@ def break_even_terms(pair, md, settings, quantity=1.0, spread_units=None,
     terms = {'spread_width': None, 'spread_width_money': None,
              'commission': None, 'slippage_allowance': None,
              'swap_money': None, 'nights': nights, 'note': None,
+             'borrow_money': None, 'borrow': None,
              'added_money': None, 'added_points': None}
 
     long_spread = (md or {}).get('long_spread')
@@ -124,7 +125,22 @@ def break_even_terms(pair, md, settings, quantity=1.0, spread_units=None,
     else:
         terms['swap_money'] = 0.0
 
-    parts = [terms['commission'] or 0.0, terms['slippage_allowance'] or 0.0]
+    # Borrow interest: selling a SPOT leg this account does not hold
+    # borrows the coin (Multi-currency margin), and OKX charges for it
+    # every hour, the first hour in full. Charged whether or not a
+    # holding period is set - one hour is the least it can cost.
+    borrow = (carry_for or {}).get('borrow')
+    if borrow:
+        terms['borrow'] = borrow
+        if borrow.get('money') is None:
+            terms['note'] = borrow.get('reason') or (
+                'the borrow rate for the spot leg could not be read, so '
+                'break-even cannot be quoted')
+            return terms
+        terms['borrow_money'] = borrow['money']
+
+    parts = [terms['commission'] or 0.0, terms['slippage_allowance'] or 0.0,
+             terms['borrow_money'] or 0.0]
     if terms['swap_money'] is None:
         return terms
     added = sum(parts) - terms['swap_money']
@@ -201,6 +217,12 @@ def describe(pair, md, settings, margin_per_spread=None, quantity=1.0,
     # one for the column it is in.
     body['swap_money'] = buy_terms['swap_money']
     body['swap_money_sell'] = sell_terms['swap_money']
+    # Borrow interest is one direction's only: the side that SELLS the
+    # spot leg.
+    body['borrow_money'] = buy_terms['borrow_money']
+    body['borrow_money_sell'] = sell_terms['borrow_money']
+    body['borrow'] = buy_terms['borrow']
+    body['borrow_sell'] = sell_terms['borrow']
     body['added_money'] = buy_terms['added_money']
     body['added_points'] = buy_terms['added_points']
     body['added_money_sell'] = sell_terms['added_money']
