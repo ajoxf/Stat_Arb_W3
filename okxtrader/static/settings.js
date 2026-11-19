@@ -494,25 +494,33 @@
      * row says only whether each is set, and under which .env name. */
     var html = '<table class="grid-form okx-accounts"><thead><tr>' +
       '<th>Name</th><th>Mode</th><th>API key</th><th>Secret key</th>' +
-      '<th>Passphrase</th><th>Base URL</th><th></th></tr></thead><tbody>';
+      '<th>Passphrase</th><th title="Leave blank. Only for a test ' +
+      'exchange.">Server</th><th></th></tr></thead><tbody>';
     rows.forEach(function (account) { html += okxAccountRow(account); });
     html += okxAccountRow({name: '', demo: true, isNew: true});
     html += '</tbody></table>';
-    html += '<div class="hint">Create the key on OKX: Profile &gt; API &gt; ' +
-      'Create API key, with <b>Read</b> and <b>Trade</b> - never ' +
-      'Withdraw. A Demo trading key is made under Demo trading and only ' +
-      'works with Mode = Demo. The account must be in Long/short position ' +
-      'mode; Test checks all of it before the first order.</div>';
+    html += '<div class="hint"><b>To connect OKX:</b> on the OKX website ' +
+      'or app go to <b>Profile &gt; API &gt; Create API key</b>, tick ' +
+      '<b>Read</b> and <b>Trade</b> (never Withdraw), and choose a ' +
+      'passphrase. Paste the API key, the secret key and that passphrase ' +
+      'into the row above, press <b>Save</b>, then <b>Test</b>. ' +
+      'This is not your OKX login password - the desk never asks for ' +
+      'that. A key made under Demo trading only works with Mode = Demo ' +
+      'trading.</div>';
     return html;
   }
 
   function okxSecret(cls, set, envName, isNew, label) {
+    // Said for a trader, not a developer: where it is kept is a detail,
+    // shown on hover. Once saved it is never shown again - only whether
+    // it is there.
     return '<td><input class="' + cls + '" type="password" ' +
-      'autocomplete="off" placeholder="' + (set ? 'set — type to replace'
-                                            : 'not set') + '">' +
-      '<div class="hint">' + (isNew ? label + ' → .env'
-                                    : '→ ' + escape(envName) + ' in .env') +
-      '</div></td>';
+      'autocomplete="off" placeholder="' + (set ? 'saved — type to replace'
+                                            : 'paste your ' + label) + '"' +
+      ' title="' + (envName ? 'kept on this PC as ' + escape(envName) +
+                              ' in .env' : 'kept on this PC only') + '">' +
+      '<div class="hint">' + (set ? '\u2713 saved on this PC'
+                                  : 'kept on this PC only') + '</div></td>';
   }
 
   function okxAccountRow(account) {
@@ -534,7 +542,9 @@
     html += okxSecret('f-passphrase', account.passphrase_set,
                       account.passphrase_env, account.isNew, 'passphrase');
     html += '<td><input class="f-baseurl" value="' +
-      escape(account.base_url || '') + '" placeholder="www.okx.com"></td>';
+      escape(account.base_url || '') + '" placeholder="OKX — leave blank"' +
+      ' title="Leave blank to trade on OKX. Only for a test exchange.">' +
+      '</td>';
     html += '<td class="actions"><button class="btn save-account">Save' +
       '</button>' + (account.isNew ? '' :
         '<button class="btn test-account" title="Reach OKX, check the key ' +

@@ -6552,7 +6552,7 @@ def test_an_okx_account_is_saved_from_its_row_and_its_key_leaves_the_page(page):
     page.wait_for_selector(saved, timeout=WAIT)
     # The row says the parts are SET, and where - never what they are.
     text = page.inner_html(saved)
-    assert 'OKX_API_KEY_OKX_DESK' in text and 'set — type to replace' in text
+    assert 'OKX_API_KEY_OKX_DESK' in text and 'saved — type to replace' in text
     assert 'secret-def' not in page.content()
     for cls in ('.f-key', '.f-secret', '.f-passphrase'):
         assert page.locator(saved + ' ' + cls).input_value() == ''
