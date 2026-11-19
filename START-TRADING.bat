@@ -1,12 +1,12 @@
 @echo off
-REM  MT5-Trader - double-click this to start trading.
+REM  OKX spread desk (Nexus) - double-click this to start trading.
 REM
 REM  It does the whole start: finds a Python, brings the dependencies up
 REM  to date, checks the machine can actually connect, runs the safety
 REM  tests, starts the engine and opens the ladders in your browser.
 REM
-REM  It does NOT change the version of the code on this machine. That is
-REM  deploy\UPDATE.BAT, run deliberately by whoever maintains it.
+REM  It does NOT change the version of the code on this machine: a
+REM  `git pull`, run deliberately by whoever maintains it, does that.
 REM
 REM  Two rules it will not bend:
 REM
@@ -23,13 +23,13 @@ REM  Plain ASCII on purpose: a console running the default code page
 REM  turns anything else into mojibake in the one message that matters.
 
 setlocal
-title MT5-Trader
+title OKX spread desk
 cd /d "%~dp0"
 color 0F
 
 echo.
 echo   =====================================================
-echo     MT5-Trader - starting up
+echo     OKX spread desk - starting up
 echo   =====================================================
 echo.
 
@@ -84,10 +84,7 @@ if not defined PY (
 echo   Using Python: %PY%
 
 REM --- Is it a Python this can actually trade through? ------------------
-REM  32-BIT IS FATAL. MetaTrader5's IPC handshake fails against a 32-bit
-REM  Python with an error that says nothing, and the symptom on the desk
-REM  is a leg that reads unknown forever. Starting would be worse than
-REM  refusing, because it looks like it worked.
+REM  64-bit Python, as the desk is tested on.
 REM
 REM  AN UNTESTED VERSION IS A WARNING, not a refusal. It may well be
 REM  fine, the safety tests are the real gate, and stopping a trader at
@@ -100,10 +97,8 @@ REM  argument, because cmd would end the argument on it.
 if errorlevel 1 (
   echo   [X] This machine's Python is 32-bit.
   echo.
-  echo       MetaTrader 5 will not talk to it: the handshake fails with
-  echo       an error that says nothing, and the leg simply never
-  echo       connects. Install Python 3.11 64-bit from python.org and
-  echo       run this again.
+  echo       Install Python 3.11 64-bit from python.org and run this
+  echo       again.
   echo.
   pause
   exit /b 1
@@ -118,8 +113,7 @@ REM --- 2. Configuration -------------------------------------------------
 REM
 REM  NOTE: this file does NOT update itself. Nothing is pulled here on
 REM  purpose - a desk's version changes when somebody DECIDES it
-REM  changes, not because a commit landed overnight. deploy\UPDATE.BAT
-REM  is that decision, run deliberately on the machine being updated.
+REM  changes, not because a commit landed overnight.
 REM
 REM  The cost of the choice, so it is not a surprise: a fix pushed today
 REM  is not on this PC tomorrow. Whoever maintains it visits the machine.
@@ -137,7 +131,7 @@ REM  the internet, it is whether the imports the engine needs are HERE.
 echo   Checking dependencies...
 %PY% -m pip install --quiet --disable-pip-version-check --no-warn-script-location -r requirements.txt >nul 2>&1
 if errorlevel 1 (
-  %PY% -c "import flask, dotenv, MetaTrader5" >nul 2>&1
+  %PY% -c "import flask, dotenv, requests" >nul 2>&1
   if errorlevel 1 (
     echo   [X] The dependencies are not installed and could not be
     echo       fetched. Check this machine's internet connection and
@@ -149,24 +143,13 @@ if errorlevel 1 (
   echo       installed are complete, so carrying on.
 )
 
-REM --- 4. Can this machine actually connect? ----------------------------
-REM  Counted, not guessed. An account that names its own MT5 folder is
-REM  OPENED AND SIGNED IN by the engine, so a terminal that is not
-REM  running is not a reason to refuse - preflight.py knows which case
-REM  this config is and says so in words.
-set "TERMINALS=0"
-for /f %%c in ('tasklist /fi "imagename eq terminal64.exe" /nh 2^>nul ^| find /c /i "terminal64.exe"') do set "TERMINALS=%%c"
-
-REM  An older clone has no preflight.py. Skipping it is right: it is a
-REM  CHECK, and a missing check must not be the thing that stops a
-REM  trader working. The safety tests below are the gate that matters.
-if not exist deploy\preflight.py (
-  echo   [i] No preflight in this copy - skipping the connection check.
-) else (
-  %PY% deploy\preflight.py --config config.json --terminals-running %TERMINALS%
-  if errorlevel 1 goto :refused
-)
+REM --- 4. OKX -------------------------------------------------------------
+REM  There is no terminal to open: the engine talks to OKX's API itself.
+REM  The keys are entered on the Exchanges page, and its Test button
+REM  checks the key, the permissions and the account mode.
 goto :tests
+
+:tests
 
 :refused
 echo.
@@ -179,14 +162,14 @@ exit /b 1
 
 REM --- 5. The safety tests ---------------------------------------------
 echo   Running the safety tests (about 20 seconds)...
-%PY% -m pytest tests_okx -q
+%PY% -m pytest tests -q
 if errorlevel 1 (
   echo.
   echo   [X] THE SAFETY TESTS FAILED. The engine has NOT been started.
   echo.
   echo       If this machine was updated recently, the fault most
-  echo       likely arrived with that update - deploy\UPDATE.BAT can
-  echo       put it back on the version it had before.
+  echo       likely arrived with that update - go back to the version
+  echo       it had before.
   echo.
   echo       Do not trade on this build. Send the lines above to whoever
   echo       maintains it.
@@ -203,6 +186,6 @@ echo.
 %PY% start.py --config config.json
 
 echo.
-echo   The engine has stopped. Any positions you had are still at the
-echo   broker; open the terminals to see them.
+echo   The engine has stopped. Any positions you had are still on OKX;
+echo   open the OKX app or website to see them.
 pause

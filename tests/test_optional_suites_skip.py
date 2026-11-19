@@ -38,7 +38,7 @@ import pytest
 #: once they skip, and pytest exits 5 for that - which reads as a
 #: failure here while the real gate, `pytest tests/ -q`, is perfectly
 #: happy. Testing the command the desk actually runs is the point.
-GATE = ['tests_okx/']
+GATE = ['tests/']
 
 BLOCKED_DLL = (
     'raise ImportError("DLL load failed while importing _greenlet: '

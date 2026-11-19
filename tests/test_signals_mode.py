@@ -10,7 +10,7 @@ from okxtrader import algodesk
 from okxtrader.database import Store
 from okxtrader.models import OrderType, SpreadSide
 
-from tests_okx.test_algo_desk import QUIET, block, engine, give_history, \
+from tests.test_algo_desk import QUIET, block, engine, give_history, \
     nothing_sent
 
 PARAMS = {'algo_qty': 0.5}

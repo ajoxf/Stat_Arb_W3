@@ -1,56 +1,55 @@
 {
   "accounts": {
-    "leg_a": {
-      "terminal_path": "C:\\Program Files\\MetaTrader 5 - A\\terminal64.exe",
-      "login": 5000001,
-      "password_env": "MT5_PASSWORD_LEG_A",
-      "server": "YourBroker-Live",
-      "endpoint": "127.0.0.1:9101"
-    },
-    "leg_b": {
-      "terminal_path": "C:\\Program Files\\MetaTrader 5 - B\\terminal64.exe",
-      "login": 5000002,
-      "password_env": "MT5_PASSWORD_LEG_B",
-      "server": "YourBroker-Live",
-      "endpoint": "127.0.0.1:9102"
+    "okx": {
+      "exchange": "okx",
+      "demo": true
     }
   },
   "pairs": {
-    "XAUUSD_|GC1226": {
-      "name": "Gold spot vs Dec future",
-      "leg_a": {
-        "account": "leg_a",
-        "symbol": "XAUUSD_"
-      },
-      "leg_b": {
-        "account": "leg_b",
-        "symbol": "GC1226"
-      },
+    "BTC-USDT|BTC-USDT-SWAP": {
+      "name": "BTC basis",
+      "leg_a": {"account": "okx", "symbol": "BTC-USDT"},
+      "leg_b": {"account": "okx", "symbol": "BTC-USDT-SWAP"},
       "pair_type": "SPOT_FUTURE",
       "hedge_ratio": 1.0,
-      "hedge_ratio_for": "XAUUSD_|GC1226",
-      "increment": null,
-      "clip_lots_a": null,
-      "clip_lots_b": null,
+      "hedge_ratio_for": "BTC-USDT|BTC-USDT-SWAP",
+      "increment": 0.5,
+      "clip_lots_a": 0.01,
+      "clip_lots_b": 1.0,
       "default_quantity": 1.0,
       "order_type": "LIMIT",
       "time_in_force": "DAY",
       "overnight": "ALLOW",
-      "quoting_leg": null,
+      "enabled": true,
+      "rows": 30
+    },
+    "BTC-USDT-SWAP|ETH-USDT-SWAP": {
+      "name": "ETH vs BTC perps",
+      "leg_a": {"account": "okx", "symbol": "BTC-USDT-SWAP"},
+      "leg_b": {"account": "okx", "symbol": "ETH-USDT-SWAP"},
+      "pair_type": "RELATED",
+      "hedge_ratio": 0.054,
+      "hedge_ratio_for": "BTC-USDT-SWAP|ETH-USDT-SWAP",
+      "increment": 0.05,
+      "clip_lots_a": 1.0,
+      "clip_lots_b": 1.86,
+      "default_quantity": 1.0,
+      "order_type": "LIMIT",
+      "time_in_force": "DAY",
+      "overnight": "ALLOW",
       "enabled": true,
       "rows": 30
     }
   },
   "settings": {
     "POLL_INTERVAL_SEC": 0.3,
-    "LEG_DEADLINE_SEC": 2.0,
+    "FILL_STYLE": "maker",
+    "MAKER_TIMEOUT_SEC": 30.0,
+    "MARKET_HOURS": "24/7",
     "MARKET_PROTECTION_TICKS": 3.0,
     "CLICK_CONVENTION": "TT",
-    "REPEG_DEAD_BAND_TICKS": 1.0,
     "MAX_QUOTE_AGE_SEC": 15.0,
     "MAX_SPREAD_JUMP_SIGMA": 5.0,
-    "OVERNIGHT_CLOSE_HOUR": 16,
-    "OVERNIGHT_CLOSE_MINUTE": 55,
     "SHUTDOWN_CLOSE_POSITIONS": "ask"
   }
 }

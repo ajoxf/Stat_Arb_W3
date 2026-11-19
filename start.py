@@ -2,8 +2,10 @@
 
     py -3.11 start.py
 
-It brings up everything: a leg runner per account, the coordinator, and
-the web UI. Three things make it the only file anyone has to run.
+It brings up everything: the web UI and the engine (the coordinator,
+which talks to OKX's API directly - and a leg runner for any MetaTrader 5
+account a desk still keeps). Three things make it the only file anyone
+has to run.
 
 **It starts the UI FIRST, even with nothing configured.** A fresh
 install has no accounts, and the accounts are entered ON THE SCREEN —
@@ -18,8 +20,8 @@ come back to see it. It does that itself, within a few seconds, and
 says so — rather than making a restart the operator's job to remember.
 
 **It never `terminate()`s a child that is running its own shutdown.**
-The coordinator's shutdown sweeps pendings at both brokers; killing it
-half way there leaves orders resting that nothing is watching.
+The coordinator's shutdown sweeps our resting orders off OKX; killing
+it half way there leaves orders resting that nothing is watching.
 """
 
 import argparse

@@ -159,7 +159,7 @@ def test_one_account_trading_both_legs_is_ordinary_and_allowed(config, pair,
     pair, and the two-accounts-one-terminal check must not touch it."""
     from okxtrader.coordinator import Coordinator
     from okxtrader.models import SpreadSide
-    from tests_okx.conftest import FakeSymbol       # noqa: F401  (path shim)
+    from tests.conftest import FakeSymbol       # noqa: F401  (path shim)
 
     broker = legs['acct_a'].broker
     other = legs['acct_b'].broker

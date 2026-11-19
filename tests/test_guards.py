@@ -246,7 +246,7 @@ def test_a_refresh_that_answers_with_nothing_says_so(engine, pair):
     answer = coordinator.refresh_feed(pair.key)
 
     assert answer['ok'] is False
-    assert 'check the terminals' in answer['reason']
+    assert 'is OKX reachable' in answer['reason']
 
 
 def test_attaching_to_the_right_terminal_does_not_log_it_in_again():

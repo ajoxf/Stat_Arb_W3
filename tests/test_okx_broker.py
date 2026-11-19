@@ -171,7 +171,7 @@ def test_orders_a_crash_left_behind_are_found(broker, sim):
 
 
 def test_the_journal_rows_have_the_engines_keys(broker):
-    from tests_okx.conftest import FakeBroker, FakeSymbol
+    from tests.conftest import FakeBroker, FakeSymbol
     broker.send_market_order('BTC-USDT-SWAP', OrderSide.SELL, 0.2,
                              comment='ours')
     rows = broker.order_log(1)

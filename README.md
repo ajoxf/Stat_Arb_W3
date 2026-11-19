@@ -1,246 +1,128 @@
-# Crypto Statistical Arbitrage Trading System
+# Nexus — the OKX spread desk
 
-A complete crypto basis trading system implementing statistical arbitrage between spot and perpetual futures markets. The system trades crypto (BTC, ETH, SOL, etc.) using exchange APIs (OKX, Binance, Bybit).
+A spread-trading desk for OKX: price ladders on the spread between two
+OKX instruments, an Algo that signals or trades them, and a Trading
+Monitor for what is on. It is built on the Mirror MT5 Trader desk (its
+engine, ladders, windows and theme) with an OKX broker underneath, and
+it fills the way Stat_Arb_W3 did.
 
-## Overview
-
-The system implements statistical arbitrage based on the spread between spot and perpetual futures prices:
-
-- **Spread Calculation**: `Spread = Spot Price - Futures Price`
-- **Z-Score**: `Z = (spread - rolling_mean) / rolling_std`
-- **Entry Signals**:
-  - Long Spread: `Z <= -2.0` (spread below mean, expect reversion up)
-  - Short Spread: `Z >= +2.0` (spread above mean, expect reversion down)
-- **Exit Signals**:
-  - Long Position: Exit when `Z >= -0.5` (spread reverted toward mean)
-  - Short Position: Exit when `Z <= +0.5` (spread reverted toward mean)
-
-### Filters
-
-- **Hurst Exponent Filter**: Blocks entries when `H >= 0.5` (trending market). Only mean-reverting regimes (`H < 0.5`) are tradeable.
-- **STD Profitability Filter**: Ensures spread volatility is sufficient to cover trading costs.
-
-## Features
-
-- Real-time price feeds from OKX, Binance, and Bybit
-- Z-score calculation with rolling mean/std (never locked at entry)
-- Direction-aware exit signals
-- Hurst exponent calculation for regime detection
-- STD filter for profitability assessment
-- Paper trading mode for testing
-- Web-based dashboard with live charts
-- Trade journal with P&L tracking
-- SD touch event analysis
-
-## Project Structure
+## Start it
 
 ```
-Stat_Arb_W3/
-├── app.py                  # Flask web application
-├── models.py               # Data models and configurations
-├── requirements.txt        # Python dependencies
-├── .env.example            # Environment variables template
-├── adapters/
-│   ├── __init__.py
-│   ├── base.py             # Abstract exchange interface
-│   ├── okx_adapter.py      # OKX REST implementation
-│   ├── okx_websocket.py    # OKX WebSocket streaming
-│   ├── binance_adapter.py  # Binance implementation
-│   └── bybit_adapter.py    # Bybit implementation
-├── core/
-│   ├── __init__.py
-│   ├── signals.py          # Z-score & signal generation
-│   └── trading_engine.py   # Main trading loop
-├── database/
-│   ├── __init__.py
-│   └── manager.py          # SQLite operations
-└── templates/
-    ├── base.html           # Base layout (dark theme)
-    ├── dashboard.html      # Main trading dashboard
-    ├── settings.html       # Configuration page
-    ├── setup.html          # Exchange management
-    └── analysis.html       # SD touch analysis
+py -3.11 start.py            # Windows
+python3 start.py             # macOS / Linux
 ```
 
-## Installation
+or double-click `START-TRADING.bat` on Windows. That installs the
+dependencies, runs the safety tests (and refuses to start if one fails)
+and then runs `start.py`.
 
-1. Clone the repository:
-```bash
-git clone <repository-url>
-cd Stat_Arb_W3
+`start.py` is the only file to run. On the first run it creates
+`config.json` and `.env` from the examples, opens the screen at
+http://127.0.0.1:8000, and starts the engine. When you save an account
+or a pair, it restarts the engine by itself.
+
+## Set up
+
+1. Create an API key on OKX: Profile > API > Create API key, with
+   **Read** and **Trade** permission, never Withdraw. Start with a key
+   made under **Demo trading**.
+2. On the desk, press **Exchanges**. On the `okx` row choose Mode
+   (Demo trading or LIVE), paste the key, secret and passphrase, and
+   Save. They go to `.env` only, never to `config.json`. An existing
+   Stat_Arb_W3 `.env` (`OKX_API_KEY`, `OKX_SECRET_KEY`,
+   `OKX_PASSPHRASE`) is read as it is.
+3. Press **Test**. It checks, in OKX's own error codes:
+   - OKX answers, and this PC's clock is close to OKX's.
+   - The key is accepted, and for the right environment (demo or live).
+   - The key has Trade permission.
+   - The account is in **Long/short** position mode.
+   - The account mode can trade perps and short spot.
+
+   It also shows your fee tier and equity.
+4. Add pairs under **Pairs** > New pair. Search instruments across spot,
+   perpetuals and futures. **Read both legs from OKX** takes contract
+   sizes, ticks and minimums from OKX, sets the pair type and suggests β.
+
+## What is on the screen
+
+- **Ladders.** One per pair; the spread is `B − β × A`. H → L is where
+  the spread can be sold (a short profits as it falls), and L → H is
+  where it can be bought.
+- **Algo window.** Signals or LIVE per ladder: z-score, bands,
+  filters, TP/SL in price and dollars, and a backtest.
+- **Fair spread and Exit.** Round trip (both legs' bid-ask),
+  commission at your VIP maker/taker fees, funding over the days held,
+  B/E and TP for each direction, and the carry-implied fair spread for
+  a perp against a dated future.
+- **Trading Monitor.** Positions, Working Orders (including maker fills
+  in progress), Fills, Slippage, Accounts (OKX equity, margin ratio and
+  each position's liquidation price), Reconciler and Analysis.
+- **Market Sessions.** The equity centres that move crypto, and OKX
+  funding at 00:00, 08:00 and 16:00 UTC, with a pop-up 10 minutes
+  before each.
+- **Telegram** (optional; `TELEGRAM_BOT_TOKEN` and
+  `TELEGRAM_ALLOWED_USERS` in `.env`). Dashboard, balance with
+  liquidation distances, Algo settings, and alerts for trades, failures,
+  funding and liquidation risk.
+
+## How orders fill
+
+By default (`FILL_STYLE = maker`) a spread fills the Stat_Arb_W3 way:
+
+1. Both legs rest as limit orders at the touch, 1 bp better than the
+   bid or ask, never within 0.5 bp of the other side.
+2. Every second, an order is re-priced (amended) if its price has moved
+   more than 1 bp.
+3. After 30 s with nothing filled, both are cancelled and nothing is
+   opened.
+4. If one leg filled and the other did not, the missing leg is
+   recovered as maker for up to 60 s, then the filled leg is closed at
+   market.
+
+Your Close button and Algo exits on profit close the same way. Anything
+still open after 30 s closes at market. CLOSE ALL, Flatten, the kill
+switch and every stop close at market immediately. `FILL_STYLE = taker`
+crosses both legs at market instead.
+
+Crypto trades 24/7: there is no daily cutoff unless a ladder sets its
+own hours (`MARKET_HOURS = SESSION` restores a single desk-wide
+cutoff).
+
+## Files
+
+```
+start.py              the launcher - the only thing to run
+START-TRADING.bat     Windows: dependencies, safety tests, then start.py
+config.example.json   copied to config.json on the first run
+.env.example          copied to .env on the first run (secrets live here)
+okxtrader/            the desk: engine, OKX broker, web UI, Telegram
+  okx_api.py          OKX v5 REST: signing, demo header, OKX's errors
+  okx_broker.py       the OKX broker the engine trades through
+  okx_sim.py          a simulated OKX for tests and demos
+  maker.py            the W3 maker fills and closes
+tests/                the safety suite (pytest tests -q)
+run_coordinator.py    the engine on its own (start.py runs it for you)
+run_leg.py            only for a desk that also keeps MetaTrader 5 accounts
+tools/                reports and maintenance scripts
 ```
 
-2. Create a virtual environment:
-```bash
-python -m venv venv
-source venv/bin/activate  # Linux/Mac
-# or
-venv\Scripts\activate  # Windows
-```
-
-3. Install dependencies:
-```bash
-pip install -r requirements.txt
-```
-
-4. Create environment file:
-```bash
-cp .env.example .env
-```
-
-5. Edit `.env` with your API keys and configuration.
-
-## Configuration
-
-### Environment Variables
+## Try it without OKX
 
 ```
-FLASK_SECRET_KEY=your-secret-key
-FLASK_DEBUG=true
-
-# WebSocket Streaming (real-time ~100ms updates)
-USE_WEBSOCKET=true
-
-# OKX
-OKX_API_KEY=your-api-key
-OKX_SECRET_KEY=your-secret-key
-OKX_PASSPHRASE=your-passphrase
-OKX_DEMO_MODE=true
-
-# Binance
-BINANCE_API_KEY=your-api-key
-BINANCE_SECRET_KEY=your-secret-key
-BINANCE_TESTNET=true
-
-# Bybit
-BYBIT_API_KEY=your-api-key
-BYBIT_SECRET_KEY=your-secret-key
-BYBIT_TESTNET=true
+python3 -m okxtrader.okx_sim --port 8771
 ```
 
-### Data Feed Modes
+Then set the `okx` account's Base URL on the Exchanges page to
+`http://127.0.0.1:8771`. The simulated exchange quotes BTC and ETH spot,
+perpetuals and a December future, fills orders, charges VIP fees and
+quotes funding rates.
 
-The system supports two modes for receiving price data:
+## Tests
 
-| Mode | Latency | Setting |
-|------|---------|---------|
-| **WebSocket Streaming** | ~100ms | `USE_WEBSOCKET=true` (default) |
-| **REST Polling** | 500ms | `USE_WEBSOCKET=false` |
-
-**WebSocket Streaming** (recommended):
-- Connects to OKX public WebSocket: `wss://ws.okx.com:8443/ws/v5/public`
-- Receives ticker updates every 100ms on price change
-- Automatic reconnection with exponential backoff
-- Heartbeat ping/pong to maintain connection
-
-### Trading Parameters
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| Entry Threshold | 2.0 | Z-score level for entry signals |
-| Exit Threshold | 0.5 | Z-score level for exit signals |
-| Stop Loss Threshold | 4.0 | Z-score level for stop loss |
-| Lookback Period | 100 | Rolling window size for mean/std |
-| Stats Update Interval | 300s | How often to recalculate mean/std (0 = every tick) |
-| Hurst Threshold | 0.5 | Max Hurst exponent for entries |
-| Min STD Multiple | 1.5 | Minimum profitability ratio |
-
-### Stats Update Interval
-
-The **Stats Update Interval** controls how often the rolling mean and standard deviation are recalculated:
-
-- **0 (Every tick)**: Mean/std recalculated on every price update (~100ms). Bands shift constantly.
-- **300 (5 minutes)**: Mean/std recalculated every 5 minutes. Bands stay stable, making entries/exits easier to track.
-- **Higher values**: More stable bands, but slower adaptation to market changes.
-
-The Z-score is always calculated in real-time using the current spread against the (potentially older) mean/std.
-
-## Usage
-
-1. Start the application:
-```bash
-python app.py
+```
+python3 -m pytest tests -q
 ```
 
-2. Open your browser and navigate to `http://localhost:5000`
-
-3. Configure exchanges in the **Exchanges** tab
-
-4. Adjust trading parameters in the **Settings** tab
-
-5. Enable algorithmic trading using the toggle in the navigation bar
-
-## Supported Assets
-
-| Asset | Spot Symbol (OKX) | Futures Symbol (OKX) |
-|-------|-------------------|----------------------|
-| BTC | BTC-USDT | BTC-USDT-SWAP |
-| ETH | ETH-USDT | ETH-USDT-SWAP |
-| SOL | SOL-USDT | SOL-USDT-SWAP |
-| XRP | XRP-USDT | XRP-USDT-SWAP |
-| DOGE | DOGE-USDT | DOGE-USDT-SWAP |
-| AVAX | AVAX-USDT | AVAX-USDT-SWAP |
-| LINK | LINK-USDT | LINK-USDT-SWAP |
-
-## Trading Logic
-
-### Entry Signals
-```python
-if position == "NONE" and filters_pass:
-    if zscore <= -entry_threshold:
-        signal = "LONG"   # Buy spot, sell futures
-    elif zscore >= entry_threshold:
-        signal = "SHORT"  # Sell spot, buy futures
-```
-
-### Exit Signals (Direction-Aware)
-```python
-if position == "LONG":
-    # Entered when z <= -entry, exit when z >= -exit
-    if zscore >= -exit_threshold:
-        signal = "EXIT"
-    elif zscore <= -stop_loss_threshold:
-        signal = "STOP_LOSS"
-
-elif position == "SHORT":
-    # Entered when z >= +entry, exit when z <= +exit
-    if zscore <= exit_threshold:
-        signal = "EXIT"
-    elif zscore >= stop_loss_threshold:
-        signal = "STOP_LOSS"
-```
-
-### Filters
-- **Hurst Filter**: Applied to entries only, not exits
-- **STD Filter**: Applied to entries only, not exits
-
-## API Endpoints
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/config` | Get current configuration |
-| POST | `/api/config` | Save configuration |
-| POST | `/api/engine/toggle-algo` | Toggle algorithmic trading |
-| GET | `/api/engine/status` | Get engine status |
-| GET/POST | `/api/exchanges` | Get/Add exchanges |
-| DELETE | `/api/exchanges/<id>` | Delete exchange |
-| POST | `/api/exchanges/<id>/test` | Test exchange connection |
-| POST | `/api/set-active-exchanges` | Set active trading exchanges |
-| GET | `/api/trades` | Get recent trades |
-| GET | `/api/trade-journal` | Get trade journal with stats |
-| GET | `/api/spread-history` | Get spread/zscore history |
-| GET | `/api/sd-touches` | Get SD touch events |
-
-## WebSocket Events
-
-| Event | Direction | Description |
-|-------|-----------|-------------|
-| `tick` | Server → Client | Price updates |
-| `signal` | Server → Client | Signal updates |
-| `trade` | Server → Client | Trade notifications |
-| `status` | Server → Client | Engine status |
-| `error` | Server → Client | Error messages |
-
-## License
-
-MIT License
+The browser tests drive a real Chromium through Playwright, and skip if
+no browser is installed.

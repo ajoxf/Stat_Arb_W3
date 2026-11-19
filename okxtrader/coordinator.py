@@ -391,8 +391,8 @@ class Coordinator:
                 self.recover()
             joined.append(name)
             logging.warning(
-                "account '%s' joined: its leg runner answered and its "
-                "symbols were resolved", name)
+                "account '%s' joined: it answered and its instruments "
+                "were resolved", name)
         return joined
 
     def sweep_pendings(self, when, legs=None):
@@ -731,7 +731,7 @@ class Coordinator:
                                      f"/{(got[name] or {}).get('ask')}"
                                      for name in ('A', 'B') if got.get(name))
                            if alive else
-                           'neither leg answered — check the terminals'),
+                           'neither leg answered — is OKX reachable?'),
                 'ticks': got}
 
     def margin_per_spread(self, pair):
@@ -2548,10 +2548,10 @@ class Coordinator:
             return
         self._auto_refreshed[key] = now
         answer = self.refresh_feed(key)
-        logging.warning('%s: stale — re-subscribed both legs automatically '
-                        '(%s). If this repeats, the terminal is dropping the '
-                        'subscription: add both symbols to Market Watch and '
-                        'leave them there.', key, answer.get('reason'))
+        logging.warning('%s: stale — re-read both legs automatically (%s). '
+                        'If this repeats, OKX is not answering for these '
+                        'instruments: check the connection, and that both '
+                        'are still listed on OKX.', key, answer.get('reason'))
 
     def _log_stale(self, key, pair, md):
         """Say what a frozen leg actually looks like, once a minute.
