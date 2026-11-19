@@ -289,6 +289,26 @@ def check_pair(checklist, pair, report_a, report_b,
             checklist.add(scope, 'Currency', PASS,
                           f'both legs priced in {currency_a}')
 
+    # Leverage is set PER INSTRUMENT on OKX. Two different numbers on
+    # the two legs of one hedge make each leg tie up a different share
+    # of margin - and the take-profit and stop, being a % of that
+    # margin, sit somewhere neither leg's leverage alone would put them.
+    lev_a, lev_b = report_a.get('leverage'), report_b.get('leverage')
+    if lev_a and lev_b:
+        if abs(float(lev_a) - float(lev_b)) > 1e-9:
+            checklist.add(scope, 'Leverage', WARN,
+                          f'{pair.symbol_a} is at {float(lev_a):g}x and '
+                          f'{pair.symbol_b} at {float(lev_b):g}x on OKX. '
+                          f'One hedge, two leverages: the margin, and the '
+                          f'TP and stop sized from it, are a mix of both',
+                          [f'On OKX set both to the same leverage (Cross): '
+                           f'open each instrument\'s trading page and '
+                           f'click the leverage figure',
+                           'The desk reads the new value within 5 minutes'])
+        else:
+            checklist.add(scope, 'Leverage', PASS,
+                          f'both legs at {float(lev_a):g}x (cross)')
+
     contract_a = report_a.get('contract_size') or 0.0
     contract_b = report_b.get('contract_size') or 0.0
     # Both typed by the trader; a blank reads as 1.

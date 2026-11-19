@@ -176,3 +176,20 @@ def test_the_example_eth_btc_beta_is_derived_from_live_prices():
                                  pair['pair_type'], 'BTC-USDT-SWAP',
                                  'ETH-USDT-SWAP', 62551.0, 1774.0)
     assert beta is not None and abs(beta - 1774.0 / 62551.0) < 0.002
+
+
+def test_two_leverages_on_one_hedge_are_warned_about():
+    checklist = diagnostics.Checklist()
+    diagnostics.check_pair(checklist, Pair(), symbol(leverage=2.0),
+                           symbol(symbol='GC1226', leverage=20.0))
+    check = [c for c in checklist.checks if c['name'] == 'Leverage'][0]
+    assert check['status'] == WARN
+    assert '2x' in check['message'] and '20x' in check['message']
+
+
+def test_CONTROL_one_leverage_on_both_legs_passes():
+    checklist = diagnostics.Checklist()
+    diagnostics.check_pair(checklist, Pair(), symbol(leverage=3.0),
+                           symbol(symbol='GC1226', leverage=3.0))
+    check = [c for c in checklist.checks if c['name'] == 'Leverage'][0]
+    assert check['status'] == PASS
