@@ -214,3 +214,25 @@ def test_cancel_pulls_both_legs(desk):
     assert desk.maker.cancel(desk.pair.key)['ok']
     desk.tick()
     assert _live(desk.sim) == [] and desk.done and not desk.done[0].ok
+
+
+def test_commission_is_priced_from_the_vip_tier(desk):
+    """The ladder's commission comes from OKX's own fee for this account:
+    a maker open plus a taker close, per lot, at the leg's price."""
+    from okxtrader import config as cfg_module
+    from okxtrader.coordinator import Coordinator
+    fake = types.SimpleNamespace(legs={'okx': desk.leg}, maker=desk.maker)
+    desk.maker.config = {'FILL_STYLE': 'maker'}
+    md = desk.md()
+    Coordinator._okx_fees(fake, desk.pair, md)
+    a = desk.pair.fee_settings['COMMISSION_PER_LOT_A']
+    # Lv1 swaps: maker 2 bp, taker 5 bp; BTC-USDT-SWAP is 0.01 BTC a lot.
+    assert a == pytest.approx((2 + 5) / 2 / 1e4 * 0.01 * md['leg_a_mid'])
+    merged = desk.pair.exit_settings(cfg_module.DEFAULT_SETTINGS)
+    assert merged['COMMISSION_PER_LOT_A'] == a
+    desk.pair.commission_per_lot_a = 0.5          # typed by the trader
+    assert desk.pair.exit_settings({})['COMMISSION_PER_LOT_A'] == 0.5
+    desk.maker.config = {'FILL_STYLE': 'taker'}
+    Coordinator._okx_fees(fake, desk.pair, md)
+    assert desk.pair.fee_settings['COMMISSION_PER_LOT_A'] == pytest.approx(
+        5 / 1e4 * 0.01 * md['leg_a_mid'])

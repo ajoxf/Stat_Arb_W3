@@ -650,6 +650,7 @@ class Coordinator:
             # screen is a peg holding a level nobody is showing.
             self.quoter.work(pair, md)
             self.maker.step(pair, md)
+            self._okx_fees(pair, md)
             self.tidy_closing_orders(pair)
         return self.market
 
@@ -1038,6 +1039,41 @@ class Coordinator:
                                  side=side.value, level=level, algo=True,
                                  naked=result.naked)
             return {'ok': False, 'reason': result.reason or 'not filled'}
+
+    def _okx_fees(self, pair, md):
+        """Price this ladder's commission from the OKX account's own VIP
+        fees: per lot = (open rate + close rate) / 2 x contract x price,
+        so `mark_fees`' two ends come to one maker-or-taker open plus one
+        taker close. Opens are maker under the W3 fill and taker under
+        Mirror's crossing; closes cross, so they are taker either way."""
+        fees = {}
+        for leg in ('a', 'b'):
+            runner = self.legs.get(pair.account_a if leg == 'a'
+                                   else pair.account_b)
+            broker = getattr(runner, 'broker', None)
+            if broker is None or not hasattr(broker, 'fees_bps'):
+                return
+            symbol = pair.symbol_a if leg == 'a' else pair.symbol_b
+            try:
+                rates = broker.fees_bps(symbol)
+            except Exception as e:
+                logging.debug('fees for %s unreadable: %s', symbol, e)
+                rates = None
+            mid = (md or {}).get(f'leg_{leg}_mid')
+            contract = ((pair.meta_a if leg == 'a' else pair.meta_b)
+                        or {}).get('contract_size')
+            if not rates or not mid or not contract:
+                return
+            maker_bps, taker_bps = rates
+            open_bps = maker_bps if self.maker.enabled(pair) else taker_bps
+            per_lot = (open_bps + taker_bps) / 2.0 / 1e4 * contract * mid
+            fees[f'COMMISSION_PER_LOT_{leg.upper()}'] = per_lot
+            fees[f'FEE_BPS_{leg.upper()}'] = {'maker': maker_bps,
+                                              'taker': taker_bps}
+        pair.fee_settings = {k: v for k, v in fees.items()
+                             if k.startswith('COMMISSION')}
+        pair.fee_bps = {k[-1].lower(): v for k, v in fees.items()
+                        if k.startswith('FEE_BPS')}
 
     def enter(self, pair, side, md, quantity, level, source):
         """Put a spread on. The W3 maker fill where it is on (the OKX
@@ -3618,6 +3654,8 @@ class Coordinator:
                 'maker_fills': self.maker.snapshot(key),
                 'fill_style': 'maker' if self.maker.enabled(pair)
                 else 'taker',
+                # The OKX account's own VIP fees on each leg, in bps.
+                'fee_bps': getattr(pair, 'fee_bps', None),
                 'quoting_leg': pair.quoting_leg,
                 # The leg that will ACTUALLY rest the pending — the
                 # setting when there is one, otherwise the wider book.

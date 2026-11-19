@@ -790,7 +790,7 @@ class PairExecutor:
             fees = costs.mark_fees(
                 position.leg_a.volume if position.leg_a else 0.0,
                 position.leg_b.volume if position.leg_b else 0.0,
-                self.config.settings)
+                pair.exit_settings(self.config.settings))
             earned = None if gross is None else gross - fees
             # ACCUMULATED. A position closed in pieces earned its P&L in
             # pieces, and the earlier pieces are already booked — this
@@ -826,7 +826,7 @@ class PairExecutor:
         fees = costs.mark_fees(
             (position.leg_a.volume if position.leg_a else 0.0) * fraction,
             (position.leg_b.volume if position.leg_b else 0.0) * fraction,
-            self.config.settings)
+            pair.exit_settings(self.config.settings))
         realized = (None if gross is None else gross * fraction - fees)
         if fraction <= 1e-9:
             # The quoting leg came down and the other leg could not

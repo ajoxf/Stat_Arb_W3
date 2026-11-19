@@ -757,6 +757,11 @@ class PairConfig:
         same types nothing at all.
         """
         merged = dict(settings or {})
+        # OKX: the commission this account's VIP tier really charges on
+        # these two instruments (set by the coordinator from
+        # /account/trade-fee). Over the desk default, under anything the
+        # trader typed for this ladder.
+        merged.update(getattr(self, 'fee_settings', None) or {})
         for field, key in self.EXIT_FIELDS.items():
             value = getattr(self, field, None)
             if value is not None:
