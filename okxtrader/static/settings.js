@@ -996,8 +996,11 @@
       } else {
         found.symbols.slice(0, 12).forEach(function (symbol) {
           html += '<button class="btn tiny pick-symbol" data-side="' + side +
-            '" data-symbol="' + escape(symbol.symbol) + '">' +
-            escape(symbol.symbol) + '</button> ';
+            '" data-symbol="' + escape(symbol.symbol) + '"' +
+            (symbol.description ? ' title="' + escape(symbol.description) +
+              '"' : '') + '>' + escape(symbol.symbol) +
+            ({SPOT: ' · Spot', SWAP: ' · Perp', FUTURES: ' · Future'}
+              [symbol.inst_type] || '') + '</button> ';
         });
       }
       html += '</div>';
@@ -1381,7 +1384,15 @@
         if (kind && !local.editing && !again &&
             kind !== local.draft.pair_type) {
           local.draft.pair_type = kind;
-          render();
+          var select = document.querySelector('.pair-form .p-type');
+          if (select) {
+            select.value = kind;
+            // What it was RENDERED with is now the suggestion, so the
+            // repaint does not carry the old choice back over it.
+            select.dataset.rendered = kind;
+          }
+          UI.toast('pair type set to ' + kind + ' — ' +
+                   (result.body.pair_type_reason || ''), 'ok');
           return derive(true);
         }
         render();
