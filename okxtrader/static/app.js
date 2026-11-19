@@ -4701,7 +4701,9 @@
     var legs = (job.legs || []).map(function (leg) {
       return leg.leg + ' ' + qty(leg.filled) + '/' + qty(leg.planned);
     }).join(' · ');
-    return (job.phase === 'recovering'
+    return (job.kind === 'close'
+      ? 'MAKER CLOSE: closing orders resting at the touch · '
+      : job.phase === 'recovering'
       ? 'MAKER RECOVERY: one leg on, the other resting · '
       : 'MAKER FILL: both legs resting at the touch · ') +
       legs + ' · ' + Math.round(job.age_sec || 0) + 's';
@@ -4799,14 +4801,15 @@
         any = true;
         var legs = job.legs || [];
         html += '<tr data-pair="' + escapeHtml(key) + '" data-side="' +
-          job.side + '">';
+          job.side + '"' + (job.position_id ? ' data-position="' +
+          escapeHtml(job.position_id) + '"' : '') + '>';
         html += '<td>' + (row.name || key) + '</td>';
         html += '<td>' + job.side + '</td>';
         html += '<td>' + fmt(job.level, 4) + '</td>';
         html += '<td>' + qty(job.spreads) + '</td>';
         html += '<td>' + DASH + '</td>';
-        html += '<td>' + (job.phase === 'recovering' ? 'RECOVERING'
-                                                     : 'MAKER') + '</td>';
+        html += '<td>' + (job.kind === 'close' ? 'MAKER CLOSE'
+          : job.phase === 'recovering' ? 'RECOVERING' : 'MAKER') + '</td>';
         html += '<td>' + DASH + '</td>';
         html += '<td>' + legs.map(function (leg) {
           return leg.leg + ' ' + fmt(leg.resting_at, 2);
@@ -4819,7 +4822,10 @@
           return n + (leg.amends || 0);
         }, 0) + '</td>';
         html += '<td>' + escapeHtml(job.reason || makerWords(job)) + '</td>';
-        html += '<td><button class="btn cancel-maker">Cancel</button></td>';
+        html += '<td>' + (job.kind === 'close'
+          ? '<button class="btn close-now" title="stop waiting: close ' +
+            'what is left at market, by ticket">Market now</button>'
+          : '<button class="btn cancel-maker">Cancel</button>') + '</td>';
         html += '</tr>';
       });
     });
@@ -6339,6 +6345,8 @@
       send('close_position', {position_id: row.dataset.position});
     } else if (button.classList.contains('cancel-order')) {
       send('cancel_order', {order_id: row.dataset.order});
+    } else if (button.classList.contains('close-now')) {
+      send('close_position', {position_id: row.dataset.position, now: true});
     } else if (button.classList.contains('cancel-maker')) {
       send('cancel_where', {pair: row.dataset.pair, side: row.dataset.side});
     }

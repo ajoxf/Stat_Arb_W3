@@ -32,7 +32,7 @@ from .book import Book
 from .chart import SpreadTape, chart_path
 from .database import Store
 from .executor import PairExecutor, mark_position, slippage
-from .maker import MakerFills
+from .maker import MakerCloses, MakerFills
 from .models import (ALGO_SOURCE, MAGIC_NUMBER, MANUAL, LegFill, OrderType,
                      SpreadPosition, SpreadSide)
 from .quoter import Quoter, quoting_leg
@@ -103,9 +103,22 @@ class Coordinator:
         self.maker = MakerFills(config, legs, self.executor, clock=clock)
         self.maker.on_done = self._maker_done
         self.quoter.maker = self.maker
+        self.maker_closes = MakerCloses(config, legs, self.executor,
+                                        clock=clock)
+        self.maker_closes.on_done = self._maker_close_done
+        # Anything else that closes a position (CLOSE ALL, the kill, a
+        # stop) pulls its resting maker close first, then the quoter's
+        # resting close - the same ticket is never closed twice.
+        quoter_disarm = self.quoter.disarm
+
+        def before_close(position_id, why):
+            self.maker_closes.abandon(position_id, why)
+            quoter_disarm(position_id, why)
+        self.executor.before_close = before_close
         self.reconciler = Reconciler(config, legs, self.book, self.executor,
                                      clock=clock, store=store)
         self.reconciler.in_flight = self.maker.in_flight_tickets
+        self.reconciler.closing = self.maker_closes.closing_ids
         self._last_reconcile = None
         self.session_clock = SessionClock(config, offset=self.broker_offset)
         #: The measured broker clock, per account: (measured at, offset).
@@ -650,6 +663,7 @@ class Coordinator:
             # screen is a peg holding a level nobody is showing.
             self.quoter.work(pair, md)
             self.maker.step(pair, md)
+            self.maker_closes.step(pair, md)
             self._okx_fees(pair, md)
             self.tidy_closing_orders(pair)
         return self.market
@@ -1075,6 +1089,27 @@ class Coordinator:
         pair.fee_bps = {k[-1].lower(): v for k, v in fees.items()
                         if k.startswith('FEE_BPS')}
 
+    #: Algo exits that can wait for a maker close. Every stop crosses.
+    MAKER_EXITS = ('PROFIT_TARGET', 'MEAN_REVERSION')
+
+    def close(self, pair, position, md, reason, maker=True):
+        """Close one position: as maker (W3) where it can wait, else at
+        market by ticket now."""
+        if maker and self.maker.enabled(pair):
+            return self.maker_closes.start(pair, position, md, reason)
+        return self.executor.close_position(pair, position, md,
+                                            reason=reason)
+
+    def _maker_close_done(self, job, answer):
+        with self.lock:
+            self.remember(job.position)
+            if not answer.get('ok') and self.store is not None:
+                self.store.event('refused', job.pair_key,
+                                 reason=f'maker close of '
+                                        f'{job.position.position_id} did '
+                                        f'not complete',
+                                 side=job.position.side.value)
+
     def enter(self, pair, side, md, quantity, level, source):
         """Put a spread on. The W3 maker fill where it is on (the OKX
         default: both legs rest, the position arrives in `_maker_done`),
@@ -1137,9 +1172,10 @@ class Coordinator:
                     return {'ok': False, 'held': True,
                             'reason': unconfirmed}
                 md = fresh
-            result = self.executor.close_position(
+            result = self.close(
                 pair, position, md,
-                reason=f'Algo: {algo_module.EXIT_WORDS.get(reason, reason)}')
+                f'Algo: {algo_module.EXIT_WORDS.get(reason, reason)}',
+                maker=reason in self.MAKER_EXITS)
             self.remember(position)
             return {'ok': bool(result.get('ok')),
                     'reason': result.get('reason') or result.get('error')}
@@ -3651,7 +3687,8 @@ class Coordinator:
                 'quotes': self.quoter.snapshot(key),
                 # W3 maker fills working on this ladder: both legs
                 # resting at OKX, how far each has filled.
-                'maker_fills': self.maker.snapshot(key),
+                'maker_fills': (self.maker.snapshot(key) +
+                                self.maker_closes.snapshot(key)),
                 'fill_style': 'maker' if self.maker.enabled(pair)
                 else 'taker',
                 # The OKX account's own VIP fees on each leg, in bps.

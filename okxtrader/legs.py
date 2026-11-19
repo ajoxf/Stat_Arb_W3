@@ -180,13 +180,14 @@ class LocalLeg:
         }
 
     def place_limit(self, symbol, side, volume, price, comment="",
-                    post_only=None):
-        if post_only is None:
-            return self.broker.place_pending_limit(
-                symbol, OrderSide(side), volume, price, comment=comment)
+                    post_only=None, position_ticket=None):
+        extra = {}
+        if post_only is not None:
+            extra['post_only'] = post_only
+        if position_ticket is not None:
+            extra['position_ticket'] = position_ticket
         return self.broker.place_pending_limit(
-            symbol, OrderSide(side), volume, price, comment=comment,
-            post_only=post_only)
+            symbol, OrderSide(side), volume, price, comment=comment, **extra)
 
     def pending_orders(self, symbol=None):
         return self.broker.pending_orders_by_magic(symbol)

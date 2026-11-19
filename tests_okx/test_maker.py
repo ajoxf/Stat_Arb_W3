@@ -46,7 +46,10 @@ def desk(tmp_path):
             'volume_step': info.volume_step, 'volume_min': info.volume_min,
             'volume_max': info.volume_max})
     clock = Clock()
-    config = {'MARKET_PROTECTION_TICKS': 0}
+    from okxtrader.config import TraderConfig
+    config = TraderConfig(pairs={pair.key: pair})
+    config.settings.update({'MARKET_PROTECTION_TICKS': 0,
+                            'FILL_STYLE': 'maker'})
     executor = PairExecutor(config, {'okx': leg}, clock=clock,
                             sleep=lambda s: None)
     maker = MakerFills(config, {'okx': leg}, executor, clock=clock)
@@ -236,3 +239,89 @@ def test_commission_is_priced_from_the_vip_tier(desk):
     Coordinator._okx_fees(fake, desk.pair, md)
     assert desk.pair.fee_settings['COMMISSION_PER_LOT_A'] == pytest.approx(
         5 / 1e4 * 0.01 * md['leg_a_mid'])
+
+
+# -- maker CLOSES -------------------------------------------------------------
+
+
+def _open(desk):
+    desk.maker.start(desk.pair, SpreadSide.BUY, desk.md(), 1)
+    desk.fill('a')
+    desk.fill('b')
+    desk.tick()
+    return desk.done.pop().position
+
+
+@pytest.fixture
+def closes(desk):
+    from okxtrader.maker import MakerCloses
+    mc = MakerCloses({}, {'okx': desk.leg}, desk.maker.executor,
+                     clock=desk.clock)
+    done = []
+    mc.on_done = lambda job, answer: done.append(answer)
+    mc.done = done
+    return mc
+
+
+def _close_orders(desk, mc, position):
+    job = mc.jobs[position.position_id]
+    return [(leg, t) for leg in job.legs.values() for t in leg['orders']]
+
+
+def _fill_close(desk, mc, position, leg_key=None):
+    job = mc.jobs[position.position_id]
+    for key, leg in job.legs.items():
+        if leg_key and key != leg_key:
+            continue
+        for t in leg['orders']:
+            o = desk.sim.orders[desk.broker.ledger['orders'][str(t)]['ord_id']]
+            desk.sim._fill(o, o['sz'] - o['accFillSz'], float(o['px']),
+                           taker=False)
+
+
+def test_a_maker_close_rests_by_ticket_and_settles(desk, closes):
+    position = _open(desk)
+    started = closes.start(desk.pair, position, desk.md(), 'closed by trader')
+    assert started['ok'] and started['working']
+    live = _live(desk.sim)
+    assert len(live) == 2 and {o['ordType'] for o in live} == {'limit'}
+    _fill_close(desk, closes, position)
+    desk.clock.t += 1
+    closes.step(desk.pair, desk.md())
+    assert closes.done and closes.done[0]['ok']
+    assert position.closed_at is not None
+    assert position.realized_pnl is not None
+    assert desk.sim.positions == {} and _live(desk.sim) == []
+    assert all(f['execType'] == 'M' for f in desk.sim.fills)
+
+
+def test_a_maker_close_re_pegs_on_1bp(desk, closes):
+    position = _open(desk)
+    closes.start(desk.pair, position, desk.md(), 'closed by trader')
+    desk.sim.index['ETH'] *= 1.0005
+    desk.clock.t += 1
+    closes.step(desk.pair, desk.md())
+    job = closes.jobs[position.position_id]
+    assert sum(o['amends'] for o in job.legs['b']['orders'].values()) == 1
+
+
+def test_a_maker_close_not_filled_closes_the_rest_at_market(desk, closes):
+    position = _open(desk)
+    closes.start(desk.pair, position, desk.md(), 'closed by trader')
+    _fill_close(desk, closes, position, 'a')        # A made, B never
+    for _ in range(31):
+        desk.clock.t += 1
+        closes.step(desk.pair, desk.md())
+    assert closes.done and closes.done[0]['ok']
+    assert position.closed_at is not None
+    assert desk.sim.positions == {} and _live(desk.sim) == []
+    kinds = {f['instId']: f['execType'] for f in desk.sim.fills[-2:]}
+    assert kinds['ETH-USDT-SWAP'] == 'T'            # B crossed at the end
+
+
+def test_abandon_pulls_the_resting_closes(desk, closes):
+    position = _open(desk)
+    closes.start(desk.pair, position, desk.md(), 'closed by trader')
+    closes.abandon(position.position_id, 'CLOSE ALL')
+    assert _live(desk.sim) == [] and not closes.jobs
+    assert position.closed_at is None               # nothing settled here

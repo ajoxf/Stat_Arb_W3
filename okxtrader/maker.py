@@ -555,3 +555,284 @@ class MakerFills:
             job.recovery['until'] = now
         job.reason = reason
         return {'ok': True}
+
+
+# ===========================================================================
+# Maker CLOSES
+# ===========================================================================
+
+
+class CloseJob:
+    """One position being closed as maker: a closing limit per ticket on
+    each leg, resting at the touch."""
+
+    def __init__(self, pair, position, md, reason, now):
+        self.id = new_id('MC')
+        self.pair_key = pair.key
+        self.position = position
+        self.md = md                       # the touch the close was decided on
+        self.reason = reason
+        self.started = now
+        self.deadline = None
+        self.next_peg = now
+        self.legs = {}                     # 'a'|'b' -> dict
+        self.why = None
+
+    def to_dict(self, now):
+        legs = []
+        for key, leg in self.legs.items():
+            filled = sum(o['filled'] for o in leg['orders'].values())
+            legs.append({'leg': key.upper(), 'symbol': leg['symbol'],
+                         'side': leg['close_side'], 'planned': leg['found'],
+                         'filled': filled,
+                         'resting_at': next((o['price'] for o in
+                                             leg['orders'].values()
+                                             if o['live']), None),
+                         'amends': sum(o['amends'] for o in
+                                       leg['orders'].values())})
+        return {'id': self.id, 'pair': self.pair_key, 'kind': 'close',
+                'position_id': self.position.position_id,
+                'side': self.position.side.value, 'phase': 'closing',
+                'spreads': self.position.quantity, 'level': None,
+                'age_sec': round(now - self.started, 1), 'legs': legs,
+                'reason': self.why}
+
+
+class MakerCloses:
+    """Closes worked as maker, W3's way: both legs' closing orders rest
+    at the touch, by TICKET, re-pegged every second on a >1 bp move.
+    Whatever has not filled at `MAKER_TIMEOUT_SEC` is closed at market
+    by ticket through Mirror's own close - a close is owed, an entry is
+    not, so a close never just gives up.
+
+    Only for closes that can wait half a minute: the trader's Close on a
+    position, and an Algo exit on profit or the mean. CLOSE ALL, Flatten,
+    the kill, every stop and the overnight rule cross at once.
+    """
+
+    def __init__(self, config, legs, executor, clock=time.time):
+        self.config = config
+        self.legs = legs
+        self.executor = executor
+        self.clock = clock
+        self.jobs = {}                     # position_id -> CloseJob
+        self.on_done = None                # (job, settle result)
+
+    _cfg = MakerFills._cfg
+
+    def closing_ids(self):
+        return set(self.jobs)
+
+    def snapshot(self, key=None):
+        now = self.clock()
+        return [j.to_dict(now) for j in self.jobs.values()
+                if key is None or j.pair_key == key]
+
+    def _runner(self, leg):
+        return self.legs.get(leg['account'])
+
+    def start(self, pair, position, md, reason):
+        """Rest the closing orders. Returns {'ok', 'working'} or, when
+        anything about it cannot rest, the result of closing at market
+        right away."""
+        pid = position.position_id
+        if pid in self.jobs:
+            return {'ok': True, 'working': self.jobs[pid].id,
+                    'reason': 'already closing as maker'}
+        if not md or md.get('guard_reason'):
+            return self._market(pair, position, md, reason,
+                                'no clean price to rest on')
+        now = self.clock()
+        job = CloseJob(pair, position, md, reason, now)
+        job.deadline = now + self._cfg('MAKER_TIMEOUT_SEC', 30.0)
+        sides = dict(zip(('a', 'b'), position.side.leg_sides()))
+        for key, fill in (('a', position.leg_a), ('b', position.leg_b)):
+            if not fill:
+                continue
+            leg = {'leg': key, 'account': fill.account, 'symbol': fill.symbol,
+                   'entry_side': sides[key],
+                   'close_side': sides[key].opposite.value,
+                   'tickets': list(fill.position_tickets or []),
+                   'found': 0.0, 'orders': {}, 'sent': None}
+            runner = self._runner(leg)
+            live = runner.positions(leg['symbol']) if runner else None
+            if live is None:
+                self._pull(job)
+                return self._market(pair, position, md, reason,
+                                    f'{leg["symbol"]} could not be read')
+            held = {str(p['ticket']): float(p['volume']) for p in live}
+            bid, ask = md.get(f'leg_{key}_bid'), md.get(f'leg_{key}_ask')
+            leg['sent'] = ask if leg['close_side'] == 'BUY' else bid
+            price = passive_price(leg['close_side'], bid, ask,
+                                  self._cfg('MAKER_OFFSET_BPS', 1.0),
+                                  self._cfg('MAKER_SAFETY_BPS', 0.5))
+            for ticket in leg['tickets']:
+                volume = held.get(str(ticket))
+                if not volume:
+                    continue
+                leg['found'] += volume
+                placed = runner.place_limit(
+                    leg['symbol'], leg['close_side'], volume, price,
+                    comment=f'{TAG}C:{key.upper()}', post_only=False,
+                    position_ticket=int(ticket))
+                if not placed or not placed.get('ok'):
+                    self._pull(job)
+                    return self._market(
+                        pair, position, md, reason,
+                        f'the closing order was refused: '
+                        f'{(placed or {}).get("error")}')
+                leg['orders'][placed['ticket']] = {
+                    'pos_ticket': int(ticket), 'volume': volume,
+                    'filled': 0.0, 'avg': None, 'live': True,
+                    'price': placed.get('price', price), 'target': price,
+                    'amends': 0}
+            job.legs[key] = leg
+        self.jobs[pid] = job
+        logging.info('%s: maker close %s of %s - closing orders resting at '
+                     'the touch', pair.key, job.id, pid)
+        return {'ok': True, 'working': job.id,
+                'reason': f'closing as maker — both legs resting at the '
+                          f'touch, at market after '
+                          f'{self._cfg("MAKER_TIMEOUT_SEC", 30.0):g}s'}
+
+    def _market(self, pair, position, md, reason, why):
+        logging.info('%s: close of %s at market: %s', pair.key,
+                     position.position_id, why)
+        return self.executor.close_position(pair, position, md,
+                                            reason=reason)
+
+    def _read(self, leg, order_ticket, order):
+        runner = self._runner(leg)
+        try:
+            state = runner.order_state(order_ticket)
+        except Exception as e:
+            logging.warning('%s: close order %s unreadable: %s',
+                            leg['symbol'], order_ticket, e)
+            return
+        if state.get('error') and state.get('still_open') is None:
+            return
+        order['filled'] = float(state.get('filled_volume') or 0.0)
+        order['avg'] = state.get('price') or order['avg']
+        order['live'] = bool(state.get('still_open'))
+
+    def _pull(self, job):
+        """Cancel every closing order still resting; read what filled."""
+        for leg in job.legs.values():
+            runner = self._runner(leg)
+            for ticket, order in leg['orders'].items():
+                if not order['live']:
+                    continue
+                try:
+                    state = runner.cancel_order(ticket)
+                except Exception as e:
+                    logging.error('%s: cancel of close order %s raised: %s',
+                                  leg['symbol'], ticket, e)
+                    continue
+                order['filled'] = float(state.get('filled_volume') or
+                                        order['filled'])
+                order['avg'] = state.get('price') or order['avg']
+                order['live'] = bool(state.get('still_open')) and \
+                    not state.get('cancelled')
+
+    def abandon(self, position_id, why='closed another way'):
+        """Something else is closing this position now (CLOSE ALL, the
+        kill, a stop): pull the resting closes first, so the two never
+        both close the same ticket."""
+        job = self.jobs.pop(position_id, None)
+        if job is not None:
+            job.why = why
+            self._pull(job)
+
+    def step(self, pair, md):
+        for pid, job in list(self.jobs.items()):
+            if job.pair_key != pair.key:
+                continue
+            try:
+                self._step(pair, job, md)
+            except Exception as e:                 # never lose the pass
+                logging.exception('%s: maker close step raised: %s',
+                                  pair.key, e)
+
+    def _left(self, leg):
+        return leg['found'] - sum(o['filled'] for o in leg['orders'].values())
+
+    def _step(self, pair, job, md):
+        now = self.clock()
+        if now < job.next_peg and now < job.deadline:
+            return
+        job.next_peg = now + self._cfg('MAKER_REPEG_SEC', 1.0)
+        for leg in job.legs.values():
+            for ticket, order in leg['orders'].items():
+                if order['live']:
+                    self._read(leg, ticket, order)
+        eps = 1e-9
+        if all(self._left(leg) <= max(eps, leg['found'] * 1e-6)
+               for leg in job.legs.values()):
+            self._settle(pair, job, market={})
+            return
+        if now >= job.deadline:
+            self._pull(job)
+            market = {}
+            for key, leg in job.legs.items():
+                if self._left(leg) <= max(eps, leg['found'] * 1e-6):
+                    continue
+                market[key] = self.executor.close_tickets(
+                    self._runner(leg), leg['symbol'], leg['tickets'],
+                    leg['entry_side'], comment='CLOSE')
+            self._settle(pair, job, market,
+                         note=f'not all filled as maker in '
+                              f'{self._cfg("MAKER_TIMEOUT_SEC", 30.0):g}s '
+                              f'— the rest closed at market')
+            return
+        if not md or md.get('guard_reason'):
+            return
+        for key, leg in job.legs.items():
+            bid, ask = md.get(f'leg_{key}_bid'), md.get(f'leg_{key}_ask')
+            if not bid or not ask:
+                continue
+            target = passive_price(leg['close_side'], bid, ask,
+                                   self._cfg('MAKER_OFFSET_BPS', 1.0),
+                                   self._cfg('MAKER_SAFETY_BPS', 0.5))
+            for ticket, order in leg['orders'].items():
+                if not order['live'] or _bps(target, order['target']) <= \
+                        self._cfg('MAKER_AMEND_BPS', 1.0):
+                    continue
+                answer = self._runner(leg).modify_order(ticket, target)
+                if answer and answer.get('ok'):
+                    order['price'] = order['target'] = target
+                    order['amends'] += 1
+                else:
+                    self._read(leg, ticket, order)
+
+    def _settle(self, pair, job, market, note=None):
+        """Book the close through Mirror's own settlement, maker fills
+        and any market remainder together."""
+        self.jobs.pop(job.position.position_id, None)
+        results = {}
+        for key, leg in job.legs.items():
+            closed = [{'ticket': str(o['pos_ticket']), 'volume': o['filled'],
+                       'price': o['avg'], 'sent': leg['sent']}
+                      for o in leg['orders'].values() if o['filled'] > 0]
+            extra = market.get(key)
+            if extra is None:
+                results[key] = {'ok': True, 'closed': closed,
+                                'found': leg['found'],
+                                'left': max(0.0, self._left(leg))}
+                continue
+            results[key] = dict(extra)
+            results[key]['closed'] = closed + list(extra.get('closed') or [])
+            results[key]['found'] = leg['found']
+        answer = self.executor._settle_close(pair, job.position, results,
+                                             job.md, job.reason)
+        if note:
+            answer['note'] = note
+        logging.info('%s: maker close %s of %s settled (%s)%s', pair.key,
+                     job.id, job.position.position_id,
+                     'ok' if answer.get('ok') else 'FAILED',
+                     f' - {note}' if note else '')
+        if self.on_done is not None:
+            try:
+                self.on_done(job, answer)
+            except Exception as e:
+                logging.exception('maker close %s: on_done raised: %s',
+                                  job.id, e)

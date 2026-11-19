@@ -93,6 +93,10 @@ class Reconciler:
         #: () -> {(account, ticket)} a maker fill holds right now: a leg
         #: half way on is OURS, mid-click, not a stray.
         self.in_flight = None
+        #: () -> {position_id} being closed as maker right now: a ticket
+        #: that has just closed on a resting order is that close
+        #: landing, not a ghost.
+        self.closing = None
 
     #: Strikes before acting. One poll can catch the broker mid-fill.
     STRIKES = 3
@@ -240,7 +244,16 @@ class Reconciler:
                         account_ticket[1] not in positions:
                     self.orphan_strikes.pop(account_ticket, None)
 
+        closing = set()
+        if self.closing is not None:
+            try:
+                closing = set(self.closing())
+            except Exception as e:                   # never lose the pass
+                logging.error('reconcile: closing set unreadable: %s', e)
         for position in self.book.positions():
+            if position.position_id in closing:
+                self.ghost_strikes.pop(position.position_id, None)
+                continue
             missing = self._missing_legs(position, broker)
             if not missing:
                 self.ghost_strikes.pop(position.position_id, None)

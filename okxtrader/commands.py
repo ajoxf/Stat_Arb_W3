@@ -235,9 +235,11 @@ class CommandRunner:
         if position is None:
             return {'ok': False, 'reason': 'no such position'}
         pair = self.coordinator.config.pairs[position.pair_key]
-        result = self.coordinator.executor.close_position(
+        # The trader's Close rests as maker (W3); `now` - the Working
+        # Orders "Market now" button - crosses at once.
+        result = self.coordinator.close(
             pair, position, self.coordinator.market.get(position.pair_key),
-            reason='closed by trader')
+            'closed by trader', maker=not payload.get('now'))
         self.coordinator.remember(position)
         return result
 
