@@ -277,8 +277,18 @@ class OKXBroker:
             digits=_decimals(tick),
             trade_allowed=row.get('state') == 'live',
             expiry=int(expiry / 1000) if expiry else 0,
-            swap_long=swap_long, swap_short=swap_short,
-            swap_mode=('FUNDING' if swap_long is not None else None),
+            # Funding, priced as Mirror's carry reads a swap: money per
+            # lot per day (all three 8h fundings), SWAP_CURRENCY_DEPOSIT
+            # (4). Spot and dated futures pay no funding: 0, disabled
+            # (0). A spot SHORT does pay borrow interest; that is not
+            # in here.
+            swap_long=(swap_long if swap_long is not None
+                       else (None if row.get('instType') == 'SWAP'
+                             else 0.0)),
+            swap_short=(swap_short if swap_short is not None
+                        else (None if row.get('instType') == 'SWAP'
+                              else 0.0)),
+            swap_mode=(4 if row.get('instType') == 'SWAP' else 0),
             currency_profit='USDT',
             base_ccy=row.get('baseCcy') or row.get('ctValCcy'),
             quote_ccy=row.get('quoteCcy') or row.get('settleCcy'),

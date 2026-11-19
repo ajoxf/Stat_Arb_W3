@@ -186,3 +186,18 @@ def test_the_journal_rows_have_the_engines_keys(broker):
 def test_refusals_carry_okxs_words(broker):
     bad = broker.send_market_order('BTC-USDT-SWAP', OrderSide.BUY, 0.001)
     assert not bad.success and 'rounds to zero' in bad.error
+
+
+def test_funding_reads_as_mirrors_swap(broker):
+    """A perpetual's funding is money per lot per day in deposit currency
+    (MT5 swap mode 4); spot and dated futures charge none (mode 0)."""
+    perp = broker.symbol_info('BTC-USDT-SWAP')
+    assert perp.swap_mode == 4
+    assert perp.swap_long == pytest.approx(-perp.swap_short)
+    rate = broker.funding('BTC-USDT-SWAP')['rate']
+    mid = broker.symbol_tick('BTC-USDT-SWAP').bid
+    assert abs(perp.swap_short) == pytest.approx(abs(rate) * 3 * 0.01 * mid,
+                                                 rel=1e-3)
+    for spot_or_future in ('BTC-USDT', 'BTC-USDT-261225'):
+        info = broker.symbol_info(spot_or_future)
+        assert (info.swap_mode, info.swap_long, info.swap_short) == (0, 0, 0)

@@ -786,6 +786,11 @@ class Coordinator:
                 margin = leg.margin_for(symbol, side, lots)
             except Exception:                 # a leg mid-restart
                 margin = None
+            if margin is not None and type(
+                    getattr(leg, 'broker', None)).__name__ == 'OKXBroker':
+                # OKX's own leverage on this instrument, from
+                # /account/leverage-info: what the exchange will hold.
+                source = 'OKX'
             if margin is None:
                 margin = self._margin_from_leverage(account, meta, lots)
                 if margin is not None:
@@ -802,6 +807,8 @@ class Coordinator:
         return {'money': total, 'source': source,
                 'note': ('priced by the terminals themselves'
                          if source == 'terminal' else
+                         'notional over the leverage OKX holds on each '
+                         'instrument' if source == 'OKX' else
                          "each leg's notional over its own account's "
                          "leverage — the terminals could not price it")}
 
@@ -850,6 +857,22 @@ class Coordinator:
                 self.config.settings).get('CARRY_RATE_PCT'))
         body['kind'] = kind
         body['kind_note'] = kind_note
+        perps = [sym for sym, exp in ((pair.symbol_a,
+                                       pair.effective_expiry('a')),
+                                      (pair.symbol_b, expiry))
+                 if str(sym or '').upper().endswith('-SWAP') and not exp]
+        if kind != algo_module.RELATED and body.get('fair_buy') is None \
+                and perps and pair.symbol_b in perps:
+            # OKX: a PERPETUAL never expires, so there is no carry to
+            # run to expiry and no fair value to price from it. What it
+            # does have is funding, every 8 hours - priced per lot per
+            # day in the exit's Swap line over the days you set.
+            body['expects_expiry'] = False
+            body['note'] = (f'{pair.symbol_b} is a perpetual: no expiry, so '
+                            f'no carry-to-expiry fair value. Its funding is '
+                            f'charged every 8h - set the days held '
+                            f'(BREAK_EVEN_NIGHTS) and it is in B/E and TP.')
+            body['kind_note'] = 'perpetual basis — priced by funding'
         return body
 
     def tidy_closing_orders(self, pair):
@@ -1056,10 +1079,9 @@ class Coordinator:
 
     def _okx_fees(self, pair, md):
         """Price this ladder's commission from the OKX account's own VIP
-        fees: per lot = (open rate + close rate) / 2 x contract x price,
-        so `mark_fees`' two ends come to one maker-or-taker open plus one
-        taker close. Opens are maker under the W3 fill and taker under
-        Mirror's crossing; closes cross, so they are taker either way."""
+        fees: per lot per side = rate x contract x price, `mark_fees`
+        counting both ends. Maker under the W3 fill (entries and profit
+        closes both rest), taker under Mirror's crossing."""
         fees = {}
         for leg in ('a', 'b'):
             runner = self.legs.get(pair.account_a if leg == 'a'
@@ -1079,8 +1101,11 @@ class Coordinator:
             if not rates or not mid or not contract:
                 return
             maker_bps, taker_bps = rates
-            open_bps = maker_bps if self.maker.enabled(pair) else taker_bps
-            per_lot = (open_bps + taker_bps) / 2.0 / 1e4 * contract * mid
+            # Both ends at the rate the desk's own fill pays: under the
+            # W3 fill the open AND the profit-taking close rest as maker
+            # (a stop crosses, but B/E and TP price the exit that WORKS).
+            side_bps = maker_bps if self.maker.enabled(pair) else taker_bps
+            per_lot = side_bps / 1e4 * contract * mid
             fees[f'COMMISSION_PER_LOT_{leg.upper()}'] = per_lot
             fees[f'FEE_BPS_{leg.upper()}'] = {'maker': maker_bps,
                                               'taker': taker_bps}
