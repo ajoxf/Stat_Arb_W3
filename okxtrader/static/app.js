@@ -4685,7 +4685,14 @@
 
   function positionsTable() {
     var html = '<table><thead><tr><th>Pair</th><th>Side</th><th>Net</th>' +
-      '<th>Avg entry</th><th>Mark</th><th>Open P&amp;L</th><th>Mode</th>' +
+      '<th>Avg entry</th><th>Mark</th>' +
+      '<th title="points the spread has moved in your favour, entry to ' +
+      'where it would close">Move</th>' +
+      '<th>Open P&amp;L</th>' +
+      '<th title="net P&amp;L over both legs\u2019 face value at entry: ' +
+      'the return on what is traded">% notional</th>' +
+      '<th title="net P&amp;L over the margin the position ties up: the ' +
+      'base the TP % and SL % are set on">% margin</th><th>Mode</th>' +
       '<th>Slip</th><th>Click→on</th><th>Naked</th><th>Legs</th>' +
       '<th></th></tr></thead><tbody>';
     var any = false;
@@ -4697,8 +4704,16 @@
       html += '<td>' + qty(position.quantity) + '</td>';
       html += '<td>' + fmt(position.entry_spread, 4) + '</td>';
       html += '<td>' + fmt(position.closing_spread, 4) + '</td>';
+      html += '<td class="' + updown(position.spread_move) + '">' +
+        signedOr(position.spread_move, 4) + '</td>';
       html += '<td class="' + (position.net_pnl > 0 ? 'up' : 'down') + '">' +
         money(position.net_pnl) + '</td>';
+      html += '<td class="' + updown(position.pnl_pct_notional) + '"' +
+        ' title="of ' + money(position.notional) + ' notional">' +
+        pctOr(position.pnl_pct_notional, 3) + '</td>';
+      html += '<td class="' + updown(position.pnl_pct_margin) + '"' +
+        ' title="of ' + money(position.margin) + ' margin">' +
+        pctOr(position.pnl_pct_margin, 2) + '</td>';
       html += '<td>' + position.order_type + '</td>';
       html += '<td>' + fmt(position.entry_slippage, 4) + '</td>';
       html += '<td>' + (position.click_to_on_ms === null ||
@@ -4721,14 +4736,32 @@
         legText(position.leg_b) + '</td>';
       html += '<td><button class="btn close-position">Flatten</button></td>';
       html += '</tr>';
-      html += '<tr class="detail"><td colspan="11">' +
+      html += '<tr class="detail"><td colspan="14">' +
         legDetail(position.leg_a, 'A') + ' &nbsp; ' +
         legDetail(position.leg_b, 'B') + '</td></tr>';
     });
-    if (!any) { html += '<tr><td colspan="11">nothing open</td></tr>'; }
+    if (!any) { html += '<tr><td colspan="14">nothing open</td></tr>'; }
     html += '</tbody></table>';
     html += accountReconciliation();
     return html;
+  }
+
+  function updown(value) {
+    return value === null || value === undefined || value === 0 ? ''
+      : (value > 0 ? 'up' : 'down');
+  }
+
+  function signedOr(value, digits) {
+    if (value === null || value === undefined) { return DASH; }
+    return (value > 0 ? '+' : '') + fmt(value, digits);
+  }
+
+  function pctOr(value, digits) {
+    /* A share, signed. Unmeasured is a dash, never 0.00%. */
+    if (value === null || value === undefined || !isFinite(value)) {
+      return DASH;
+    }
+    return (value > 0 ? '+' : '') + Number(value).toFixed(digits) + '%';
   }
 
   function legText(leg) {

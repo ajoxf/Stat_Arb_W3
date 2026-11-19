@@ -67,6 +67,48 @@ def priced(tick):
     except (TypeError, ValueError, AttributeError):
         return False
 
+def position_returns(position, net_pnl, closing_spread, margin_per_spread):
+    """How a position is doing, as shares - what the money is a PERCENT
+    of. On a spread "% of the price" means nothing: ETH vs BTC trades near
+    0.45 and a basis can cross zero. So:
+
+    - `spread_move`: points the spread has moved in the position's
+      favour, entry to where it would close (positive is profit).
+    - `notional`: both legs' face value at entry; `pnl_pct_notional` is
+      net P&L over it - the return on what is actually traded.
+    - `margin`: what the position ties up (margin per spread, frozen at
+      entry, times the quantity); `pnl_pct_margin` is net P&L over it -
+      the base the TP % and SL % are set on, so a target hit reads as
+      about its TP %.
+
+    Unmeasured is None, never 0.
+    """
+    out = {'spread_move': None, 'notional': None, 'margin': None,
+           'pnl_pct_notional': None, 'pnl_pct_margin': None}
+    entry = position.entry_spread
+    if entry is not None and closing_spread is not None:
+        sign = 1.0 if position.side.value == 'BUY' else -1.0
+        out['spread_move'] = sign * (float(closing_spread) - float(entry))
+    face = 0.0
+    for fill in (position.leg_a, position.leg_b):
+        try:
+            face += (float(fill.volume) * float(fill.contract_size)
+                     * float(fill.price))
+        except (AttributeError, TypeError, ValueError):
+            face = None
+            break
+    if face:
+        out['notional'] = face
+        if net_pnl is not None:
+            out['pnl_pct_notional'] = net_pnl / face * 100.0
+    if margin_per_spread:
+        margin = float(margin_per_spread) * float(position.quantity or 1.0)
+        out['margin'] = margin
+        if net_pnl is not None and margin:
+            out['pnl_pct_margin'] = net_pnl / margin * 100.0
+    return out
+
+
 class Coordinator:
     def __init__(self, config, legs, status_path='status.json',
                  clock=time.time, sleep=time.sleep,
@@ -3665,6 +3707,9 @@ class Coordinator:
                 gross, net_pnl, closing = mark_position(
                     position, md, settings)
                 row = position.to_dict()
+                row.update(position_returns(
+                    position, net_pnl, closing,
+                    self.entry_margin(pair, position)))
                 row.update({'gross_pnl': gross, 'net_pnl': net_pnl,
                             'closing_spread': closing,
                             # Anchored on the price this position was

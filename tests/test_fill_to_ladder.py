@@ -86,3 +86,36 @@ def test_the_journal_files_each_fill_by_its_ticket(desk):
     filed = {f['deal_id']: (f['pair_key'], f['leg'])
              for f in store.fills()}
     assert filed == {'d1': (ethbtc.key, 'A'), 'd2': (basis.key, 'B')}
+
+
+# -- what a position's P&L is a percent OF ----------------------------------------
+
+def test_a_positions_return_is_a_share_of_notional_and_of_margin():
+    from okxtrader.coordinator import position_returns
+    basis, ethbtc = _pairs()
+    leg_a = LegFill('okx', 'BTC-USDT-SWAP', 'SELL', 1.0, 65000.0,
+                    position_tickets=[1], contract_size=0.01)
+    leg_b = LegFill('okx', 'ETH-USDT-SWAP', 'BUY', 1.86, 3500.0,
+                    position_tickets=[2], contract_size=0.1)
+    position = SpreadPosition(ethbtc.key, SpreadSide.BUY, 1.0, leg_a, leg_b,
+                              0.45, 'LIMIT', 0.186)
+    got = position_returns(position, net_pnl=2.0, closing_spread=0.55,
+                           margin_per_spread=400.0)
+    face = 1.0 * 0.01 * 65000.0 + 1.86 * 0.1 * 3500.0       # 650 + 651
+    assert got['spread_move'] == pytest.approx(0.10)       # a BUY, it rose
+    assert got['notional'] == pytest.approx(face)
+    assert got['pnl_pct_notional'] == pytest.approx(2.0 / face * 100)
+    assert got['pnl_pct_margin'] == pytest.approx(0.5)     # 2 of 400
+
+
+def test_CONTROL_an_unmeasured_return_is_None_not_zero():
+    from okxtrader.coordinator import position_returns
+    basis, _ = _pairs()
+    leg = LegFill('okx', 'BTC-USDT', 'BUY', 0.01, 65000.0,
+                  position_tickets=[1], contract_size=1.0)
+    position = SpreadPosition(basis.key, SpreadSide.SELL, 1.0, leg, leg,
+                              30.0, 'LIMIT', 0.01)
+    got = position_returns(position, net_pnl=None, closing_spread=None,
+                           margin_per_spread=None)
+    assert got == {'spread_move': None, 'notional': 1300.0, 'margin': None,
+                   'pnl_pct_notional': None, 'pnl_pct_margin': None}
