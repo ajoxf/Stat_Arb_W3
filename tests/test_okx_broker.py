@@ -36,7 +36,7 @@ def test_instrument_specs_are_okxs_own(broker):
     assert (spot.contract_size, spot.volume_min) == (1.0, 0.00001)
     assert (perp.contract_size, perp.volume_step, perp.tick_size) == \
         (0.1, 0.01, 0.01)
-    assert broker.symbol_info('BTC-USDT-261225').expiry > 0
+    assert broker.symbol_info('BTC-USD_UM-261225').expiry > 0
 
 
 def test_sizes_and_prices_are_legal():
@@ -198,7 +198,7 @@ def test_funding_reads_as_mirrors_swap(broker):
     mid = broker.symbol_tick('BTC-USDT-SWAP').bid
     assert abs(perp.swap_short) == pytest.approx(abs(rate) * 3 * 0.01 * mid,
                                                  rel=1e-3)
-    for spot_or_future in ('BTC-USDT', 'BTC-USDT-261225'):
+    for spot_or_future in ('BTC-USDT', 'BTC-USD_UM-261225'):
         info = broker.symbol_info(spot_or_future)
         assert (info.swap_mode, info.swap_long, info.swap_short) == (0, 0, 0)
 
@@ -305,3 +305,18 @@ def test_CONTROL_unreadable_okx_sends_no_close(broker):
     closed = broker.close_position_ticket('BTC-USDT-SWAP', r.ticket, 0.2,
                                           OrderSide.BUY)
     assert not closed.success and 'nothing was sent' in closed.error
+
+
+def test_an_inverse_contract_is_refused_and_says_why(sim, tmp_path):
+    """OKX's liquid dated futures (BTC-USD-261225) are COIN-margined:
+    sized in USD, settled in coin. The desk's maths is linear, so they
+    are refused by name - never mis-sized."""
+    sim.instruments_extra = None
+    b = OKXBroker(types.SimpleNamespace(name='okx', demo=True),
+                  client=OKXClient(transport=sim.handle), ledger_path=tmp_path)
+    assert b.initialize()
+    b._inverse.add('BTC-USD-261225')            # as OKX lists it
+    report = b.symbol_report('BTC-USD-261225')
+    assert not report['found']
+    assert 'coin-margined (inverse)' in report['error']
+    assert 'BTC-USD_UM-261225' in report['error']   # what to use instead

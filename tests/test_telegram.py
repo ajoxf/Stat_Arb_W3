@@ -1110,7 +1110,7 @@ def test_funding_is_announced_once_when_perps_are_held(bot):
 
 def test_the_CONTROL_no_perps_held_no_funding_alert(bot):
     bot.clock_.now = 1_800_000_000.0 - 3600
-    bot.desk.snapshot['okx_positions'] = [dict(PERP, inst='BTC-USDT-261225')]
+    bot.desk.snapshot['okx_positions'] = [dict(PERP, inst='BTC-USD_UM-261225')]
     watch(bot)
     bot.clock_.now = 1_800_000_000.0 - 300
     assert not any('OKX FUNDING' in t for t in watch(bot))

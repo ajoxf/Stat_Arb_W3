@@ -127,17 +127,17 @@ def test_instrument_search_covers_spot_perps_and_futures(web):
     kinds = {s['symbol']: s['inst_type'] for s in found['symbols']}
     assert kinds['BTC-USDT'] == 'SPOT'
     assert kinds['BTC-USDT-SWAP'] == 'SWAP'
-    assert kinds['BTC-USDT-261225'] == 'FUTURES'
+    assert kinds['BTC-USD_UM-261225'] == 'FUTURES'
     assert 'ETH-USDT' not in kinds
 
 
 def test_a_pair_is_derived_from_okx_specs(web):
     _save(web, api_key=KEY, secret=SECRET, passphrase=PASS)
-    answer = web.post('/api/pairs/BTC-USDT-SWAP|BTC-USDT-261225/derive',
+    answer = web.post('/api/pairs/BTC-USDT-SWAP|BTC-USD_UM-261225/derive',
                       json={'leg_a': {'account': 'desk',
                                       'symbol': 'BTC-USDT-SWAP'},
                             'leg_b': {'account': 'desk',
-                                      'symbol': 'BTC-USDT-261225'},
+                                      'symbol': 'BTC-USD_UM-261225'},
                             'pair_type': 'SPOT_FUTURE'}).get_json()
     assert answer['ok'], answer
     assert answer['specs']['a']['contract_size'] == 0.01
@@ -148,7 +148,7 @@ def test_a_pair_is_derived_from_okx_specs(web):
 
 @pytest.mark.parametrize('a,b,kind', [
     ('BTC-USDT', 'BTC-USDT-SWAP', 'SPOT_FUTURE'),
-    ('BTC-USDT-SWAP', 'BTC-USDT-261225', 'SPOT_FUTURE'),
+    ('BTC-USDT-SWAP', 'BTC-USD_UM-261225', 'SPOT_FUTURE'),
     ('BTC-USDT-SWAP', 'ETH-USDT-SWAP', 'RELATED'),
 ])
 def test_the_pair_type_follows_the_instruments(web, a, b, kind):

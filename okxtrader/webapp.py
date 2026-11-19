@@ -1328,7 +1328,7 @@ def _tidy_key(key):
 
 def okx_pair_type(spec_a, spec_b):
     """(pair type, why) for two OKX instruments, or (None, None) when
-    either is not one. BTC-USDT / BTC-USDT-SWAP / BTC-USDT-261225: the
+    either is not one. BTC-USDT / BTC-USDT-SWAP / BTC-USD_UM-261225: the
     coin is the first part of the instrument id."""
     kind_a, kind_b = spec_a.get('inst_type'), spec_b.get('inst_type')
     if not kind_a or not kind_b:

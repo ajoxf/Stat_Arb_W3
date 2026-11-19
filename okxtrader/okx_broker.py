@@ -125,6 +125,8 @@ class OKXBroker:
         self._lock = threading.RLock()
         self._instruments = {}                 # instId -> row
         self._inst_loaded = set()              # instTypes loaded
+        #: Inverse (coin-margined) contracts OKX lists and this desk refuses.
+        self._inverse = set()
         self._tick_cache = {}                  # instType -> (at, {id: row})
         self._book_cache = {}                  # instId -> (at, rows)
         self._pos_cache = None                 # (at, rows)
@@ -230,6 +232,7 @@ class OKXBroker:
                 # different P&L, and not what this desk prices.
                 if kind != 'SPOT' and row.get('ctType') not in ('linear',
                                                                 ''):
+                    self._inverse.add(row['instId'])
                     continue
                 self._instruments[row['instId']] = row
             self._inst_loaded.add(kind)
@@ -245,6 +248,16 @@ class OKXBroker:
                 return None
             row = self._instruments.get(symbol)
         return row
+
+    def not_found_reason(self, symbol):
+        """Why an instrument is not tradeable here, in words."""
+        if symbol in self._inverse:
+            family = symbol.rsplit('-', 1)[0]
+            return (f'{symbol} is a coin-margined (inverse) contract - sized '
+                    f'in USD and settled in coin, which this desk does not '
+                    f'price. Use the USD-margined one instead, e.g. '
+                    f'{family}_UM-{symbol.rsplit("-", 1)[1]}')
+        return f'{symbol} is not an OKX instrument'
 
     def inst_type(self, symbol):
         row = self._inst(symbol)
@@ -636,7 +649,7 @@ class OKXBroker:
         row = self._inst(symbol)
         if row is None:
             return {'symbol': symbol, 'found': False,
-                    'error': f'{symbol} is not an OKX instrument'}
+                    'error': self.not_found_reason(symbol)}
         info = self.symbol_info(symbol)
         tick = self.symbol_tick(symbol)
         fees = self.fees_bps(symbol)
