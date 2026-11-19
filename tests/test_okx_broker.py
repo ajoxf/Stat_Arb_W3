@@ -201,3 +201,19 @@ def test_funding_reads_as_mirrors_swap(broker):
     for spot_or_future in ('BTC-USDT', 'BTC-USDT-261225'):
         info = broker.symbol_info(spot_or_future)
         assert (info.swap_mode, info.swap_long, info.swap_short) == (0, 0, 0)
+
+
+def test_okx_fills_reach_the_journal(broker, tmp_path):
+    """The journal keeps DEAL rows only. An OKX fill labelled with its
+    instrument type was silently skipped, and the Fills tab stayed
+    empty with trades on."""
+    from okxtrader.database import Store
+    broker.send_market_order('BTC-USDT-SWAP', OrderSide.SELL, 0.2,
+                             comment='LADDER-X:A')
+    rows = broker.order_log(1)
+    assert rows and all(r['inst_type'] == 'DEAL' for r in rows)
+    store = Store(str(tmp_path / 'j.db'))
+    assert store.record_fills('okx', rows) == len(rows)
+    [fill] = store.fills()
+    assert fill['symbol'] == 'BTC-USDT-SWAP' and fill['is_ours'] == 1
+    assert fill['commission'] < 0

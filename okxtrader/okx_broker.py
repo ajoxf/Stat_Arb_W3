@@ -1224,7 +1224,9 @@ class OKXBroker:
             fee = _f(r.get('fee'), 0.0)
             out.append({
                 'order_id': r.get('ordId'), 'deal_id': r.get('tradeId'),
-                'symbol': r.get('instId'), 'inst_type': r.get('instType'),
+                # A DEAL, in the journal's own vocabulary: every row
+                # here is a fill (the instrument's type is in its id).
+                'symbol': r.get('instId'), 'inst_type': 'DEAL',
                 'side': side, 'pos_side': entry, 'order_type':
                     'maker' if r.get('execType') == 'M' else 'taker',
                 'quantity': _f(r.get('fillSz'), 0.0),

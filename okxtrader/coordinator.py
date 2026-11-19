@@ -3835,8 +3835,10 @@ class Coordinator:
                                 self.maker_closes.snapshot(key)),
                 'fill_style': 'maker' if self.maker.enabled(pair)
                 else 'taker',
-                # The OKX account's own VIP fees on each leg, in bps.
+                # The OKX account's own VIP fees on each leg, in bps,
+                # and the commission per lot they price.
                 'fee_bps': getattr(pair, 'fee_bps', None),
+                'fee_commission': getattr(pair, 'fee_settings', None),
                 'quoting_leg': pair.quoting_leg,
                 # The leg that will ACTUALLY rest the pending — the
                 # setting when there is one, otherwise the wider book.

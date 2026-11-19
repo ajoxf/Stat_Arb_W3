@@ -2021,8 +2021,13 @@
     // for one decision. Fair spread is the saved `algo_window`; Algo is
     // a switch on the running engine, never saved, off after a restart.
     ['.ls-algo', 'algo_window', 'algo-choice'],
-    ['.ls-comm-a', 'commission_per_lot_a', 'number', 'COMMISSION_PER_LOT_A'],
-    ['.ls-comm-b', 'commission_per_lot_b', 'number', 'COMMISSION_PER_LOT_B'],
+    // Blank is the normal state on OKX: the commission is priced from
+    // the account's own VIP fees, shown in the box as a hint. Only a
+    // number typed here overrides it.
+    ['.ls-comm-a', 'commission_per_lot_a', 'blank-number',
+     'COMMISSION_PER_LOT_A', 'vip'],
+    ['.ls-comm-b', 'commission_per_lot_b', 'blank-number',
+     'COMMISSION_PER_LOT_B', 'vip'],
     // Blank is a REAL state: it means the desk-wide threshold.
     ['.ls-stale', 'max_quote_age_sec', 'blank-number'],
     ['.ls-maxpos', 'max_positions', 'blank-number'],
@@ -2296,6 +2301,14 @@
           // there is no defaults page, so what is in the box is what
           // this pair uses.
           var seed = settings[entry[3]];
+          if (entry[4] === 'vip') {
+            // The OKX VIP-priced figure is never copied into the box:
+            // Apply would save it as this ladder's own and freeze it.
+            var vip = (live.fee_commission || {})[entry[3]];
+            seed = undefined;
+            input.placeholder = vip === undefined || vip === null
+              ? 'OKX fees' : 'OKX VIP ' + Number(vip).toFixed(4);
+          }
           var value = (own === undefined || own === null || own === '')
             ? seed : own;
           input.value = (value === undefined || value === null)

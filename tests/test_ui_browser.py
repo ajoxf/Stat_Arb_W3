@@ -996,11 +996,12 @@ def test_every_setting_shows_the_value_ACTUALLY_IN_FORCE(page):
         # every ladder.
         assert page.input_value('.ladder .ls-rows') == '30'
 
-        # A cost this pair has never been given shows the built-in
-        # number, plainly — there is no defaults page, so what is in
-        # the box is what this pair uses.
-        assert page.input_value('.ladder .ls-comm-a') == '2'
-        assert 'own' in page.get_attribute('.ladder .ls-comm-a', 'title')
+        # OKX: a commission this pair has never been given is priced
+        # from the account's VIP fees - the box stays EMPTY and says so,
+        # because copying the desk default in would freeze it on Apply.
+        assert page.input_value('.ladder .ls-comm-a') == ''
+        assert page.get_attribute('.ladder .ls-comm-a',
+                                  'placeholder').startswith('OKX')
 
         # ...and one it HAS been given shows that.
         assert page.input_value('.ladder .ls-comm-b') == '3.5'
@@ -1014,7 +1015,7 @@ def test_every_setting_shows_the_value_ACTUALLY_IN_FORCE(page):
         sent = page.evaluate('() => window.__sent')
 
         assert sent['order_type'] == 'LIMIT'
-        assert sent['commission_per_lot_a'] == 2         # written explicitly
+        assert sent['commission_per_lot_a'] is None      # still VIP-priced
         assert sent['commission_per_lot_b'] == 3.5       # its own
     finally:
         page.evaluate('() => { window.fetch = window.__realFetch; }')
