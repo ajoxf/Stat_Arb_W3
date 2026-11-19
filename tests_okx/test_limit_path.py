@@ -18,6 +18,11 @@ pytestmark = pytest.mark.quote
 
 @pytest.fixture
 def engine(config, pair, legs):
+    # These tests are about the QUOTING mechanics - several orders
+    # resting on one ladder, summed into one pending. The position
+    # limit (tests/test_position_limit.py) is off here so it does not
+    # stand in front of what is under test.
+    pair.max_positions = 0
     coordinator = Coordinator(config, legs, sleep=lambda s: None)
     coordinator.start()
     coordinator.poll_once()

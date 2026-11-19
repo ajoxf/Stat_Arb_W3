@@ -22,6 +22,7 @@ from types import SimpleNamespace
 from datetime import datetime
 
 from . import algo as algo_module, algofilters, analysis, atomicfile, \
+    combined, \
     backtest, bands, carry, costs, config as config_module, \
     depth as depth_book, fairvalue, hedgeratio, signals, sizing, \
     takeprofit
@@ -1870,11 +1871,31 @@ class Coordinator:
         if not self.algos.is_on(pair.key):
             return None
         try:
-            return self.algos.observe(pair, md, self._algo_positions(pair, md),
+            rows = self._algo_positions(pair, md)
+            if self.algos.mode(pair.key) != algo_module.LIVE:
+                # SIGNALS: the trader's fills on one side are ONE
+                # position to read and to exit - one average, one
+                # target, one stop, one alert. LIVE is never combined:
+                # it holds one trade, and closes the one it opened.
+                rows = combined.combine(rows, self._closes_working(pair))
+            return self.algos.observe(pair, md, rows,
                                       self._algo_gates(pair, md))
         except Exception as e:
             logging.exception('[ALGO %s] skipped this pass: %s', pair.key, e)
             return None
+
+    def _closes_working(self, pair):
+        """Position id -> quantity already working to CLOSE it."""
+        out = {}
+        for order in self.book.orders(pair.key):
+            if order.position_id:
+                out[order.position_id] = out.get(order.position_id, 0.0) \
+                    + float(order.remaining or 0.0)
+        # ...and a maker close resting at OKX closes all of its position.
+        for pid, job in self.maker_closes.jobs.items():
+            if job.pair_key == pair.key:
+                out[pid] = float(job.position.quantity or 0.0)
+        return out
 
     def _position_levels(self, pair, md, position, ladder_params,
                          ladder_settings, margin, atr):
@@ -2033,6 +2054,7 @@ class Coordinator:
             out[f'leg_{leg}_side'] = side
             out[f'leg_{leg}_entry'] = entry
             out[f'leg_{leg}_now'] = now
+            out[f'leg_{leg}_volume'] = getattr(fill, 'volume', None)
         return out
 
     #: How far back a derived history reaches by default.
@@ -2622,6 +2644,57 @@ class Coordinator:
             self._log_click(pair_key, side, level, quantity, answer)
             return answer
 
+    def _over_position_limit(self, pair, side, quantity):
+        """Why this click would hold more positions than the ladder
+        allows - in words - or None.
+
+        Counted: the positions open now, plus every working order that
+        would OPEN one (a working add that fills is the next position).
+        Only the OPENING part of a click is judged. A click that only
+        closes - the opposite side, no bigger than what it can cover -
+        is never refused: a guard must never prevent a close. The LIVE
+        Algo does not come through here; it holds one trade anyway.
+        """
+        limit = getattr(pair, 'max_positions', None)
+        if not limit:
+            return None
+        want = getattr(side, 'value', side)
+        try:
+            qty = float(quantity)
+        except (TypeError, ValueError):
+            return None
+        positions = self.book.positions(pair.key)
+        same = [p for p in positions if p.side.value == want]
+        opposite = [p for p in positions if p.side.value != want]
+        stays = len(opposite)
+        if opposite and self.config.get('CLOSE_FIRST', True):
+            # Reduce before opening: the click covers what is not
+            # already working to close, oldest first.
+            free = sum(max(float(p.quantity or 0.0)
+                           - self.book.armed_by_hand(p.position_id), 0.0)
+                       for p in opposite)
+            if qty <= free + 1e-9:
+                return None                    # a close, only a close
+            stays = sum(1 for p in opposite
+                        if self.book.armed_by_hand(p.position_id) > 1e-9)
+        openers = [o for o in self.book.orders(pair.key)
+                   if not o.position_id]
+        # A W3 maker fill resting both legs at OKX is an opening order
+        # too: when it fills it is the next position.
+        if self.maker.busy(pair.key):
+            openers.append(self.maker.jobs[pair.key])
+        held = len(same) + stays
+        if held + len(openers) + 1 <= limit:
+            return None
+        parts = [f'{held} open position{"s" if held != 1 else ""}']
+        if openers:
+            parts.append(f'{len(openers)} working order'
+                         f'{"s" if len(openers) != 1 else ""} that would '
+                         f'open another')
+        return (f'{pair.key} already has {" and ".join(parts)} - '
+                f'{limit} is the most this ladder may hold. Close one, or '
+                f'cancel a working order, first. Closes are never refused.')
+
     def _log_click(self, pair_key, side, level, quantity, answer):
         """One line per click: what was asked for, and what came of it.
 
@@ -2662,6 +2735,11 @@ class Coordinator:
         # NEW manual order is refused here, in words. Dry run and off
         # refuse nothing. Closes do not come through this path.
         refusal = self.algos.manual_order_refusal(pair_key)
+        if refusal:
+            return self._refuse(pair_key, side, level, refusal)
+        refusal = self._over_position_limit(
+            pair, side, pair.default_quantity if quantity is None
+            else quantity)
         if refusal:
             return self._refuse(pair_key, side, level, refusal)
         shared = self.legs_share_an_account(pair)
@@ -3692,6 +3770,7 @@ class Coordinator:
                 'contract_a_mt5': (pair.meta_a or {}).get('contract_size_mt5'),
                 'contract_b_mt5': (pair.meta_b or {}).get('contract_size_mt5'),
                 'max_quote_age_sec': pair.max_quote_age_sec,
+                'max_positions': pair.max_positions,
                 'max_quote_age_effective': (
                     pair.max_quote_age_sec
                     if pair.max_quote_age_sec is not None

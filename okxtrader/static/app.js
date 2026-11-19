@@ -154,10 +154,29 @@
       minimumFractionDigits: 2, maximumFractionDigits: 2});
   }
 
+  function toastStamp(at) {
+    /* WHEN, at the head of every box: a wall of alerts is a history,
+     * and a history with no times cannot be read in order. This PC's
+     * clock, date and time to the second. `at` is
+     * the engine's epoch seconds - the moment it happened, not the
+     * moment the page drew it. */
+    var when = typeof at === 'number' ? new Date(at * 1000) : new Date();
+    var pad = function (n) { return (n < 10 ? '0' : '') + n; };
+    var time = pad(when.getHours()) + ':' + pad(when.getMinutes()) + ':' +
+      pad(when.getSeconds());
+    time = when.getFullYear() + '-' + pad(when.getMonth() + 1) + '-' +
+      pad(when.getDate()) + ' ' + time;
+    var stamp = document.createElement('span');
+    stamp.className = 'toast-time';
+    stamp.textContent = time;
+    return stamp;
+  }
+
   function toast(message, kind) {
     var box = document.createElement('div');
     box.className = 'toast' + (kind === 'ok' ? ' ok' : '');
     box.innerHTML = '<span class="dismiss">&times;</span>';
+    box.appendChild(toastStamp());
     box.appendChild(document.createTextNode(message));
     // Errors used to stay until dismissed, on purpose — so that a
     // refusal could not scroll past unread. But a refusal that REPEATS
@@ -224,7 +243,10 @@
     signal_entry: [{hz: 523, ms: 110, gain: 0.08}, {hz: 659, ms: 110, gain: 0.08},
                    {hz: 784, ms: 180, gain: 0.08}],
     signal_exit: [{hz: 784, ms: 110, gain: 0.08}, {hz: 659, ms: 110, gain: 0.08},
-                  {hz: 523, ms: 180, gain: 0.08}]
+                  {hz: 523, ms: 180, gain: 0.08}],
+    // A market about to open: a bell, two even strokes - nothing like
+    // a fill or a signal, so it is never mistaken for one.
+    session: [{hz: 988, ms: 220, gain: 0.07}, {hz: 988, ms: 220, gain: 0.07}]
   };
   var audio = null;
 
@@ -291,13 +313,14 @@
     }
   }
 
-  function stickyToast(message) {
+  function stickyToast(message, at) {
     /* A SIGNALS alert: it stays until the trader dismisses it. The
      * trade it asks for is theirs to make, so it must not scroll away
      * unread the way an ordinary outcome does. */
     var box = document.createElement('div');
     box.className = 'toast signal';
     box.innerHTML = '<span class="dismiss">&times;</span>';
+    box.appendChild(toastStamp(at));
     box.appendChild(document.createTextNode(message));
     box.addEventListener('click', function () { box.remove(); });
     el('toasts').appendChild(box);
@@ -321,7 +344,7 @@
           typeof snapshot.at === 'number' && snapshot.at - alert.at > 30) {
         return;                       // on load, and not fresh: seen
       }
-      stickyToast((row.name || key) + ': ' + alert.text);
+      stickyToast((row.name || key) + ': ' + alert.text, alert.at);
       sound(alert.kind === 'ENTRY' ? 'signal_entry' : 'signal_exit');
       // The ladder's frame flashes - only if its window is open.
       var node = document.querySelector(
@@ -2002,6 +2025,7 @@
     ['.ls-comm-b', 'commission_per_lot_b', 'number', 'COMMISSION_PER_LOT_B'],
     // Blank is a REAL state: it means the desk-wide threshold.
     ['.ls-stale', 'max_quote_age_sec', 'blank-number'],
+    ['.ls-maxpos', 'max_positions', 'blank-number'],
     ['.ls-slip', 'slippage_allowance', 'number', 'SLIPPAGE_ALLOWANCE'],
     ['.ls-nights', 'break_even_nights', 'number', 'BREAK_EVEN_NIGHTS'],
     ['.ls-tp', 'tp_target_pct_of_margin', 'number', 'TP_TARGET_PCT_OF_MARGIN'],
@@ -3024,7 +3048,14 @@
   }
 
   function positionWords(position, digits) {
-    /* "BUY @ 59.11": the side and the spread it was ENTERED at. */
+    /* "BUY @ 59.11": the side and the spread it was ENTERED at. Fills
+     * read as one position say their size and that it is an average:
+     * "SELL 2 @ 9.76 avg". */
+    if (position.combined) {
+      return (position.side || '?') + ' ' + fmt(position.quantity, 2)
+        .replace(/\.?0+$/, '') + ' @ ' +
+        fmt(position.entry_spread, digits) + ' avg';
+    }
     return (position.side || '?') + ' @ ' + fmt(position.entry_spread, digits);
   }
 
@@ -3248,6 +3279,63 @@
       leg('B', row.account_b, row.symbol_b);
   }
 
+  function limitLine(row) {
+    /* The position limit, said where the position is read: how many
+     * are on, how many working orders would open another, and the most
+     * this ladder may hold. Only shown once it matters. */
+    var limit = row.max_positions;
+    if (!limit) { return ''; }
+    var held = (row.positions || []).length;
+    var openers = (row.orders || []).filter(function (o) {
+      return !o.position_id &&
+        (o.state === 'WORKING' || o.state === 'FILLING');
+    }).length;
+    if (held + openers < limit) { return ''; }
+    var what = openers && held
+      ? held + ' on + ' + openers + ' working add' + (openers > 1 ? 's' : '') +
+        ' = ' + (held + openers) + ' of ' + limit + '.'
+      : openers ? openers + ' working order' + (openers > 1 ? 's' : '') +
+        ' that would open = ' + openers + ' of ' + limit + '.'
+        : held + ' of ' + limit + ' positions on \u2014 the limit.';
+    return '<div class="aw-limit">' + '<b>' + what + '</b> A new order that ' +
+      'would OPEN is refused. Closes always work.</div>';
+  }
+
+  function fillsHtml(key, first, digits) {
+    /* The fills behind a combined position: folded, one click away. */
+    if (!first.combined) { return ''; }
+    state.fillsOpen = state.fillsOpen || {};
+    var fills = first.fills || [];
+    var now = Date.now() / 1000;
+    var rows = fills.map(function (f, i) {
+      var age = f.opened_at ? Math.max(0, Math.floor((now - f.opened_at) / 60))
+        + 'm ago' : DASH;
+      var pnl = f.net_pnl;
+      return '<span>#' + (i + 1) + ' ' + escapeHtml(first.side || '') + ' ' +
+        fmt(f.quantity, 2).replace(/\.?0+$/, '') + '</span><span>@ ' +
+        fmt(f.entry_spread, digits) + '</span><span>' + age + '</span>' +
+        '<span class="' + (pnl === null || pnl === undefined ? ''
+          : pnl >= 0 ? 'up' : 'down') + '">' + moneyOr(pnl) + '</span>';
+    }).join('');
+    return '<details class="aw-fills" data-key="' + escapeHtml(key) + '"' +
+      (state.fillsOpen[key] ? ' open' : '') + '><summary>Fills (' +
+      fills.length + ') \u2014 combined above</summary>' +
+      '<div class="aw-fill-rows">' + rows + '</div></details>';
+  }
+
+  function coverageHtml(first) {
+    /* A working close that covers only part of the whole position. */
+    if (!first.combined) { return ''; }
+    var covered = first.close_covered || 0;
+    var total = first.quantity || 0;
+    if (!(covered > 1e-9) || covered >= total - 1e-9) { return ''; }
+    var rest = total - covered;
+    return '<div class="aw-cover"><b>Working close covers ' +
+      fmt(covered, 2).replace(/\.?0+$/, '') + ' of ' +
+      fmt(total, 2).replace(/\.?0+$/, '') + '.</b> The other ' +
+      fmt(rest, 2).replace(/\.?0+$/, '') + ' has no close order.</div>';
+  }
+
   function renderAlgoWindow(key, row) {
     /* SIGNAL & POSITION, STATISTICS, FILTERS — the stat-arb dashboard's
      * three panels, for one ladder, from the engine's Algo block. */
@@ -3332,8 +3420,7 @@
     var held = block.positions || [];
     var first = held[0] || null;
     var position = first
-      ? (first.source && first.source !== 'ALGO' ? 'YOUR ' : '') +
-        (first.side === 'BUY' ? 'LONG' : 'SHORT') + ' ' +
+      ? (first.side === 'BUY' ? 'LONG' : 'SHORT') + ' ' +
         fmt(first.quantity, 2) : 'FLAT';
     var html = '<div class="aw-head">Signal &amp; Position</div>' +
       '<div class="aw-tiles">' + tile('SELL') + tile('BUY') +
@@ -3342,7 +3429,7 @@
       '<div class="aw-line" title="' + escapeHtml(block.blocked || '') + '">' +
       escapeHtml(algoLine(block, digits)) +
       (block.health && block.state !== 'BLOCKED' ? ' — ' + escapeHtml(block.health)
-        : '') + '</div>';
+        : '') + '</div>' + limitLine(row);
     if (first) {
       var delta = (first.closing_spread === null ||
                    first.closing_spread === undefined ||
@@ -3355,16 +3442,25 @@
         var now = first['leg_' + leg + '_now'];
         var change = (entry === null || entry === undefined ||
                       now === null || now === undefined) ? null : now - entry;
+        var lots = first['leg_' + leg + '_volume'];
         return kv('Leg ' + leg.toUpperCase() + ' (' +
-                  (first['leg_' + leg + '_side'] || '?') + ')',
-                  fmt(entry, 2) + ' \u2192 ' + fmt(now, 2) +
+                  (first['leg_' + leg + '_side'] || '?') +
+                  (first.combined && lots ? ' ' + fmt(lots, 2)
+                    .replace(/\.?0+$/, '') : '') + ')',
+                  fmt(entry, 2) + (first.combined ? ' avg' : '') +
+                  ' \u2192 ' + fmt(now, 2) +
                   (change === null ? '' : ' <small>(' +
                     (change > 0 ? '+' : '') + fmt(change, 2) + ')</small>'),
                   '', 'the leg\u2019s fill \u2192 the price it would close at now',
                   true);
       }
       html += '<div class="aw-grid">' +
-        kv('Entry spread', fmt(first.entry_spread, digits)) +
+        (first.combined
+          ? kv('Avg entry', fmt(first.entry_spread, digits) + ' <small>(' +
+               (first.fills || []).length + ' fills)</small>', '',
+               'the fills read as ONE position: their average, weighted '
+               + 'by size; each fill is listed under Fills')
+          : kv('Entry spread', fmt(first.entry_spread, digits))) +
         kv('\u0394 spread', delta === null ? DASH
           : (delta > 0 ? '+' : '') + fmt(delta, digits), good,
           'closing price now \u2212 entry: a LONG makes money when this is '
@@ -3376,7 +3472,8 @@
         legRow('a') + legRow('b') +
         kv('Age', first.age_sec === null || first.age_sec === undefined ? DASH
           : Math.floor(first.age_sec / 60) + 'm ' +
-            Math.floor(first.age_sec % 60) + 's') +
+            Math.floor(first.age_sec % 60) + 's' +
+            (first.combined ? ' <small>(oldest)</small>' : '')) +
         kv('Size', fmt(first.quantity, 2) + ' spread(s)') +
         '</div>' +
         kv('Levels', 'BE ' + fmt(first.break_even, digits) + ' · TP ' +
@@ -3393,6 +3490,7 @@
            '', 'compare with the CLOSING price: the Sell spread for a LONG, '
            + 'the Buy spread for a SHORT. In brackets: the net P&L of the '
            + 'whole position closing there, after every cost') +
+        fillsHtml(key, first, digits) + coverageHtml(first) +
         (params.progress_bar === false ? '' : progressHtml(first, digits));
     }
     node.querySelector('.aw-signal').innerHTML = html;
@@ -4022,7 +4120,8 @@
     // they fall on, so the ladder shows where the trade comes off.
     var levelMarks = [];
     ((row.algo_block || {}).positions || []).forEach(function (held) {
-      [['ENTRY', held.entry_spread, 'entry'], ['BE', held.break_even, 'be'],
+      [[held.combined ? 'AVG' : 'ENTRY', held.entry_spread, 'entry'],
+       ['BE', held.break_even, 'be'],
        ['TP', held.tp, 'tp'], ['SL', held.sl, 'sl']].forEach(function (m) {
         if (m[1] !== null && m[1] !== undefined && isFinite(m[1])) {
           levelMarks.push({tag: m[0], at: m[1], cls: m[2]});
@@ -7179,6 +7278,17 @@
   // The settings panel lives in its own file and borrows these: one
   // modal, one toast rack, one command path. A second copy of any of
   // them is a second set of house rules to keep.
+  // The fills list stays folded or open across the poll's repaint:
+  // `toggle` does not bubble, so it is caught on the way down.
+  document.addEventListener('toggle', function (event) {
+    var box = event.target;
+    if (!box || !box.classList || !box.classList.contains('aw-fills')) {
+      return;
+    }
+    state.fillsOpen = state.fillsOpen || {};
+    state.fillsOpen[box.dataset.key] = box.open;
+  }, true);
+
   window.MT5Trader = {
     state: state, render: render, toast: toast, ask: ask, send: send,
     panelId: panelId, openPanel: openPanel, closePanel: closePanel,

@@ -99,6 +99,8 @@ def test_a_click_through_the_bridge_is_the_same_order_as_a_direct_one(
 def test_cancel_and_the_global_kill_reach_every_ladder(bridge, pair, legs):
     coordinator, runner, log = bridge
     runner.prime()
+    pair.max_positions = 0      # four working orders: the limit is not
+                                # what this test is about
     for _ in range(3):
         coordinator.click(pair.key, SpreadSide.BUY, 58.4)
     coordinator.click(pair.key, SpreadSide.SELL, 58.9)

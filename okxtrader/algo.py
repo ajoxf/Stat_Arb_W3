@@ -417,7 +417,11 @@ _POSITION_DISPLAY = ('quantity', 'opened_at', 'age_sec', 'source',
                      'tp_money', 'sl_money', 'atr_stop_mult',
                      'atr_target_mult',
                      'leg_a_side', 'leg_a_entry', 'leg_a_now',
-                     'leg_b_side', 'leg_b_entry', 'leg_b_now')
+                     'leg_b_side', 'leg_b_entry', 'leg_b_now',
+                     # Fills read as one position (`combined.py`): the
+                     # panel lists them and the lots behind each leg.
+                     'leg_a_volume', 'leg_b_volume', 'combined',
+                     'position_ids', 'fills', 'close_covered')
 
 
 def reentry_window(p):

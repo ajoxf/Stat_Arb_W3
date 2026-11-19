@@ -324,7 +324,7 @@ def chromium_path():
     None lets Playwright find its own.
     """
     root = Path(os.environ.get('PLAYWRIGHT_BROWSERS_PATH', '/opt/pw-browsers'))
-    for candidate in sorted(root.glob('chromium-*/chrome-linux/chrome')):
+    for candidate in sorted(root.glob('chromium-*/chrome-linux*/chrome')):
         return str(candidate)
     return None
 
@@ -5756,9 +5756,64 @@ def test_a_signals_alert_is_said_once_and_stays_until_dismissed(page):
         publisher.publish()
 
 
-def test_your_position_is_marked_on_the_ladder_and_named_yours(page):
-    """A manual position the Algo watches: YOUR SHORT in its window, and
-    its entry / target / stop tagged on the ladder's own prices."""
+def test_every_alert_box_says_when_it_happened(page):
+    """A wall of alerts is a history: each box carries the time of the
+    ALERT (the engine's own `at`), not when the page drew it, with its
+    date - today's included."""
+    open_ladder(page)
+    page.evaluate("() => document.getElementById('toasts').innerHTML = ''")
+    publisher = page.paths['publisher']
+    publisher.algo = 'ALGO'
+    now = time.time()
+    expect = page.evaluate(
+        """(at) => { const d = new Date(at * 1000);
+                     const p = n => (n < 10 ? '0' : '') + n;
+                     return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-'
+                            + p(d.getDate()) + ' ' + p(d.getHours()) + ':'
+                            + p(d.getMinutes()) + ':' + p(d.getSeconds()); }""",
+        now - 20)
+    publisher.algo_block = _algo_block(signal_alert={
+        'id': 'T1', 'seq': 1, 'kind': 'EXIT', 'side': 'SELL',
+        'reason': 'stop', 'at': now - 20,
+        'text': 'Stop loss — close your SELL 1 at 9.9860 (net -502.00)'})
+    try:
+        publisher.publish()
+        page.wait_for_selector('#toasts .toast.signal', timeout=WAIT)
+        stamp = page.text_content('#toasts .toast.signal .toast-time')
+        assert stamp == expect, (stamp, expect)
+        page.locator('#toasts .toast.signal').first.click()
+        # Another day: its own date, not today's.
+        dated = page.evaluate(
+            """(at) => { const d = new Date(at * 1000);
+                         return d.getFullYear() + '-'; }""", now - 3 * 86400)
+        publisher.algo_block = _algo_block(signal_alert={
+            'id': 'T2', 'seq': 2, 'kind': 'EXIT', 'side': 'SELL',
+            'reason': 'stop', 'at': now - 3 * 86400, 'text': 'old one'})
+        publisher.publish()
+        page.wait_for_selector('#toasts .toast.signal', timeout=WAIT)
+        assert page.text_content(
+            '#toasts .toast.signal .toast-time').startswith(dated)
+        page.locator('#toasts .toast.signal').first.click()
+    finally:
+        publisher.algo = 'NONE'
+        publisher.algo_block = None
+        publisher.publish()
+
+
+def test_an_ordinary_toast_is_stamped_too(page):
+    open_ladder(page)
+    page.evaluate("() => document.getElementById('toasts').innerHTML = ''")
+    page.evaluate("() => window.MT5Trader.toast('hello', 'ok')")
+    stamp = page.text_content('#toasts .toast .toast-time')
+    assert len(stamp) == 19 and stamp.count(':') == 2, stamp
+    assert stamp[4] == '-' and stamp[7] == '-' and stamp[10] == ' ', stamp
+    page.evaluate("() => document.getElementById('toasts').innerHTML = ''")
+
+
+def test_a_position_is_marked_on_the_ladder_and_named_plainly(page):
+    """A manual position the Algo watches: SHORT in its window - not
+    "YOUR SHORT", the desk's own word - and its entry / target / stop
+    tagged on the ladder's own prices."""
     open_ladder(page)
     publisher = page.paths['publisher']
     levels = page.evaluate(
@@ -5780,16 +5835,152 @@ def test_your_position_is_marked_on_the_ladder_and_named_yours(page):
         assert page.locator('.ladder .lvl-tag.be').count() == 0
         page.wait_for_function(
             "() => (document.querySelector('.window.algowin .aw-pos')"
-            " || {textContent: ''}).textContent.includes('YOUR SHORT')",
+            " || {textContent: ''}).textContent.indexOf('SHORT 1') === 0",
             timeout=WAIT)
-        # The control: the Algo's own position is not called yours.
-        held['source'] = 'ALGO'
+        assert 'YOUR' not in page.text_content('.window.algowin .aw-pos')
+    finally:
+        publisher.algo = 'NONE'
+        publisher.algo_block = None
+        publisher.publish()
+
+
+def _combined_short(levels, covered=0.0):
+    return {'position_id': 'AVG:P1+P2', 'combined': True,
+            'position_ids': ['P1', 'P2'], 'side': 'SELL', 'quantity': 2.0,
+            'source': 'MANUAL', 'entry_spread': levels[4],
+            'closing_spread': levels[5], 'break_even': levels[4],
+            'tp': levels[7], 'sl': levels[2], 'tp_money': 6.0,
+            'sl_money': -9.0, 'net_pnl': -1.5, 'exit': None,
+            'opened_at': time.time() - 600, 'age_sec': 600.0,
+            'leg_a_side': 'BUY', 'leg_a_volume': 0.2, 'leg_a_entry': 4607.5,
+            'leg_a_now': 4607.4, 'leg_b_side': 'SELL', 'leg_b_volume': 0.2,
+            'leg_b_entry': 4666.6, 'leg_b_now': 4660.8,
+            'fills': [{'position_id': 'P1', 'quantity': 1.0,
+                       'entry_spread': levels[6], 'opened_at': time.time() - 600,
+                       'net_pnl': -3.0},
+                      {'position_id': 'P2', 'quantity': 1.0,
+                       'entry_spread': levels[2], 'opened_at': time.time() - 60,
+                       'net_pnl': 1.5}],
+            'close_covered': covered}
+
+
+def test_two_fills_read_as_one_averaged_position(page):
+    """The ladder and the Algo window show ONE position: its size, its
+    average, one set of tags - and the fills behind it folded away."""
+    open_ladder(page)
+    publisher = page.paths['publisher']
+    levels = page.evaluate(
+        """() => window.MT5Trader.state.snapshot
+             .pairs['XAUUSD_|GC1226'].rows.map(r => r.level)""")
+    publisher.algo = 'ALGO'
+    publisher.algo_block = _algo_block(state='IN_POSITION', signal=None,
+                                       positions=[_combined_short(levels)])
+    try:
         publisher.publish()
         page.wait_for_function(
             "() => (document.querySelector('.window.algowin .aw-pos')"
-            " || {textContent: ''}).textContent.indexOf('SHORT') === 0",
+            " || {textContent: ''}).textContent.indexOf('SHORT 2') === 0",
             timeout=WAIT)
+        line = page.text_content('.window.algowin .aw-line')
+        assert 'SELL 2 @' in line and 'avg' in line, line
+        signal = page.text_content('.window.algowin .aw-signal')
+        assert 'Avg entry' in signal and '(2 fills)' in signal
+        assert 'Leg B (SELL 0.2)' in signal and '(oldest)' in signal
+        # One set of tags, the entry marked as the average.
+        assert page.locator('.ladder .lvl-tag.entry').count() == 1
+        assert page.text_content('.ladder .lvl-tag.entry') == 'AVG'
+        # The fills: folded by default...
+        assert page.evaluate(
+            "() => document.querySelector('.aw-fills').open") is False
+        page.click('.aw-fills summary')
+        page.wait_for_timeout(700)               # three repaints later
+        assert page.evaluate(
+            "() => document.querySelector('.aw-fills').open") is True
+        assert '#2 SELL 1' in page.text_content('.aw-fills')
+        page.click('.aw-fills summary')          # folded again
+        page.wait_for_timeout(500)
+        assert page.evaluate(
+            "() => document.querySelector('.aw-fills').open") is False
+        # No close order, or one that covers the whole: no warning.
+        assert page.locator('.aw-cover').count() == 0
     finally:
+        publisher.algo = 'NONE'
+        publisher.algo_block = None
+        publisher.publish()
+
+
+def test_a_close_that_covers_part_of_the_whole_is_said(page):
+    open_ladder(page)
+    publisher = page.paths['publisher']
+    levels = page.evaluate(
+        """() => window.MT5Trader.state.snapshot
+             .pairs['XAUUSD_|GC1226'].rows.map(r => r.level)""")
+    publisher.algo = 'ALGO'
+    publisher.algo_block = _algo_block(
+        state='IN_POSITION', signal=None,
+        positions=[_combined_short(levels, covered=1.0)])
+    try:
+        publisher.publish()
+        page.wait_for_selector('.aw-cover', timeout=WAIT)
+        text = page.text_content('.aw-cover')
+        assert 'covers 1 of 2' in text and 'other 1 has no close' in text
+        # Control: covering the whole, nothing to say.
+        publisher.algo_block = _algo_block(
+            state='IN_POSITION', signal=None,
+            positions=[_combined_short(levels, covered=2.0)])
+        publisher.publish()
+        page.wait_for_function(
+            "() => !document.querySelector('.aw-cover')", timeout=WAIT)
+    finally:
+        publisher.algo = 'NONE'
+        publisher.algo_block = None
+        publisher.publish()
+
+
+def test_the_position_limit_is_said_once_it_is_reached(page):
+    open_ladder(page)
+    publisher = page.paths['publisher']
+    levels = page.evaluate(
+        """() => window.MT5Trader.state.snapshot
+             .pairs['XAUUSD_|GC1226'].rows.map(r => r.level)""")
+    publisher.algo = 'ALGO'
+    publisher.algo_block = _algo_block(
+        state='IN_POSITION', signal=None,
+        positions=[_combined_short(levels)])
+    two = [{'position_id': 'P%d' % i, 'side': 'SELL', 'quantity': 1.0,
+            'entry_spread': levels[4], 'source': 'MANUAL',
+            'leg_a': {'volume': 0.1}, 'leg_b': {'volume': 0.1}}
+           for i in (1, 2)]
+    try:
+        publisher.pair_extra = {'max_positions': 2, 'positions': two}
+        publisher.publish()
+        page.wait_for_selector('.aw-limit', timeout=WAIT)
+        assert '2 of 2 positions on' in page.text_content('.aw-limit')
+        assert 'Closes always work' in page.text_content('.aw-limit')
+        # Control: one on, nothing working - under the limit, not said.
+        publisher.pair_extra = {'max_positions': 2, 'positions': two[:1]}
+        publisher.publish()
+        page.wait_for_function(
+            "() => !document.querySelector('.aw-limit')", timeout=WAIT)
+        # A working add counts: one on + one working = the limit.
+        publisher.pair_extra = {'max_positions': 2, 'positions': two[:1],
+                                'orders': [{'order_id': 'W1', 'side': 'SELL',
+                                            'level': levels[1],
+                                            'quantity': 1.0,
+                                            'filled_quantity': 0.0,
+                                            'state': 'WORKING',
+                                            'position_id': None}]}
+        publisher.publish()
+        page.wait_for_selector('.aw-limit', timeout=WAIT)
+        assert '1 on + 1 working add = 2 of 2' in page.text_content(
+            '.aw-limit')
+        # Control: the limit off, never said.
+        publisher.pair_extra = {'max_positions': 0, 'positions': two}
+        publisher.publish()
+        page.wait_for_function(
+            "() => !document.querySelector('.aw-limit')", timeout=WAIT)
+    finally:
+        publisher.pair_extra = {}
         publisher.algo = 'NONE'
         publisher.algo_block = None
         publisher.publish()
@@ -6364,3 +6555,174 @@ def test_a_derive_that_found_nothing_reads_as_a_sentence(page):
     assert 'required 1' not in note
     page.evaluate('() => { window.fetch = window.__realFetch; }')
     assert page.errors == []
+
+
+# -- market sessions -----------------------------------------------------------
+
+def _sessions_at(page, iso):
+    """Stand the sessions clock at `iso` (UTC) and repaint."""
+    page.evaluate("""(iso) => {
+        window.MT5Sessions.now = () => new Date(iso);
+        window.MT5Sessions.tick();
+    }""", iso)
+    return page.evaluate("(iso) => window.MT5Sessions.snapshot(new Date(iso))",
+                         iso)
+
+
+def _clear_session_alerts(page):
+    page.evaluate("""() => {
+        try { Object.keys(localStorage).filter(k => k.startsWith('mkt:'))
+                .forEach(k => localStorage.removeItem(k)); } catch (e) {}
+        document.getElementById('toasts').innerHTML = '';
+    }""")
+
+
+def _restore_sessions_clock(page):
+    page.evaluate("""() => {
+        window.MT5Sessions.now = () => new Date();
+        window.MT5Sessions.tick();
+        document.getElementById('toasts').innerHTML = '';
+        document.getElementById('mkt-panel').hidden = true;
+    }""")
+
+
+def test_the_strip_counts_down_to_the_centres_and_okx_funding(page):
+    open_ladder(page)
+    try:
+        # Thu 01:00 UTC: Tokyo (09:00 JST = 00:00 UTC) has been open an
+        # hour; Hong Kong opens at 09:30 HKT = 01:30 UTC.
+        snap = _sessions_at(page, '2026-11-19T01:00:00Z')
+        rows = {r['name']: r for r in snap['rows']}
+        assert list(rows) == ['Tokyo', 'Hong Kong', 'London', 'New York',
+                              'OKX funding']
+        assert rows['Tokyo']['open'] and rows['Tokyo']['tone'] == 'open'
+        assert rows['Hong Kong']['tone'] == 'soon'
+        assert round(rows['Hong Kong']['toOpen']) == 30
+        assert snap['headline'] == 'Next: Hong Kong opens in 30m'
+        # Funding is the next of 00:00 / 08:00 / 16:00 UTC: 08:00.
+        assert rows['OKX funding']['at'] == '08:00'
+        assert round(rows['OKX funding']['toOpen']) == 7 * 60
+        strip = page.text_content('#mkt-strip')
+        assert 'Hong Kong Thu 09:00 · opens in 30m' in strip
+        assert 'OKX funding 08:00 UTC · in 7h 0m' in strip
+        assert page.locator('#mkt-strip .mkt-chip').count() == 5
+        # Thu 14:40 UTC: New York (09:30 ET) opened 10 minutes ago.
+        snap = _sessions_at(page, '2026-11-19T14:40:00Z')
+        rows = {r['name']: r for r in snap['rows']}
+        assert rows['New York']['tone'] == 'hot'
+        assert rows['London']['tone'] == 'open'
+        assert snap['headline'] == ('New York opened 10m ago — expect '
+                                    'volatility')
+        assert 'JUST OPENED · closes in 6h 20m' in page.text_content(
+            '#mkt-strip')
+    finally:
+        _restore_sessions_clock(page)
+
+
+def test_new_york_daylight_saving_moves_the_open_by_itself(page):
+    """09:30 in New York is 14:30 UTC in November and 13:30 in July."""
+    open_ladder(page)
+    try:
+        summer = {r['name']: r for r in
+                  _sessions_at(page, '2026-07-15T13:35:00Z')['rows']}
+        assert summer['New York']['open'] and \
+            summer['New York']['tone'] == 'hot'
+        winter = {r['name']: r for r in
+                  _sessions_at(page, '2026-11-18T13:35:00Z')['rows']}
+        assert not winter['New York']['open']          # still 08:35 ET
+        assert round(winter['New York']['toOpen']) == 55
+    finally:
+        _restore_sessions_clock(page)
+
+
+def test_the_weekend_counts_the_centres_to_monday_but_funding_goes_on(page):
+    open_ladder(page)
+    try:
+        # Saturday noon UTC: every centre shut; Tokyo opens Monday 09:00
+        # JST = Sunday 00:00 UTC, 36h away. Funding is at 16:00 today.
+        rows = {r['name']: r for r in
+                _sessions_at(page, '2026-11-21T12:00:00Z')['rows']}
+        assert not any(r['open'] for r in rows.values())
+        assert round(rows['Tokyo']['toOpen']) == 36 * 60
+        assert round(rows['OKX funding']['toOpen']) == 4 * 60
+    finally:
+        _restore_sessions_clock(page)
+
+
+def test_ten_minutes_before_an_open_a_pop_up_says_so_once(page):
+    open_ladder(page)
+    _clear_session_alerts(page)
+    try:
+        # Control: half an hour before London, too early - nothing said.
+        _sessions_at(page, '2026-11-19T07:30:00Z')
+        assert page.locator('#toasts .toast').count() == 0
+        # 8 minutes before London's 08:00 - which is also the 08:00 UTC
+        # funding: both said.
+        _sessions_at(page, '2026-11-19T07:52:00Z')
+        page.wait_for_selector('#toasts .toast', timeout=WAIT)
+        text = page.text_content('#toasts')
+        assert 'London opens in 8m' in text
+        assert 'OKX funding in 8m (08:00 UTC)' in text
+        # ...and only once, however many seconds tick by.
+        _sessions_at(page, '2026-11-19T07:53:00Z')
+        assert page.locator('#toasts .toast').count() == 2
+    finally:
+        _clear_session_alerts(page)
+        _restore_sessions_clock(page)
+
+
+def test_funding_is_alerted_on_a_saturday_too(page):
+    open_ladder(page)
+    _clear_session_alerts(page)
+    try:
+        _sessions_at(page, '2026-11-21T15:55:00Z')
+        page.wait_for_selector('#toasts .toast', timeout=WAIT)
+        assert 'OKX funding in 5m (16:00 UTC)' in page.text_content(
+            '#toasts')
+    finally:
+        _clear_session_alerts(page)
+        _restore_sessions_clock(page)
+
+
+def test_ten_minutes_before_new_yorks_close_a_pop_up_says_so(page):
+    open_ladder(page)
+    _clear_session_alerts(page)
+    try:
+        # 16:00 ET is 21:00 UTC in November.
+        _sessions_at(page, '2026-11-19T20:55:00Z')
+        page.wait_for_selector('#toasts .toast', timeout=WAIT)
+        assert 'New York closes in 5m (16:00 local)' in page.text_content(
+            '#toasts')
+        # Control: London's close is not one it alerts on.
+        _clear_session_alerts(page)
+        _sessions_at(page, '2026-11-19T16:25:00Z')
+        assert page.locator('#toasts .toast').count() == 0
+    finally:
+        _clear_session_alerts(page)
+        _restore_sessions_clock(page)
+
+
+def test_sessions_opens_a_timeline_with_the_moment_marked(page):
+    open_ladder(page)
+    try:
+        _sessions_at(page, '2026-11-19T14:40:00Z')
+        assert page.evaluate(
+            "() => document.getElementById('mkt-panel').hidden") is True
+        page.click('#mkt-strip .mkt-more')
+        page.wait_for_selector('#mkt-panel .mkt-row', timeout=WAIT)
+        assert page.locator('#mkt-panel .mkt-row').count() == 5
+        assert page.locator('#mkt-panel .mkt-now').count() == 1
+        # New York's bar starts at 14:30 UTC in November.
+        left = page.evaluate("""() => document.querySelectorAll(
+            '#mkt-panel .mkt-row')[3].querySelector('.mkt-bar').style.left""")
+        assert left.startswith('60.41'), left
+        # Funding: three marks, at 00:00, 08:00 and 16:00 UTC.
+        marks = page.evaluate("""() => Array.from(document.querySelectorAll(
+            '#mkt-panel .mkt-row')[4].querySelectorAll('.mkt-bar'))
+            .map(b => b.style.left)""")
+        assert [m[:5] for m in marks] == ['0%', '33.33', '66.66'], marks
+        page.click('#mkt-panel .mkt-close')
+        assert page.evaluate(
+            "() => document.getElementById('mkt-panel').hidden") is True
+    finally:
+        _restore_sessions_clock(page)

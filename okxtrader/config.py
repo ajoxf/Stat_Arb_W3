@@ -474,6 +474,23 @@ class AccountConfig:
                    base_url=raw.get('base_url'))
 
 
+#: The most positions a ladder holds at once unless it says otherwise.
+DEFAULT_MAX_POSITIONS = 2
+
+
+def _clean_max_positions(value):
+    """Blank is the default of 2; 0 is off; anything else a whole
+    number of positions. A value that is not a number is the default -
+    never no limit by accident."""
+    if value in (None, ''):
+        return DEFAULT_MAX_POSITIONS
+    try:
+        number = int(float(value))
+    except (TypeError, ValueError):
+        return DEFAULT_MAX_POSITIONS
+    return max(number, 0)
+
+
 class PairConfig:
     """One ladder: two symbols on two accounts, and how they are traded.
 
@@ -488,7 +505,7 @@ class PairConfig:
                  hedge_ratio=1.0, hedge_ratio_for=None, pair_type='SPOT_FUTURE',
                  increment=None, clip_lots_a=1.0, clip_lots_b=1.0,
                  contract_size_a=None, contract_size_b=None,
-                 max_quote_age_sec=None,
+                 max_quote_age_sec=None, max_positions=None,
                  default_quantity=1.0, order_type=OrderType.LIMIT.value,
                  exit_type=OrderType.MARKET.value,
                  time_in_force=TimeInForce.DAY.value,
@@ -552,6 +569,10 @@ class PairConfig:
         #: slow pair refuses every order all day on a market that is
         #: merely quiet.
         self.max_quote_age_sec = _blank_to_none(max_quote_age_sec)
+        #: The most positions this ladder may hold at once, counting a
+        #: working order that would OPEN one. Blank is the default of
+        #: 2; 0 turns the limit off. Closes are never counted or held.
+        self.max_positions = _clean_max_positions(max_positions)
         self.default_quantity = float(default_quantity or 1.0)
         # Blank is the DEFAULT, never an exception: see `_choice`.
         self.order_type = _choice(OrderType, order_type,
@@ -790,7 +811,7 @@ class PairConfig:
                    # never typed: it is the hedge, and it is derived.
                    'clip_lots_a', 'clip_lots_b',
                    'contract_size_a', 'contract_size_b',
-                   'max_quote_age_sec',
+                   'max_quote_age_sec', 'max_positions',
                    'algo_window', 'show_fair_window', 'pair_type',
                    'algo_params',
                    'session_open', 'session_close',
@@ -842,6 +863,8 @@ class PairConfig:
                 value = int(value or 30)
             elif field == 'max_quote_age_sec':
                 value = _blank_to_none(value)
+            elif field == 'max_positions':
+                value = _clean_max_positions(value)
             elif field in ('contract_size_a', 'contract_size_b'):
                 # Blank is MT5's own, which is the right answer almost
                 # always. Never 1: a contract size of 1 would price
@@ -867,6 +890,7 @@ class PairConfig:
             'contract_size_a': self.contract_size_a,
             'contract_size_b': self.contract_size_b,
             'max_quote_age_sec': self.max_quote_age_sec,
+            'max_positions': self.max_positions,
             'default_quantity': self.default_quantity,
             'order_type': self.order_type.value,
             'exit_type': self.exit_type.value,

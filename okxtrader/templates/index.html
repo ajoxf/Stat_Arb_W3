@@ -28,6 +28,9 @@
   </svg>
   <span class="brand-name">NEXUS</span>
   <span class="brand-note">spread terminal</span>
+  <!-- When to expect the market to move: each big centre's open, and
+       New York's settlement. Filled by sessions.js; display only. -->
+  <span id="mkt-strip"></span>
   <!-- The padlock, in the one place that is always on screen. TT puts
        it in the corner of the workspace for the same reason: a lock
        you have to go and find is a lock nobody uses on the way out.
@@ -541,6 +544,10 @@
             <input class="ls-stale" type="number" min="0" step="1"
                    placeholder="default"
                    title="How long EITHER leg of this pair may go unchanged before the spread is called stale and orders are withheld. Blank uses the desk-wide setting. Raise it for an instrument that is simply quiet — a dated future trading a few times a minute is not a dead feed. 0 turns the guard off for this pair, which also stops it catching a leg that has genuinely STOPPED."></label>
+          <label class="lsf"><span>Max positions</span>
+            <input class="ls-maxpos" type="number" min="0" step="1"
+                   placeholder="2"
+                   title="The most positions this ladder may hold at once, counting a working order that would OPEN one. A click that would go over it is refused, in words; a CLOSE is never refused. Blank is 2. 0 turns the limit off. The LIVE Algo holds one trade and is not counted here."></label>
           <label class="lsf"><span>Slippage allowance</span>
             <input class="ls-slip" type="number" min="0" step="0.01" placeholder="default"></label>
           <label class="lsf"><span>Nights held</span>
@@ -781,7 +788,14 @@
   </section>
 </template>
 
+<!-- Market sessions: a 24-hour timeline, opened from the top bar. -->
+<div id="mkt-panel" hidden>
+  <div class="mkt-title">Market sessions <button type="button"
+       class="mkt-close" aria-label="Close">&times;</button></div>
+  <div class="mkt-body"></div>
+</div>
 <script src="{{ url_for('static', filename='app.js') }}?v={{ asset_version }}"></script>
 <script src="{{ url_for('static', filename='settings.js') }}?v={{ asset_version }}"></script>
+<script src="{{ url_for('static', filename='sessions.js') }}?v={{ asset_version }}"></script>
 </body>
 </html>

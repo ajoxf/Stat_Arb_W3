@@ -24,6 +24,7 @@ import time
 import uuid
 
 from . import atomicfile
+from .config import _clean_max_positions
 from .models import OrderType, OvernightMode, TimeInForce
 
 
@@ -172,6 +173,8 @@ class CommandRunner:
         #: withheld. Blank = the desk-wide MAX_QUOTE_AGE_SEC.
         'max_quote_age_sec': (
             lambda v: float(v) if v not in (None, '') else None),
+        #: The most positions this ladder may hold; blank = 2, 0 = off.
+        'max_positions': lambda v: _clean_max_positions(v),
         #: Which ALGO this ladder runs — one at a time, NONE by
         #: default. It measures and says what it would do; it does not
         #: trade, and a click on the ladder is unaffected either way.

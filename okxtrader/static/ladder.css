@@ -1458,6 +1458,12 @@ table.keys td { padding: 2px 0; font-size: 12px; }
   background: #edf7ee;
 }
 .toast .dismiss { float: right; color: var(--muted); }
+.toast .toast-time {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-weight: 400;
+  opacity: 0.75;
+  margin-right: 8px;
+}
 
 /* -- settings: accounts and pairs ------------------------------------ */
 
@@ -2353,3 +2359,73 @@ td.bid.ticked, td.ask.ticked { animation: size-tick 320ms ease-out; }
 .window.chartwin .cw-tip tr.cols th, .window.chartwin .cw-tip tr.cols td {
   font: 600 10px var(--font); color: #6c757d; text-transform: uppercase;
   letter-spacing: .03em; }
+
+/* -- one position per side: the fills behind it, and the limit ---------- */
+.aw-limit {
+  background: #fdecea; border: 1px solid #d93025; color: #8a1c12;
+  padding: 4px 6px; margin: 4px 0; font-size: 11px; border-radius: 3px;
+}
+.aw-cover {
+  background: #fff4d6; border: 1px solid #e0b040; color: #6b4a00;
+  padding: 4px 6px; margin: 4px 0; font-size: 11px; border-radius: 3px;
+}
+.aw-fills { margin: 4px 0; font-size: 11px; }
+.aw-fills summary { cursor: pointer; font-weight: 600; }
+.aw-fill-rows {
+  display: grid; grid-template-columns: auto auto auto auto;
+  gap: 2px 12px; font-family: var(--mono, ui-monospace, monospace);
+  margin-top: 3px;
+}
+.aw-fill-rows .up { color: var(--traded, #1e8e3e); }
+.aw-fill-rows .down { color: #c0392b; }
+
+/* -- market sessions: the top-bar strip and its timeline ---------------- */
+#mkt-strip {
+  display: inline-flex; align-items: center; gap: 4px; margin-left: 12px;
+  overflow: hidden; min-width: 0; font-size: 10.5px;
+}
+.mkt-head {
+  font-weight: 700; margin-right: 4px; padding: 0 6px; border-radius: 8px;
+  line-height: 15px; background: #fff4d6; color: #6b4a00;
+}
+.mkt-head.hot { background: #d93025; color: #fff; }
+.mkt-chip {
+  padding: 0 6px; border-radius: 8px; line-height: 15px;
+  border: 1px solid transparent; white-space: nowrap;
+}
+.mkt-chip.off { background: rgba(127, 127, 127, .12); color: var(--frame-text); }
+.mkt-chip.soon { background: #fff4d6; color: #6b4a00; border-color: #e0b040; }
+.mkt-chip.open { background: #e6f4ea; color: #1e6b34; border-color: #8cc79b; }
+.mkt-chip.hot { background: #fdecea; color: #8a1c12; border-color: #d93025;
+                font-weight: 600; }
+.mkt-more {
+  background: none; border: 0; color: var(--frame-text); cursor: pointer;
+  font-size: 10.5px; padding: 0 4px; text-decoration: underline;
+}
+#mkt-panel {
+  position: fixed; top: 22px; right: 12px; width: 720px; max-width: 96vw;
+  z-index: 3000; background: #fff; border: 1px solid #888;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .3); font-size: 11px;
+}
+.mkt-title {
+  background: var(--frame-dark); color: var(--frame-text);
+  padding: 3px 8px; font-weight: 600;
+}
+.mkt-close { float: right; background: none; border: 0; color: inherit;
+             cursor: pointer; font-size: 14px; line-height: 1; }
+.mkt-body { padding: 6px 10px 8px; }
+.mkt-clock { color: #444; margin-bottom: 4px; }
+.mkt-ticks { position: relative; height: 13px; margin-left: 150px; }
+.mkt-ticks span { position: absolute; transform: translateX(-50%);
+                  font-size: 10px; color: #666; }
+.mkt-rows { position: relative; }
+.mkt-row { display: flex; align-items: center; margin: 3px 0; }
+.mkt-name { width: 150px; flex: 0 0 150px; }
+.mkt-track { position: relative; flex: 1; height: 20px; background: #f2f4f7;
+             border-radius: 3px; }
+.mkt-bar { position: absolute; top: 3px; bottom: 3px; background: #5a9bd8;
+           border-radius: 3px; }
+.mkt-now { position: absolute; top: 0; bottom: 0; border-left: 2px solid #d93025; }
+.mkt-now span { position: absolute; bottom: -12px; left: -12px; font-size: 9px;
+                color: #d93025; font-weight: 700; }
+.mkt-note { color: #555; margin-top: 14px; }
