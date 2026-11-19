@@ -3223,6 +3223,38 @@ class Coordinator:
         for position in self.book.positions(open_only=False):
             self.remember(position)
 
+    def okx_positions(self):
+        """OKX's own position rows on every OKX account: size, average,
+        mark, LIQUIDATION price and how far the mark is from it - the
+        number a crypto desk watches that MT5 never had."""
+        out = []
+        for name, leg in self.legs.items():
+            broker = getattr(leg, 'broker', None)
+            if broker is None or not hasattr(broker,
+                                             'exchange_position_details'):
+                continue
+            try:
+                rows = broker.exchange_position_details()
+            except Exception as e:
+                logging.debug('okx positions on %s unreadable: %s', name, e)
+                continue
+            for (inst, pos_side), r in sorted(rows.items()):
+                def num(key):
+                    try:
+                        return float(r.get(key))
+                    except (TypeError, ValueError):
+                        return None
+                mark, liq = num('markPx'), num('liqPx')
+                out.append({
+                    'account': name, 'inst': inst, 'pos_side': pos_side,
+                    'pos': num('pos'), 'avg': num('avgPx'), 'mark': mark,
+                    'liq': liq if liq else None,
+                    'liq_dist_pct': (abs(mark - liq) / mark * 100.0
+                                     if mark and liq else None),
+                    'lever': num('lever'), 'upl': num('upl'),
+                    'mgn_mode': r.get('mgnMode')})
+        return out
+
     def account_health(self):
         """The margin picture, per account, and which one is weakest.
 
@@ -3797,6 +3829,7 @@ class Coordinator:
             'reconciler': self.reconciler.snapshot(),
             'broker_clock': self.broker_clock(),
             'account_health': self.account_health(),
+            'okx_positions': self.okx_positions(),
             'recovery': dict(self.recovery),
             'session_events': self.session_events[-50:],
             'hedge_times_ms': list(self.quoter.hedge_times[-50:]),

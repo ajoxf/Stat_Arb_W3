@@ -6158,6 +6158,33 @@
       html += '<tr><td colspan="14">no accounts connected</td></tr>';
     }
     html += '</tbody></table>';
+    var okx = state.snapshot.okx_positions || [];
+    if (okx.length) {
+      html += '<table><thead><tr><th>Account</th><th>Instrument</th>' +
+        '<th>Side</th><th>Size</th><th>Avg</th><th>Mark</th>' +
+        '<th>Liquidation</th><th>To liq.</th><th>Leverage</th>' +
+        '<th>Unrealised</th></tr></thead><tbody>';
+      okx.forEach(function (p) {
+        var near = p.liq_dist_pct !== null && p.liq_dist_pct !== undefined &&
+          p.liq_dist_pct < 10;
+        html += '<tr class="' + (near ? 'mismatch' : '') + '">' +
+          '<td>' + escapeHtml(p.account) + '</td>' +
+          '<td>' + escapeHtml(p.inst) + '</td>' +
+          '<td>' + escapeHtml(p.pos_side) + '</td>' +
+          '<td>' + fmt(p.pos, 2) + '</td>' +
+          '<td>' + fmt(p.avg, 2) + '</td><td>' + fmt(p.mark, 2) + '</td>' +
+          '<td>' + (p.liq ? fmt(p.liq, 2) : DASH) + '</td>' +
+          '<td>' + (p.liq_dist_pct === null || p.liq_dist_pct === undefined
+                    ? DASH : fmt(p.liq_dist_pct, 1) + '%') + '</td>' +
+          '<td>' + (p.lever ? fmt(p.lever, 0) + 'x' : DASH) + '</td>' +
+          '<td class="' + (p.upl > 0 ? 'up' : p.upl < 0 ? 'down' : '') +
+          '">' + money(p.upl) + '</td></tr>';
+      });
+      html += '</tbody></table>';
+      html += '<div class="note">OKX\'s own positions on each account, ' +
+        'netted per instrument and side: a row is amber when the mark is ' +
+        'within 10% of its liquidation price.</div>';
+    }
     html += '<div class="note">Equity is what the broker actually has ' +
       'of yours: balance plus credit plus open P&amp;L. Brokers often ' +
       'fund a demo with CREDIT, so a balance of 0.00 against real ' +
