@@ -125,6 +125,9 @@ def combine(rows, covered=None, now=None):
             'break_even': be, 'tp': tp, 'sl': sl,
             'tp_money': worth(tp), 'sl_money': worth(sl),
             'net_pnl': _total(group, 'net_pnl'),
+            # The one position's return: its total over its total bases.
+            'notional': _total(group, 'notional'),
+            'margin': _total(group, 'margin'),
             'entry_atr': _weighted(group, weights, 'entry_atr'),
             'stop_mode': first.get('stop_mode'),
             'target_mode': first.get('target_mode'),
@@ -144,6 +147,11 @@ def combine(rows, covered=None, now=None):
             'close_covered': round(sum(float(covered.get(i) or 0.0)
                                        for i in ids), 8),
         }
+        for share, base in (('pnl_pct_notional', 'notional'),
+                            ('pnl_pct_margin', 'margin')):
+            row[share] = (row['net_pnl'] / row[base] * 100.0
+                          if row['net_pnl'] is not None and row[base]
+                          else None)
         row.update(_leg(group, 'a'))
         row.update(_leg(group, 'b'))
         out.append(row)

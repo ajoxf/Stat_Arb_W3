@@ -2956,7 +2956,10 @@
       : 'flat';
     var pnl = node.querySelector('.pnl');
     pnl.textContent = row.open_pnl === null || row.open_pnl === undefined
-      ? DASH : money(row.open_pnl);
+      ? DASH : money(row.open_pnl) + shareWords(row.open_pnl_pct_notional,
+                                                row.open_pnl_pct_margin);
+    pnl.title = 'open P&L, and as a share of notional (N) and of margin '
+      + '(M) over every position on this ladder';
     pnl.classList.toggle('up', row.open_pnl > 0);
     pnl.classList.toggle('down', row.open_pnl < 0);
     // HIDDEN ON REQUEST, not removed. The numbers are correct — Qty is
@@ -3479,9 +3482,13 @@
           'closing price now \u2212 entry: a LONG makes money when this is '
           + 'positive, a SHORT when it is negative') +
         kv('Entry z', signed(first.entry_z)) +
-        kv('Net P&amp;L', moneyOr(first.net_pnl),
+        kv('Net P&amp;L', moneyOr(first.net_pnl) + shareWords(
+             first.pnl_pct_notional, first.pnl_pct_margin),
            first.net_pnl === null || first.net_pnl === undefined ? ''
-             : (first.net_pnl >= 0 ? 'up' : 'down')) +
+             : (first.net_pnl >= 0 ? 'up' : 'down'),
+           'net P&L as a share of both legs\u2019 notional at entry, and '
+           + 'of the margin the position ties up (the base TP % and SL % '
+           + 'are set on)') +
         legRow('a') + legRow('b') +
         kv('Age', first.age_sec === null || first.age_sec === undefined ? DASH
           : Math.floor(first.age_sec / 60) + 'm ' +
@@ -4744,6 +4751,15 @@
     html += '</tbody></table>';
     html += accountReconciliation();
     return html;
+  }
+
+  function shareWords(notional, margin) {
+    /* ' · -0.137% N · -0.41% M' - nothing at all when neither is
+     * measured, rather than two dashes on a short line. */
+    if ((notional === null || notional === undefined) &&
+        (margin === null || margin === undefined)) { return ''; }
+    return ' \u00b7 ' + pctOr(notional, 3) + ' N \u00b7 ' +
+      pctOr(margin, 2) + ' M';
   }
 
   function updown(value) {

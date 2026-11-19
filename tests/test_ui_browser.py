@@ -350,6 +350,17 @@ def page(server):
                 if message.type == 'error' else None)
         page.goto(url)
         page.wait_for_selector('.ladder .grid tbody tr')
+
+        # A FIXED, quiet session clock (a Saturday noon UTC: no centre
+        # opens and no OKX funding falls within the 10-minute alert), so
+        # a Market Sessions pop-up can never land on top of the toast a
+        # test is reading - which it did whenever the suite ran in the
+        # ten minutes before a real open.
+        page.evaluate("""() => {
+            window.MT5Sessions.now = () => new Date('2026-11-21T12:00:00Z');
+            window.MT5Sessions.tick();
+            document.getElementById('toasts').innerHTML = '';
+        }""")
         page.errors = errors
         page.paths = paths
         yield page
@@ -6374,7 +6385,7 @@ def _clear_session_alerts(page):
 
 def _restore_sessions_clock(page):
     page.evaluate("""() => {
-        window.MT5Sessions.now = () => new Date();
+        window.MT5Sessions.now = () => new Date('2026-11-21T12:00:00Z');
         window.MT5Sessions.tick();
         document.getElementById('toasts').innerHTML = '';
         document.getElementById('mkt-panel').hidden = true;

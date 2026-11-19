@@ -267,6 +267,17 @@ def browser_page(desk):
         page.on('pageerror', lambda error: errors.append(str(error)))
         page.goto(url)
         page.wait_for_selector('.ladder .grid tbody tr', timeout=15000)
+
+        # A FIXED, quiet session clock (a Saturday noon UTC: no centre
+        # opens and no OKX funding falls within the 10-minute alert), so
+        # a Market Sessions pop-up can never land on top of the toast a
+        # test is reading - which it did whenever the suite ran in the
+        # ten minutes before a real open.
+        page.evaluate("""() => {
+            window.MT5Sessions.now = () => new Date('2026-11-21T12:00:00Z');
+            window.MT5Sessions.tick();
+            document.getElementById('toasts').innerHTML = '';
+        }""")
         page.errors = errors
         yield page
         browser.close()

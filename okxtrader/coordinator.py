@@ -109,6 +109,19 @@ def position_returns(position, net_pnl, closing_spread, margin_per_spread):
     return out
 
 
+def ladder_returns(positions, open_pnl):
+    """A ladder's open P&L as % of its positions' notional and margin."""
+    out = {'open_pnl_pct_notional': None, 'open_pnl_pct_margin': None}
+    if not positions or open_pnl is None:
+        return out
+    for field, base in (('open_pnl_pct_notional', 'notional'),
+                        ('open_pnl_pct_margin', 'margin')):
+        values = [p.get(base) for p in positions]
+        if all(values):
+            out[field] = open_pnl / sum(values) * 100.0
+    return out
+
+
 class Coordinator:
     def __init__(self, config, legs, status_path='status.json',
                  clock=time.time, sleep=time.sleep,
@@ -2012,6 +2025,7 @@ class Coordinator:
             settings, pct, stop = lv['settings'], lv['pct'], lv['stop']
             be, tp, sl = lv['break_even'], lv['tp'], lv['sl']
             _gross, net_pnl, _closing = mark_position(position, md, settings)
+            returns = position_returns(position, net_pnl, _closing, margin)
             # What each level is worth to the WHOLE position, net: break
             # even is after every cost, so the distance from it times k
             # is the net P&L closing there. Unpriced stays None.
@@ -2033,6 +2047,10 @@ class Coordinator:
                          'break_even': be, 'tp': tp, 'sl': sl,
                          'tp_money': worth(tp), 'sl_money': worth(sl),
                          'net_pnl': net_pnl, 'entry_atr': atr,
+                         'notional': returns['notional'],
+                         'margin': returns['margin'],
+                         'pnl_pct_notional': returns['pnl_pct_notional'],
+                         'pnl_pct_margin': returns['pnl_pct_margin'],
                          'stop_mode': params['stop_mode'],
                          'target_mode': params['target_mode'],
                          # THIS side's multiples, for the panel's note.
@@ -3926,6 +3944,10 @@ class Coordinator:
                 'positions': positions,
                 'net_position': net, 'avg_entry': avg_entry,
                 'open_pnl': open_pnl if positions else None,
+                # The ladder's open P&L as a share of what it trades and
+                # of what it ties up - over every position, or not at
+                # all: one unmeasured base makes the share unknown.
+                **ladder_returns(positions, open_pnl),
                 'last_print': self.book.last_print(key),
             }
         accounts = {name: self.account_info(name) for name in self.legs}

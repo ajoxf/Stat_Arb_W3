@@ -119,3 +119,29 @@ def test_CONTROL_an_unmeasured_return_is_None_not_zero():
                            margin_per_spread=None)
     assert got == {'spread_move': None, 'notional': 1300.0, 'margin': None,
                    'pnl_pct_notional': None, 'pnl_pct_margin': None}
+
+
+def test_a_ladders_open_pnl_is_a_share_of_all_its_positions():
+    from okxtrader.coordinator import ladder_returns
+    rows = [{'notional': 1000.0, 'margin': 100.0},
+            {'notional': 3000.0, 'margin': 300.0}]
+    got = ladder_returns(rows, open_pnl=-4.0)
+    assert got['open_pnl_pct_notional'] == pytest.approx(-0.1)
+    assert got['open_pnl_pct_margin'] == pytest.approx(-1.0)
+    # CONTROL: one position with no margin measured makes the margin
+    # share unknown, not a share of the others alone.
+    rows[1]['margin'] = None
+    assert ladder_returns(rows, -4.0)['open_pnl_pct_margin'] is None
+
+
+def test_a_combined_position_reads_its_total_over_its_total_bases():
+    from okxtrader import combined
+    rows = [{'position_id': 'P1', 'side': 'BUY', 'quantity': 1.0,
+             'opened_at': 1.0, 'net_pnl': 3.0, 'notional': 1000.0,
+             'margin': 100.0},
+            {'position_id': 'P2', 'side': 'BUY', 'quantity': 1.0,
+             'opened_at': 2.0, 'net_pnl': -1.0, 'notional': 1000.0,
+             'margin': 100.0}]
+    [row] = combined.combine(rows)
+    assert row['pnl_pct_notional'] == pytest.approx(0.1)   # 2 of 2000
+    assert row['pnl_pct_margin'] == pytest.approx(1.0)     # 2 of 200
