@@ -3616,6 +3616,8 @@ class Coordinator:
                 # W3 maker fills working on this ladder: both legs
                 # resting at OKX, how far each has filled.
                 'maker_fills': self.maker.snapshot(key),
+                'fill_style': 'maker' if self.maker.enabled(pair)
+                else 'taker',
                 'quoting_leg': pair.quoting_leg,
                 # The leg that will ACTUALLY rest the pending — the
                 # setting when there is one, otherwise the wider book.

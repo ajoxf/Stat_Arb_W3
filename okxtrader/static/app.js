@@ -2718,17 +2718,27 @@
         held = (quote.held ? 'ORDER HELD: ' : 'NOT AT THE BROKER: ') +
           (quote.reason || 'not at the broker yet');
       });
+      var maker = (row.maker_fills || [])[0];
+      var makerStyle = row.fill_style === 'maker';
       note.textContent = held
         ? held
+        : maker
+        ? makerWords(maker)
         : (row.order_type === 'MARKET'
-            ? 'MARKET: both legs cross at once'
+            ? (makerStyle ? 'MARKET: both legs rest at the touch as maker'
+                          : 'MARKET: both legs cross at once')
             : row.working_orders === 'TRIGGER'
-            ? 'LIMIT: held here · both legs cross when the spread reaches it'
+            ? (makerStyle
+                ? 'LIMIT: held here · both legs rest as maker when the ' +
+                  'spread reaches it'
+                : 'LIMIT: held here · both legs cross when the spread ' +
+                  'reaches it')
             : (leg
                 ? 'LIMIT: quotes leg ' + leg + (symbol ? ' · ' + symbol : '') +
                   ' · leg ' + (leg === 'A' ? 'B' : 'A') + ' crosses on fill'
                 : 'LIMIT: quoting leg picked from the wider book'));
-      note.classList.toggle('live', !!(live && live.ticket) && !held);
+      note.classList.toggle('live', (!!(live && live.ticket) || !!maker) &&
+                            !held);
       note.classList.toggle('held', !!held);
       note.title = held
         ? 'This ladder has a working order that exists in THIS process '
@@ -4686,6 +4696,17 @@
       : 'read together ' + seconds + 's ago';
   }
 
+  // A W3 maker fill in words: which phase, and how far each leg is.
+  function makerWords(job) {
+    var legs = (job.legs || []).map(function (leg) {
+      return leg.leg + ' ' + qty(leg.filled) + '/' + qty(leg.planned);
+    }).join(' · ');
+    return (job.phase === 'recovering'
+      ? 'MAKER RECOVERY: one leg on, the other resting · '
+      : 'MAKER FILL: both legs resting at the touch · ') +
+      legs + ' · ' + Math.round(job.age_sec || 0) + 's';
+  }
+
   function ordersTable() {
     var html = '<table><thead><tr><th>Pair</th><th>Side</th><th>Level</th>' +
       '<th>Qty</th><th>TIF</th><th>State</th><th>Pending</th>' +
@@ -4769,6 +4790,37 @@
           html += '<tr class="not-placed"><td colspan="' + columns + '">' +
             'NOT AT THE BROKER: ' + escapeHtml(whyNot) + '</td></tr>';
         }
+      });
+    });
+    // W3 maker fills: both legs resting at OKX right now.
+    Object.keys(state.snapshot.pairs || {}).forEach(function (key) {
+      var row = state.snapshot.pairs[key];
+      (row.maker_fills || []).forEach(function (job) {
+        any = true;
+        var legs = job.legs || [];
+        html += '<tr data-pair="' + escapeHtml(key) + '" data-side="' +
+          job.side + '">';
+        html += '<td>' + (row.name || key) + '</td>';
+        html += '<td>' + job.side + '</td>';
+        html += '<td>' + fmt(job.level, 4) + '</td>';
+        html += '<td>' + qty(job.spreads) + '</td>';
+        html += '<td>' + DASH + '</td>';
+        html += '<td>' + (job.phase === 'recovering' ? 'RECOVERING'
+                                                     : 'MAKER') + '</td>';
+        html += '<td>' + DASH + '</td>';
+        html += '<td>' + legs.map(function (leg) {
+          return leg.leg + ' ' + fmt(leg.resting_at, 2);
+        }).join('<br>') + '</td>';
+        html += '<td>both legs<div class="hint">' + legs.map(function (leg) {
+          return leg.leg + ' ' + leg.side + ' ' + qty(leg.filled) + '/' +
+            qty(leg.planned);
+        }).join(' · ') + '</div></td>';
+        html += '<td>' + legs.reduce(function (n, leg) {
+          return n + (leg.amends || 0);
+        }, 0) + '</td>';
+        html += '<td>' + escapeHtml(job.reason || makerWords(job)) + '</td>';
+        html += '<td><button class="btn cancel-maker">Cancel</button></td>';
+        html += '</tr>';
       });
     });
     // What stopped working recently, and why — in the broker's own
@@ -6287,6 +6339,8 @@
       send('close_position', {position_id: row.dataset.position});
     } else if (button.classList.contains('cancel-order')) {
       send('cancel_order', {order_id: row.dataset.order});
+    } else if (button.classList.contains('cancel-maker')) {
+      send('cancel_where', {pair: row.dataset.pair, side: row.dataset.side});
     }
   }
 
