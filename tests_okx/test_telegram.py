@@ -1080,3 +1080,79 @@ def test_the_settings_list_has_the_exits_per_side(bot):
     assert 'EXITS PER SIDE' in listing.upper()
     assert 'stop_mode_sell' in listing and 'tp_pct_buy' in listing
     assert 'same as ladder' in listing
+
+
+# -- OKX ----------------------------------------------------------------------
+
+PERP = {'account': 'okx', 'inst': 'BTC-USDT-SWAP', 'pos_side': 'short',
+        'pos': 1.0, 'avg': 65000.0, 'mark': 65100.0, 'liq': 90000.0,
+        'liq_dist_pct': 38.2, 'lever': 3.0, 'upl': -1.0}
+
+
+def test_next_funding_is_the_next_of_okxs_three_daily_settlements():
+    # 1_800_000_000 is 08:00:00 UTC exactly: the 08:00 one has passed.
+    assert tg.next_funding(1_800_000_000.0) == ('16:00', 480.0)
+    assert tg.next_funding(1_800_000_000.0 - 300) == ('08:00', 5.0)
+    assert tg.next_funding(1_800_000_000.0 + 16 * 3600 - 60)[0] == '00:00'
+
+
+def test_funding_is_announced_once_when_perps_are_held(bot):
+    bot.clock_.now = 1_800_000_000.0 - 3600
+    bot.desk.snapshot['okx_positions'] = [PERP]
+    watch(bot)                                   # bearings
+    bot.clock_.now = 1_800_000_000.0 - 300       # 5 min to 08:00 UTC
+    told = watch(bot)
+    assert any('OKX FUNDING' in t and '08:00 UTC' in t and
+               'BTC-USDT-SWAP' in t for t in told)
+    bot.clock_.now += 60
+    assert not any('OKX FUNDING' in t for t in watch(bot))
+
+
+def test_the_CONTROL_no_perps_held_no_funding_alert(bot):
+    bot.clock_.now = 1_800_000_000.0 - 3600
+    bot.desk.snapshot['okx_positions'] = [dict(PERP, inst='BTC-USDT-261225')]
+    watch(bot)
+    bot.clock_.now = 1_800_000_000.0 - 300
+    assert not any('OKX FUNDING' in t for t in watch(bot))
+
+
+def test_a_position_near_liquidation_is_pushed_and_repeated_hourly(bot):
+    watch(bot)
+    bot.desk.snapshot['okx_positions'] = [dict(PERP, liq=68000.0,
+                                               liq_dist_pct=4.5)]
+    told = watch(bot)
+    assert any('LIQUIDATION RISK' in t and '4.5%' in t for t in told)
+    assert not any('LIQUIDATION' in t for t in watch(bot))
+    bot.clock_.now += tg.LIQUIDATION_REPEAT_SEC + 1
+    assert any('LIQUIDATION RISK' in t for t in watch(bot))
+
+
+def test_the_dashboard_says_24_7_funding_and_the_maker_fill(bot):
+    bot.desk.snapshot['broker_clock'] = {'broker_time': '08:00:00',
+                                         'cutoff': '24/7'}
+    row = bot.desk.snapshot['pairs'][KEY]
+    row['session'] = {'close': '24/7', 'state': 'OPEN'}
+    row['fill_style'] = 'maker'
+    row['maker_fills'] = [{'phase': 'resting', 'age_sec': 4, 'legs': [
+        {'leg': 'A', 'filled': 0, 'planned': 1},
+        {'leg': 'B', 'filled': 1, 'planned': 2}]}]
+    say(bot, '/status')
+    text = bot.api.texts()[-1]
+    assert 'around the clock (24/7)' in text
+    assert 'Next funding' in text and '16:00 UTC' in text
+    assert 'open 24/7 (OKX, UTC)' in text
+    assert 'maker (W3)' in text
+    assert 'both legs resting as maker: A 0.00/1.00 · B 1.00/2.00' in text
+
+
+def test_balance_lists_okx_positions_with_their_liquidation(bot):
+    bot.desk.snapshot['accounts'] = {'okx': {
+        'login': '448', 'server': 'OKX demo', 'currency': 'USD',
+        'equity': 1000.0, 'margin_free': 900.0, 'margin': 100.0,
+        'margin_level': 250.0, 'margin_so_call': 300.0, 'margin_so_so': 100.0,
+        'profit': 0.0, 'balance': 1000.0}}
+    bot.desk.snapshot['okx_positions'] = [PERP]
+    say(bot, '/balance')
+    text = bot.api.texts()[-1]
+    assert 'OKX WARNING' in text
+    assert 'BTC-USDT-SWAP short' in text and '38.2% away' in text

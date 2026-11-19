@@ -66,6 +66,41 @@ ALLOWED_COMMANDS = frozenset({'set_algo', 'set_pair', 'flatten_pair', 'kill'})
 #: a feed that is stale for one poll and back the next is not one.
 PROBLEM_SETTLE_SEC = 20.0
 
+#: OKX settles perpetual funding at these UTC times, every day.
+FUNDING_TIMES_UTC = ('00:00', '08:00', '16:00')
+#: Funding is announced this long before, when perps are held.
+FUNDING_ALERT_MIN = 10.0
+#: A position whose mark is this close to its liquidation price (in %)
+#: is pushed to every allowed user, once an hour while it stays there.
+LIQUIDATION_ALERT_PCT = 10.0
+LIQUIDATION_REPEAT_SEC = 3600.0
+
+
+def next_funding(now):
+    """(hh:mm UTC, minutes until) of the next OKX funding."""
+    t = time.gmtime(now)
+    minute = t.tm_hour * 60 + t.tm_min + t.tm_sec / 60.0
+    best = None
+    for hhmm in FUNDING_TIMES_UTC:
+        h, m = (int(x) for x in hhmm.split(':'))
+        delta = h * 60 + m - minute
+        if delta <= 0:
+            delta += 1440
+        if best is None or delta < best[1]:
+            best = (hhmm, delta)
+    return best
+
+
+def maker_words(job):
+    """A W3 maker fill (or close) in one line."""
+    legs = ' · '.join(f"{leg.get('leg')} {plain(leg.get('filled'))}/"
+                      f"{plain(leg.get('planned'))}"
+                      for leg in job.get('legs') or ())
+    what = ('closing as maker' if job.get('kind') == 'close' else
+            'recovering one leg' if job.get('phase') == 'recovering' else
+            'both legs resting as maker')
+    return f"{what}: {legs}  ({int(job.get('age_sec') or 0)}s)"
+
 DIRECTIONS = [('BOTH', 'Both'), ('H_TO_L', 'H to L only'),
               ('L_TO_H', 'L to H only')]
 LEVEL_MODES = [('MARGIN', '% of margin'), ('ATR', 'ATR')]
@@ -1053,8 +1088,12 @@ class Bot:
         rows = [('Engine', self._engine_plain(snapshot))]
         clock = snapshot.get('broker_clock') or {}
         if clock.get('broker_time'):
-            rows.append(('Broker time', clock['broker_time']))
-            rows.append(('Cutoff', clock.get('cutoff')))
+            rows.append(('OKX time', clock['broker_time'] + ' UTC'))
+            rows.append(('Trading', 'around the clock (24/7)'
+                         if clock.get('cutoff') == '24/7'
+                         else f"cutoff {clock.get('cutoff')}"))
+        at, minutes = next_funding(self.clock())
+        rows.append(('Next funding', f'{at} UTC, in {duration(minutes * 60)}'))
         for name, info in sorted((snapshot.get('accounts') or {}).items()):
             if not info:
                 rows.append((name, 'NOT ANSWERING'))
@@ -1110,6 +1149,11 @@ class Bot:
         rows += [None,
                  ('Feed', f'PROBLEM: {problem}' if problem else 'OK'),
                  ('Session', self._session_words(row))]
+        fill = 'maker (W3)' if row.get('fill_style') == 'maker' else \
+            'taker (both legs at market)'
+        rows.append(('Fills', fill))
+        for job in row.get('maker_fills') or ():
+            rows.append(('Working', maker_words(job)))
         on = row.get('algo_on')
         if on:
             rows.append(('State', (block.get('state') or 'WATCHING')
@@ -1374,14 +1418,15 @@ class Bot:
                 return '—' if value is None else \
                     f'{float(value):,.2f} {currency}'.strip()
             level = info.get('margin_level')
-            # The broker's OWN margin-call and stop-out levels, not ours.
+            # OKX's margin ratio: liquidation at 100%, OKX's own warning
+            # at 300% - its levels, not ours.
             health = 'OK'
             if level:
                 if info.get('margin_so_so') and level <= info['margin_so_so']:
-                    health = 'STOP OUT'
+                    health = 'LIQUIDATION'
                 elif info.get('margin_so_call') and \
                         level <= info['margin_so_call']:
-                    health = 'MARGIN CALL'
+                    health = 'OKX WARNING'
             account = ' · '.join(str(v) for v in (info.get('login'),
                                                   info.get('server')) if v)
             parts.append(f'<b>{esc(name)}</b>\n' + table([
@@ -1396,6 +1441,17 @@ class Bot:
                 ('Balance', amount('balance'))]))
         if len(parts) == 1:
             parts.append('No accounts are reporting.')
+        okx = snapshot.get('okx_positions') or []
+        if okx:
+            rows = []
+            for p in okx:
+                dist = p.get('liq_dist_pct')
+                rows.append((f"{p.get('inst')} {p.get('pos_side')}",
+                             f"{plain(p.get('pos'))} @ {plain(p.get('avg'))}"
+                             f" · liq {plain(p.get('liq')) if p.get('liq') else '—'}"
+                             + (f" ({plain(dist, 1)}% away)"
+                                if dist is not None else '')))
+            parts.append('<b>OKX positions</b>\n' + table(rows))
         self.show(chat, message_id, '\n\n'.join(parts),
                   [[('Refresh', 'balance', ()), ('Main menu', 'main', ())]])
 
@@ -1829,6 +1885,8 @@ class Bot:
         hours = row.get('session') or {}
         if not hours:
             return '—'
+        if hours.get('close') == '24/7' and not hours.get('break'):
+            return 'open 24/7 (OKX, UTC)'
         state = (hours.get('state') or 'unknown').lower()
         span = f'{hours.get("open") or "any"} to {hours.get("close")}'
         if hours.get('break'):
@@ -1874,6 +1932,8 @@ class AlertWatch:
         self.signals = {}           # pair -> the last signal alert's id
         self.positions = {}         # id -> pair key
         self.summary_sent = {}      # pair -> the day its summary went
+        self.funding_told = None    # the funding time last announced
+        self.liquidation = {}       # (account, inst, side) -> told at
 
     def check(self, snapshot, events, price_problem, lookup=None):
         out = []
@@ -2005,14 +2065,60 @@ class AlertWatch:
             if text:
                 out.append(text)
 
+        # OKX: funding is coming, and perps are held.
+        okx = snapshot.get('okx_positions') or []
+        perps = [p for p in okx
+                 if str(p.get('inst') or '').endswith('-SWAP')]
+        at, minutes = next_funding(now)
+        if perps and minutes <= FUNDING_ALERT_MIN \
+                and self.funding_told != (time.strftime('%Y-%m-%d',
+                                                        time.gmtime(now)), at):
+            self.funding_told = (time.strftime('%Y-%m-%d', time.gmtime(now)),
+                                 at)
+            if not first:
+                out.append(title('OKX FUNDING', now) + '\n' + table(
+                    [('At', f'{at} UTC, in {duration(minutes * 60)}')]
+                    + [(f"{p.get('inst')} {p.get('pos_side')}",
+                        plain(p.get('pos'))) for p in perps]
+                    + [('Note', 'the basis can snap at the settlement')]))
+        # OKX: a position close to its liquidation price.
+        for p in okx:
+            dist = p.get('liq_dist_pct')
+            key = (p.get('account'), p.get('inst'), p.get('pos_side'))
+            if dist is None or dist >= LIQUIDATION_ALERT_PCT:
+                self.liquidation.pop(key, None)
+                continue
+            told = self.liquidation.get(key)
+            if told is not None and now - told < LIQUIDATION_REPEAT_SEC:
+                continue
+            self.liquidation[key] = now
+            out.append(title('LIQUIDATION RISK', now) + '\n' + table([
+                ('Position', f"{p.get('inst')} {p.get('pos_side')} "
+                             f"{plain(p.get('pos'))}"),
+                ('Mark', plain(p.get('mark'))),
+                ('Liquidation', plain(p.get('liq'))),
+                ('Distance', f'{plain(dist, 1)}%'),
+                ('Account', p.get('account'))]))
+
         # Once a day per ladder, at THAT ladder's close on the broker's
         # clock - an oil future and a gold CFD do not end the same day.
+        # A 24/7 ladder's day is OKX's: it ends at 00:00 UTC.
         clock = snapshot.get('broker_clock') or {}
         broker_time = clock.get('broker_time')
         today = time.strftime('%Y-%m-%d', time.localtime(now))
         for key, row in sorted(pairs.items()):
             close = (row.get('session') or {}).get('close') \
                 or clock.get('cutoff')
+            if close == '24/7':
+                # The summary of the UTC day just ended, once, after
+                # midnight UTC.
+                day = time.strftime('%Y-%m-%d', time.gmtime(now))
+                if self.summary_sent.get(key) != day:
+                    if not first and self.summary_sent.get(key):
+                        out.append(self._summary(
+                            dict(snapshot, pairs={key: row}), now))
+                    self.summary_sent[key] = day
+                continue
             if not broker_time or not close or broker_time[:5] < close \
                     or self.summary_sent.get(key) == today:
                 continue
