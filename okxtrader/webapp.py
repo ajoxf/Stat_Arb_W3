@@ -268,7 +268,8 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
         """
         newest = 0.0
         for name in ('static/app.js', 'static/settings.js',
-                     'static/ladder.css', 'templates/index.html'):
+                     'static/ladder.css', 'static/okx.css',
+                     'templates/index.html'):
             path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 name)
             try:

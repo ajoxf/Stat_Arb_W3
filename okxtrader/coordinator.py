@@ -251,6 +251,8 @@ class Coordinator:
         self._pnl_check = None
         #: (account, symbol) -> (at, the leg's own session figures)
         self._session_cache = {}
+        self._spread_day = {}
+        self._spread_day_busy = set()
         #: (account, symbol) -> (at, that leg's DOM)
         self._depth_cache = {}
         #: pair key -> (at, margin for ONE spread across both accounts)
@@ -2530,6 +2532,60 @@ class Coordinator:
         sizes['published'] = True
         return sizes
 
+    def spread_day(self, pair):
+        """The spread's own last 24 h - {'open', 'high', 'low', 'bars'} -
+        from both legs' 5-minute candles paired by time, with this
+        pair's beta; or None while there is none yet.
+
+        Read OFF the trading loop: two REST calls take half a second
+        and the loop re-pegs maker orders every second. Re-read every
+        SPREAD_DAY_TTL_SEC; a changed beta re-reads at once."""
+        beta = float(pair.hedge_ratio or 1.0)
+        key = pair.key
+        ttl = float(self.config.get('SPREAD_DAY_TTL_SEC', 300.0))
+        now = self.clock()
+        cached = self._spread_day.get(key)
+        fresh = (cached is not None and cached['beta'] == beta
+                 and now - cached['at'] < ttl)
+        if not fresh and key not in self._spread_day_busy:
+            self._spread_day_busy.add(key)
+
+            def read():
+                try:
+                    day = self._read_spread_day(pair, beta)
+                    self._spread_day[key] = {'at': self.clock(),
+                                             'beta': beta, 'day': day}
+                except Exception as exc:          # never kill the loop
+                    logging.debug('%s: 24h spread unread: %s', key, exc)
+                finally:
+                    self._spread_day_busy.discard(key)
+
+            if self.config.get('SPREAD_DAY_SYNC'):
+                read()
+            else:
+                threading.Thread(target=read, daemon=True,
+                                 name='spread-day').start()
+            cached = self._spread_day.get(key)
+        if cached is None or cached['beta'] != beta:
+            return None
+        return cached['day']
+
+    def _read_spread_day(self, pair, beta):
+        leg_a = self.legs.get(pair.account_a)
+        leg_b = self.legs.get(pair.account_b)
+        if leg_a is None or leg_b is None:
+            return None
+        bars_a = leg_a.rates(pair.symbol_a, 5, 288) or []
+        bars_b = leg_b.rates(pair.symbol_b, 5, 288) or []
+        closes_a = {b['time']: b['close'] for b in bars_a}
+        series = [b['close'] - beta * closes_a[b['time']]
+                  for b in sorted(bars_b, key=lambda b: b['time'])
+                  if b['time'] in closes_a]
+        if len(series) < 2:
+            return None
+        return {'open': series[0], 'high': max(series),
+                'low': min(series), 'bars': len(series)}
+
     def leg_session(self, account, symbol):
         """One leg's own session O/H/L/V, cached: it is an IPC round
         trip for numbers that move slowly, and the ladder polls three
@@ -2663,25 +2719,19 @@ class Coordinator:
         published = dict(session)
 
         if pair is not None:
-            beta = float(pair.hedge_ratio or 1.0)
             stats_a = self.leg_session(pair.account_a, pair.symbol_a) or {}
             stats_b = self.leg_session(pair.account_b, pair.symbol_b) or {}
-
-            def combined(field):
-                first, second = stats_a.get(field), stats_b.get(field)
-                if first is None or second is None:
-                    return None
-                return second - beta * first
-
-            legs_high = combined('high')
-            legs_low = combined('low')
-            legs_open = combined('open')
-            if legs_high is not None or legs_low is not None:
+            # The SPREAD's own 24 h, from the two legs' 5-minute candles
+            # paired bar by bar. Never `high B - beta x high A`: the two
+            # highs are from different moments, and that "high" can sit
+            # below the open (seen live: H -2.44 under O -25.69).
+            day = self.spread_day(pair)
+            if day is not None:
                 published.update({
-                    'high': legs_high, 'low': legs_low,
-                    'open': legs_open if legs_open is not None
-                    else session['open'],
-                    'ours': False,
+                    'open': day['open'],
+                    'high': max(day['high'], spread),
+                    'low': min(day['low'], spread),
+                    'ours': False, 'source': '24h',
                 })
             published['volume_a'] = stats_a.get('volume')
             published['volume_b'] = stats_b.get('volume')
@@ -2690,8 +2740,11 @@ class Coordinator:
         md['session'] = published
         # Net change is always against OUR open — the one the trader has
         # been watching this process quote.
-        md['net_change'] = (spread - session['open']
-                            if session['open'] is not None else None)
+        # With the spread's own 24 h known, against ITS open, the way
+        # every crypto screen states a change.
+        basis = (published['open'] if published.get('source') == '24h'
+                 else session['open'])
+        md['net_change'] = (spread - basis if basis is not None else None)
 
     # -- what a click does ---------------------------------------------------
 

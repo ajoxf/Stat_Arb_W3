@@ -1,0 +1,24 @@
+/* OKX additions, loaded AFTER ladder.css. ladder.css stays Mirror's
+ * byte for byte (tests/test_mirror_theme.py); nothing here changes a
+ * colour of it - only what OKX needs that Mirror never had. */
+
+/* Nothing in the account box may run into its neighbour: an OKX UID is
+ * 18 digits, wider than half the rail. */
+.route-box .hint {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.route-box b { overflow-wrap: anywhere; }
+/* Both legs on one OKX account: said once, full width. */
+.route-box.route-shared {
+  border-top: 0; font-size: 9px; line-height: 1.2; overflow: hidden;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The spread, worked through with today's numbers, under the legs. */
+.spread-math {
+  font-family: var(--mono); font-size: 10px; line-height: 1.35;
+  color: var(--frame-text); padding: 3px 6px 2px;
+  border-top: 1px solid var(--frame-line);
+}
+.spread-math .sm-num { padding-left: 8px; }
+.spread-math .sm-warn { color: #b03030; font-weight: 700; }

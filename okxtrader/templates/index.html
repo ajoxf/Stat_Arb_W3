@@ -8,6 +8,7 @@
      must work when the network is what failed. -->
 <link rel="icon" href="{{ url_for('static', filename='favicon.svg') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='ladder.css') }}?v={{ asset_version }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='okx.css') }}?v={{ asset_version }}">
 </head>
 <body>
 
@@ -344,6 +345,9 @@
           <div class="route-leg route-a">A <b>—</b></div>
           <div class="route-leg route-b">B <b>—</b></div>
         </div>
+        <!-- Both legs on ONE OKX account (the usual case): said once,
+             full width, instead of squeezed twice into half widths. -->
+        <div class="route-box route-shared hidden"></div>
         <!-- Mode and time in force on ONE row. Both are read at a
              glance and set rarely, and the title bar carries the
              answer too. -->

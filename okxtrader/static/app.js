@@ -2812,8 +2812,17 @@
     // process started. A borrowed range read as the exchange's is how a
     // spread gets judged against prices nobody traded.
     var ours = node.querySelector('.ours');
-    ours.textContent = session.ours === false ? 'legs' : 'ours';
+    ours.textContent = session.source === '24h' ? '24h'
+      : (session.ours === false ? 'legs' : 'ours');
+    ours.title = session.source === '24h'
+      ? 'the spread\u2019s own last 24 hours: both legs\u2019 5-minute ' +
+        'closes paired, B \u2212 \u03b2 \u00d7 A each bar. The big ' +
+        'number is the change since 24 h ago'
+      : 'since this desk started';
     ours.classList.toggle('legs', session.ours === false);
+    netchg.title = session.source === '24h'
+      ? 'change in the spread over the last 24 hours'
+      : 'change in the spread since this desk started';
 
     setValue(node.querySelector('.order-type'), row.order_type);
     // WHICH way out is this ladder's default — said on the buttons
@@ -2887,9 +2896,27 @@
       });
     // Which accounts this ladder is routed across, and their logins.
     var accounts = state.snapshot.accounts || {};
+    function accountText(account) {
+      var info = accounts[account] || {};
+      var uid = String(info.login || '');
+      var money = info.equity === undefined || info.equity === null
+        ? DASH
+        : money_(info.equity, info.currency);
+      return escapeHtml(account || '?') + (uid
+        ? ' <span title="OKX account UID ' + escapeHtml(uid) + '">#' +
+          escapeHtml(uid.length > 6 ? '\u2026' + uid.slice(-4) : uid) +
+          '</span>' : '') +
+        '<div class="route-eq" title="Equity: balance plus the ' +
+        'P&L of everything open on this account">' + money + '</div>';
+    }
     function routeText(account, symbol) {
       var info = accounts[account] || {};
-      var login = info.login ? ' #' + info.login : '';
+      // OKX UIDs run to 18 digits - wider than half the rail. The last
+      // four identify it; the whole one is on hover.
+      var uid = String(info.login || '');
+      var login = uid ? ' <span title="OKX account UID ' + escapeHtml(uid) +
+        '">#' + escapeHtml(uid.length > 6 ? '\u2026' + uid.slice(-4) : uid) +
+        '</span>' : '';
       // EQUITY, not balance: balance ignores what is open, and the
       // number a trader sizes the next spread against is the one that
       // already carries the running P&L. Unmeasured stays a dash —
@@ -2902,10 +2929,20 @@
         'plus the P&L of everything open on this account">' + money +
         '</div>';
     }
-    node.querySelector('.route-a b').innerHTML =
-      routeText(row.account_a, row.symbol_a);
-    node.querySelector('.route-b b').innerHTML =
-      routeText(row.account_b, row.symbol_b);
+    var shared = node.querySelector('.route-shared');
+    var oneAccount = row.account_a && row.account_a === row.account_b;
+    if (oneAccount && shared) {
+      node.querySelector('.route-a b').textContent = row.symbol_a || '?';
+      node.querySelector('.route-b b').textContent = row.symbol_b || '?';
+      shared.innerHTML = accountText(row.account_a);
+      shared.classList.remove('hidden');
+    } else {
+      node.querySelector('.route-a b').innerHTML =
+        routeText(row.account_a, row.symbol_a);
+      node.querySelector('.route-b b').innerHTML =
+        routeText(row.account_b, row.symbol_b);
+      if (shared) { shared.classList.add('hidden'); }
+    }
     // The three cancel buttons, with what they would pull ON them —
     // and disabled when that is nothing, so a button that cannot do
     // anything cannot be pressed and wondered about.
@@ -3994,7 +4031,58 @@
       cell(market.long_spread, 'c-ask') +
       width(market.short_spread, market.long_spread) +
       '<td class="age c-age"></td></tr>';
-    return html + '</tbody></table>';
+    return html + '</tbody></table>' + spreadMathHtml(row, market);
+  }
+
+  function spreadMathHtml(row, market) {
+    /* How the spread is made, with today's numbers in it, so a trader
+     * can check it with a calculator: B - beta x A at the mids. Then
+     * the two drifts that move it without anyone trading:
+     *   beta drift - the legs' price ratio now against the beta the
+     *     spread uses. Large, and the spread starts to track one
+     *     leg's own price instead of the gap between them.
+     *   24 h drift - where the spread was a day ago. */
+    var beta = row.hedge_ratio;
+    var a = mid(market.leg_a_bid, market.leg_a_ask);
+    var b = mid(market.leg_b_bid, market.leg_b_ask);
+    if (beta === null || beta === undefined || a === null || b === null) {
+      return '';
+    }
+    var spread = b - beta * a;
+    var html = '<div class="spread-math">' +
+      '<div><b>spread</b> = B \u2212 \u03b2 \u00d7 A (mid prices)</div>' +
+      '<div class="sm-num">= ' + fmt(b, 4) + ' \u2212 ' + beta + ' \u00d7 ' +
+      fmt(a, 4) + ' = <b>' + fmt(spread, 4) + '</b></div>';
+    var ratio = b / a;
+    var betaDrift = beta ? (ratio / beta - 1) * 100 : null;
+    if (betaDrift !== null && isFinite(betaDrift)) {
+      var big = Math.abs(betaDrift) >= 5;
+      html += '<div' + (big ? ' class="sm-warn"' : '') + ' title="' +
+        'The legs\u2019 price ratio B \u00f7 A now, against the \u03b2 the ' +
+        'spread uses. Beyond about 5% the spread starts to follow one ' +
+        'leg\u2019s own price; re-read \u03b2 in Pairs > Edit.">' +
+        '\u03b2 ' + beta + ' \u00b7 B\u00f7A now ' + ratio.toFixed(6) +
+        ' \u00b7 \u03b2 drift ' + (betaDrift >= 0 ? '+' : '') +
+        betaDrift.toFixed(2) + '%' + (big ? ' \u2014 re-read \u03b2' : '') +
+        '</div>';
+    }
+    var session = market.session || {};
+    if (session.source === '24h' && session.open !== null &&
+        session.open !== undefined) {
+      var moved = spread - session.open;
+      html += '<div title="The spread 24 hours ago, from both legs\u2019 ' +
+        '5-minute closes at this \u03b2">24h drift ' +
+        (moved >= 0 ? '+' : '') + fmt(moved, 4) + ' (from ' +
+        fmt(session.open, 4) + ', range ' + fmt(session.low, 4) + ' to ' +
+        fmt(session.high, 4) + ')</div>';
+    }
+    return html + '</div>';
+  }
+
+  function mid(bid, ask) {
+    if (bid === null || bid === undefined || ask === null ||
+        ask === undefined) { return null; }
+    return (bid + ask) / 2;
   }
 
   function badgeClass(badge) {

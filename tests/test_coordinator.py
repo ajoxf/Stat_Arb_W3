@@ -207,26 +207,52 @@ def test_the_session_stats_are_ours_and_say_so(config, pair, legs):
                                              - md['session']['open'])
 
 
-def test_the_session_line_is_the_two_legs_own_high_and_low(config, pair,
-                                                            legs):
-    """H and L are `high B − β × high A`, the same convention as every
-    other price on this screen, taken from what the two terminals
-    publish. Volume stays PER LEG: one lot of the spot and one of the
-    future are not two lots of anything."""
+def test_the_session_line_is_the_spreads_own_24h_not_the_legs_highs(
+        config, pair, legs):
+    """H and L are the SPREAD's own: both legs' 5-minute closes paired
+    by time, `B - beta x A` per bar. Never `high B - beta x high A` -
+    two highs from different moments, which put H BELOW O on a live
+    ETH/BTC ladder. Volume stays PER LEG."""
     legs['acct_a'].broker.symbols[pair.symbol_a].session = {
         'open': 4290.0, 'high': 4300.0, 'low': 4280.0, 'volume': 1200}
     legs['acct_b'].broker.symbols[pair.symbol_b].session = {
         'open': 4350.0, 'high': 4364.0, 'low': 4331.0, 'volume': 900}
+    # A peaks at bar 1, B at bar 2: the legs' highs never coincide.
+    legs['acct_a'].broker.bars[pair.symbol_a] = [
+        {'time': 300 * i, 'close': c} for i, c in
+        enumerate([4290.0, 4300.0, 4285.0, 4280.0])]
+    legs['acct_b'].broker.bars[pair.symbol_b] = [
+        {'time': 300 * i, 'close': c} for i, c in
+        enumerate([4350.0, 4352.0, 4364.0, 4331.0])]
+    config.settings['SPREAD_DAY_SYNC'] = True
     coordinator = Coordinator(config, legs)
 
     coordinator.poll_once()
-    session = coordinator.market[pair.key]['session']
+    md = coordinator.market[pair.key]
+    session = md['session']
 
-    assert session['high'] == pytest.approx(64.0)      # 4364 − 1.0 × 4300
-    assert session['low'] == pytest.approx(51.0)
-    assert session['open'] == pytest.approx(60.0)
+    assert session['open'] == pytest.approx(60.0)      # 4350 - 4290
+    # Per bar: 60, 52, 79, 51 - and the live spread joins the range.
+    assert session['high'] == pytest.approx(max(79.0, md['spread']))
+    assert session['low'] == pytest.approx(min(51.0, md['spread']))
+    assert session['high'] != pytest.approx(64.0)      # the old wrong rule
     assert session['volume_a'] == 1200 and session['volume_b'] == 900
-    assert session['ours'] is False                    # the LEGS', not ours
+    assert session['ours'] is False and session['source'] == '24h'
+    assert md['net_change'] == pytest.approx(md['spread'] - 60.0)
+
+
+def test_the_24h_spread_is_read_again_when_beta_changes(config, pair, legs):
+    """A day measured with yesterday's beta is a different spread."""
+    legs['acct_a'].broker.bars[pair.symbol_a] = [
+        {'time': 0, 'close': 100.0}, {'time': 300, 'close': 110.0}]
+    legs['acct_b'].broker.bars[pair.symbol_b] = [
+        {'time': 0, 'close': 50.0}, {'time': 300, 'close': 60.0}]
+    config.settings['SPREAD_DAY_SYNC'] = True
+    coordinator = Coordinator(config, legs)
+    pair.hedge_ratio = 0.5
+    assert coordinator.spread_day(pair)['open'] == pytest.approx(0.0)
+    pair.hedge_ratio = 0.4
+    assert coordinator.spread_day(pair)['open'] == pytest.approx(10.0)
 
 
 def test_where_the_broker_publishes_no_session_ours_is_used_and_labelled(
