@@ -104,6 +104,12 @@ def _leg_slips(position):
             out[f'{end}_leg_{leg}'] = points
             out[f'{end}_leg_{leg}_money'] = (
                 None if points is None or size is None else points * size)
+            # The same slip in BASIS POINTS of that leg's own price: a
+            # point of BTC and a point of ETH are not the same size, a
+            # basis point of either is.
+            out[f'{end}_leg_{leg}_bps'] = (
+                None if points is None or not sent
+                else points / float(sent) * 1e4)
     return out
 
 
@@ -128,6 +134,8 @@ def _leg_summary(rows):
             key = f'{end}_leg_{leg}'
             values = [r[key] for r in rows if r.get(key) is not None]
             out[key] = {'measured': len(values), 'points_mean': _mean(values),
+                        'bps_mean': _mean([r.get(key + '_bps')
+                                           for r in rows]),
                         'money_total': (sum(r[key + '_money'] for r in rows
                                             if r.get(key + '_money')
                                             is not None)
@@ -258,3 +266,116 @@ def report(positions, window=None, names=None, worst_n=WORST_N):
             'closed': sum(1 for r in rows if not r['open']),
         },
     }
+
+
+# -- how each fill was made, read from OKX's own fills ---------------------
+
+def _cost(fee):
+    """OKX states a fee as a signed amount, negative when charged. Here a
+    COST is positive, as everywhere on this page; a maker rebate comes
+    out negative."""
+    return None if fee is None else -float(fee)
+
+
+def fill_quality(fills, positions, fee_bps=None):
+    """Two things the price slip alone cannot say, from the journal of
+    OKX's own fills over the same window.
+
+    - **maker or taker**, per ladder, leg and end: OKX marks every fill
+      (`execType`), and a "maker" fill that went in as taker is paid at
+      the taker rate. `extra` is what those taker fills cost over the
+      maker rate - None where this account's rates are not known.
+    - **the gap between the legs**, per position: how long after the
+      first leg filled the second one did. Under the maker fill that
+      gap is where the slippage comes from - the first leg is on and
+      the second is still waiting for the market.
+
+    `fee_bps` is {pair_key: {'a': {'maker', 'taker'}, 'b': ...}}.
+    """
+    fee_bps = fee_bps or {}
+    table = {}
+    for f in fills or ():
+        if not f.get('is_ours'):
+            continue
+        key = (f.get('pair_key') or '?', (f.get('leg') or '?').upper(),
+               f.get('entry') or '?')
+        row = table.setdefault(key, {
+            'pair_key': key[0], 'leg': key[1], 'end': key[2],
+            'symbol': f.get('symbol'), 'fills': 0, 'maker_fills': 0,
+            'taker_fills': 0, 'maker_volume': 0.0, 'taker_volume': 0.0,
+            'fees': 0.0, 'extra': 0.0, 'extra_known': True})
+        kind = (f.get('order_type') or '').lower()
+        volume = float(f.get('volume') or 0.0)
+        cost = _cost(f.get('fee') if f.get('fee') is not None
+                     else f.get('commission'))
+        row['fills'] += 1
+        if cost is not None:
+            row['fees'] += cost
+        if kind == 'maker':
+            row['maker_fills'] += 1
+            row['maker_volume'] += volume
+        elif kind == 'taker':
+            row['taker_fills'] += 1
+            row['taker_volume'] += volume
+            rates = (fee_bps.get(key[0]) or {}).get(key[1].lower()) or {}
+            maker, taker = rates.get('maker'), rates.get('taker')
+            if cost is None or maker is None or not taker:
+                row['extra_known'] = False
+            else:
+                row['extra'] += cost * (1.0 - float(maker) / float(taker))
+    liquidity = []
+    for row in sorted(table.values(),
+                      key=lambda r: (r['pair_key'], r['end'] != 'open',
+                                     r['leg'])):
+        total = row['maker_volume'] + row['taker_volume']
+        row['taker_share'] = (row['taker_volume'] / total) if total else None
+        if not row.pop('extra_known'):
+            row['extra'] = None
+        liquidity.append(row)
+
+    # The gap: each leg's LAST fill of its open (and of its close), by
+    # the position tickets the position holds on that leg.
+    by_ticket = {}
+    for f in fills or ():
+        ticket = f.get('position_ticket')
+        if ticket in (None, ''):
+            continue
+        by_ticket.setdefault(str(ticket), []).append(f)
+
+    def last_fill(leg, end):
+        times = [f.get('broker_time_ms')
+                 for t in (leg or {}).get('position_tickets') or ()
+                 for f in by_ticket.get(str(t), ())
+                 if f.get('entry') == end and f.get('broker_time_ms')]
+        return max(times) if times else None
+
+    gaps = []
+    for p in positions or ():
+        legs = {name: p.get('leg_' + name) or {} for name in ('a', 'b')}
+        row = {'position_id': p.get('position_id'),
+               'pair_key': p.get('pair_key'), 'side': p.get('side'),
+               'opened_at': p.get('opened_at')}
+        for end, label in (('open', 'entry'), ('close', 'exit')):
+            ta, tb = last_fill(legs['a'], end), last_fill(legs['b'], end)
+            row[f'{label}_gap_ms'] = (None if ta is None or tb is None
+                                      else abs(tb - ta))
+            row[f'{label}_first'] = (None if ta is None or tb is None
+                                     else ('A' if ta < tb else 'B'
+                                           if tb < ta else 'both'))
+        gaps.append(row)
+    entry_gaps = [g['entry_gap_ms'] for g in gaps
+                  if g['entry_gap_ms'] is not None]
+    exit_gaps = [g['exit_gap_ms'] for g in gaps
+                 if g['exit_gap_ms'] is not None]
+
+    def gap_stats(values):
+        if not values:
+            return {'measured': 0, 'mean_ms': None, 'worst_ms': None}
+        return {'measured': len(values),
+                'mean_ms': sum(values) / len(values),
+                'worst_ms': max(values)}
+
+    return {'liquidity': liquidity,
+            'gaps': sorted(gaps, key=lambda g: -(g['opened_at'] or 0)),
+            'entry_gap': gap_stats(entry_gaps),
+            'exit_gap': gap_stats(exit_gaps)}

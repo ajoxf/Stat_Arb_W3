@@ -213,6 +213,7 @@ class SimOKX:
             ('GET', '/api/v5/trade/order'): self.get_order,
             ('GET', '/api/v5/trade/orders-pending'): self.orders_pending,
             ('GET', '/api/v5/trade/fills'): self.get_fills,
+            ('GET', '/api/v5/trade/orders-history'): self.orders_history,
             ('GET', '/api/v5/trade/fills-history'): self.get_fills,
         }
         handler = routes.get((method.upper(), path))
@@ -634,6 +635,16 @@ class SimOKX:
         return _ok([self._order_row(o) for o in self.orders.values()
                     if o['state'] in ('live', 'partially_filled')
                     and (not inst or o['instId'] == inst)])
+
+    def orders_history(self, params):
+        """Finished orders (filled or cancelled), newest first."""
+        kind = params.get('instType')
+        rows = [self._order_row(o) for o in reversed(list(
+                    self.orders.values()))
+                if o['state'] in ('filled', 'canceled')
+                and (not kind or INSTRUMENTS.get(o['instId'], {}).get(
+                    'instType') == kind)]
+        return _ok(rows[:int(params.get('limit') or 100)])
 
     def get_fills(self, params):
         inst = params.get('instId')

@@ -1469,6 +1469,54 @@ class OKXBroker:
 
     # -- the journal: OKX's own fills ---------------------------------------
 
+    def okx_orders(self, limit=100):
+        """The account's ORDERS as OKX itself holds them - every working
+        one, and the last `limit` finished ones per instrument type
+        (OKX keeps seven days) - for reconciling against the desk. Ours
+        are told by the clOrdId prefix; the desk's own ticket for each,
+        where this broker's ledger knows it, rides along."""
+        seen = {}
+        for kind in ('SPOT', 'SWAP', 'FUTURES'):
+            for path, params in (
+                    ('/api/v5/trade/orders-pending', {'instType': kind}),
+                    ('/api/v5/trade/orders-history',
+                     {'instType': kind, 'limit': str(int(limit))})):
+                try:
+                    rows = self.client.get(path, params, private=True)
+                except OKXError as exc:
+                    self.last_error = str(exc)
+                    continue
+                for r in rows or ():
+                    oid = r.get('ordId')
+                    if not oid or oid in seen:
+                        continue
+                    seen[oid] = r
+        out = []
+        for oid, r in seen.items():
+            meta = self.ledger['ords'].get(oid, {})
+            out.append({
+                'ord_id': oid, 'cl_ord_id': r.get('clOrdId') or '',
+                'tag': r.get('tag') or '', 'symbol': r.get('instId'),
+                'side': (r.get('side') or '').lower(),
+                'pos_side': r.get('posSide') or '',
+                'ord_type': r.get('ordType') or '',
+                'price': _f(r.get('px')), 'size': _f(r.get('sz'), 0.0),
+                'filled': _f(r.get('accFillSz'), 0.0),
+                'avg_price': _f(r.get('avgPx')),
+                'state': r.get('state') or '',
+                'fee': _f(r.get('fee'), 0.0),
+                'fee_ccy': r.get('feeCcy') or '',
+                'created_ms': int(r.get('cTime') or 0),
+                'updated_ms': int(r.get('uTime') or r.get('cTime') or 0),
+                'ours': (r.get('clOrdId') or '').startswith(CLORD_PREFIX),
+                'desk_ticket': meta.get('ticket'),
+                'position_ticket': meta.get('position_ticket'),
+                'entry': meta.get('entry'),
+                'comment': meta.get('comment') or '',
+            })
+        out.sort(key=lambda o: -o['updated_ms'])
+        return out
+
     def order_log(self, hours=24):
         """Every fill OKX reports on this account in the window — ours and
         the trader's own clicks on the OKX app alike — keyed exactly as

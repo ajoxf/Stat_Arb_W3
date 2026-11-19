@@ -3330,8 +3330,9 @@
 
   function smallMoney(x) {
     if (x === null || x === undefined) { return DASH; }
-    return '$' + (Math.abs(x) < 1 ? Number(x).toFixed(4)
-                                  : Number(x).toFixed(2));
+    var n = Number(x);
+    return (n < 0 ? '\u2212$' : '$') + (Math.abs(n) < 1
+      ? Math.abs(n).toFixed(4) : Math.abs(n).toFixed(2));
   }
 
   function kv(label, value, cls, title, wide) {
@@ -5432,7 +5433,7 @@
 
     // WHICH LEG it comes from: each leg against the touch it was SENT
     // at, in that leg's own price points (positive a cost).
-    html += '<table><thead><tr><th>By leg (own price points)</th>' +
+    html += '<table><thead><tr><th>By leg (own price points, and bp)</th>' +
       '<th>Leg A</th><th>Leg A entry</th><th>Leg A exit</th>' +
       '<th>Leg B</th><th>Leg B entry</th><th>Leg B exit</th>' +
       '</tr></thead><tbody>';
@@ -5444,8 +5445,14 @@
       })[0] || {};
       function cell(name) {
         var leg = legs[name] || {};
-        return leg.measured ? slipPoints(leg.points_mean)
-          : '<td><span class="hint">not kept</span></td>';
+        if (!leg.measured) {
+          return '<td><span class="hint">not kept</span></td>';
+        }
+        // The leg's own points, and the same in basis points of its
+        // price - the one unit a BTC leg and an ETH leg share.
+        var bps = leg.bps_mean === null || leg.bps_mean === undefined
+          ? '' : ' <span class="hint">(' + bpsText(leg.bps_mean) + ')</span>';
+        return slipPoints(leg.points_mean).replace('</td>', bps + '</td>');
       }
       html += '<tr><td>' + escapeHtml(group.name || key) + '</td>' +
         '<td>' + escapeHtml(sample.symbol_a || 'A') + '</td>' +
@@ -5467,8 +5474,14 @@
         html += '<td>' + (row.order_type || DASH) + '</td>';
         html += slipPoints(row.entry_points);
         html += slipMoney(row.entry_money);
-        html += slipPoints(row.entry_leg_a);
-        html += slipPoints(row.entry_leg_b);
+        html += slipPoints(row.entry_leg_a).replace('</td>',
+          row.entry_leg_a_bps === null || row.entry_leg_a_bps === undefined
+            ? '</td>' : ' <span class="hint">(' +
+              bpsText(row.entry_leg_a_bps) + ')</span></td>');
+        html += slipPoints(row.entry_leg_b).replace('</td>',
+          row.entry_leg_b_bps === null || row.entry_leg_b_bps === undefined
+            ? '</td>' : ' <span class="hint">(' +
+              bpsText(row.entry_leg_b_bps) + ')</span></td>');
         html += '<td>' + (row.click_to_on_ms === null ||
                           row.click_to_on_ms === undefined
           ? DASH : Math.round(row.click_to_on_ms) + 'ms') + '</td>';
@@ -5476,7 +5489,80 @@
       });
       html += '</tbody></table>';
     }
+    html += fillQualityHtml(report.fill_quality);
     return html;
+  }
+
+  function bpsText(x) {
+    return (x > 0 ? '+' : '') + Number(x).toFixed(2) + ' bp';
+  }
+
+  function fillQualityHtml(q) {
+    /* From OKX's own fills: was each fill maker or taker, and how long
+     * did the second leg take after the first. */
+    if (!q) { return ''; }
+    var html = '';
+    html += '<table><thead><tr><th>Maker or taker (OKX\u2019s own ' +
+      'fills)</th><th>Leg</th><th>End</th><th>Fills</th><th>Maker</th>' +
+      '<th>Taker</th><th>Taker share</th><th>Fees paid</th>' +
+      '<th title="What the taker fills cost over this account\u2019s maker ' +
+      'rate">Extra for taker</th></tr></thead><tbody>';
+    if (!(q.liquidity || []).length) {
+      html += '<tr><td colspan="9"><span class="hint">no fills of ours in ' +
+        'this window yet</span></td></tr>';
+    }
+    (q.liquidity || []).forEach(function (r) {
+      var share = r.taker_share;
+      html += '<tr class="' + (share ? 'mismatch' : '') + '">' +
+        '<td>' + escapeHtml(pairName(r.pair_key)) + '</td>' +
+        '<td>' + escapeHtml(r.leg) + ' <span class="hint">' +
+        escapeHtml(r.symbol || '') + '</span></td>' +
+        '<td>' + escapeHtml(r.end) + '</td>' +
+        '<td>' + r.fills + '</td>' +
+        '<td>' + r.maker_fills + ' <span class="hint">' +
+        fmt(r.maker_volume, 2) + ' lots</span></td>' +
+        '<td>' + r.taker_fills + ' <span class="hint">' +
+        fmt(r.taker_volume, 2) + ' lots</span></td>' +
+        '<td>' + (share === null || share === undefined ? DASH
+                  : Math.round(share * 100) + '%') + '</td>' +
+        '<td>' + smallMoney(r.fees) + '</td>' +
+        '<td>' + (r.extra === null || r.extra === undefined ? DASH
+                  : smallMoney(r.extra)) + '</td></tr>';
+    });
+    html += '</tbody></table>';
+
+    var eg = q.entry_gap || {}, xg = q.exit_gap || {};
+    function ms(x) {
+      if (x === null || x === undefined) { return DASH; }
+      return x >= 1000 ? (x / 1000).toFixed(1) + ' s' : Math.round(x) + ' ms';
+    }
+    html += '<table><thead><tr><th>Gap between the legs</th>' +
+      '<th>Side</th><th>Entry gap</th><th>Filled first</th>' +
+      '<th>Exit gap</th><th>Filled first</th><th>Opened</th></tr>' +
+      '<tr class="hint"><td>all</td><td></td><td>mean ' + ms(eg.mean_ms) +
+      ' · worst ' + ms(eg.worst_ms) + '</td><td></td><td>mean ' +
+      ms(xg.mean_ms) + ' · worst ' + ms(xg.worst_ms) +
+      '</td><td></td><td></td></tr></thead><tbody>';
+    (q.gaps || []).slice(0, 20).forEach(function (g) {
+      html += '<tr><td>' + escapeHtml(pairName(g.pair_key)) + '</td>' +
+        '<td>' + escapeHtml(g.side || DASH) + '</td>' +
+        '<td>' + ms(g.entry_gap_ms) + '</td>' +
+        '<td>' + escapeHtml(g.entry_first || DASH) + '</td>' +
+        '<td>' + ms(g.exit_gap_ms) + '</td>' +
+        '<td>' + escapeHtml(g.exit_first || DASH) + '</td>' +
+        '<td>' + localTime(g.opened_at) + '</td></tr>';
+    });
+    html += '</tbody></table>';
+    html += '<div class="note">Maker or taker is OKX\u2019s own marking of ' +
+      'each fill. A row is highlighted when any of it went in as taker. ' +
+      'The gap is from one leg\u2019s last fill to the other\u2019s: under ' +
+      'the maker fill, that is the time the first leg is on alone.</div>';
+    return html;
+  }
+
+  function pairName(key) {
+    var pair = ((state.snapshot || {}).pairs || {})[key] || {};
+    return pair.name || key || DASH;
   }
 
   function localTime(seconds) {
@@ -6654,12 +6740,122 @@
         ' could not be read this pass — UNKNOWN, not flat. No orphans ' +
         'or ghosts were inferred from them.</div>';
     }
+    html += okxOrdersHtml();
+    return html;
+  }
+
+  function loadOkxOrders(fresh) {
+    var now = Date.now();
+    if (!fresh && state.okxOrdersAt && now - state.okxOrdersAt < 10000) {
+      return;
+    }
+    state.okxOrdersAt = now;
+    fetch('/api/okx_orders' + (fresh ? '?fresh=1' : ''))
+      .then(function (r) { return r.json(); })
+      .then(function (body) { state.okxOrders = body; render(); })
+      .catch(function (e) {
+        state.okxOrders = {ok: false, error: String(e)};
+        render();
+      });
+  }
+
+  function okxOrdersHtml() {
+    /* THE ORDERS AS OKX HOLDS THEM - working and the last week's
+     * finished ones - beside the desk's own ticket for each. The
+     * reconciliation a person does by eye: every order the desk sent
+     * should be here with the desk's ticket on it; an order of OURS
+     * with no desk ticket is one the desk does not know about. */
+    loadOkxOrders(false);
+    var body = state.okxOrders;
+    var oursOnly = state.okxOrdersOurs !== false;
+    var html = '<div class="journal-controls"><b>OKX orders</b> ' +
+      '<label class="check"><input type="checkbox" class="okx-orders-ours"' +
+      (oursOnly ? ' checked' : '') + '> ours only</label>' +
+      '<button class="btn okx-orders-refresh">Refresh</button>' +
+      '<span class="hint">Read live from OKX (working orders, and the ' +
+      'last 7 days of finished ones), every 10 s.</span></div>';
+    if (!body) { return html + '<p class="note">reading OKX…</p>'; }
+    if (!body.ok) {
+      return html + '<p class="note mismatch">' +
+        escapeHtml(body.error || 'OKX could not be read') + '</p>';
+    }
+    Object.keys(body.errors || {}).forEach(function (name) {
+      html += '<div class="note mismatch">' + escapeHtml(name) + ': ' +
+        escapeHtml(body.errors[name]) + '</div>';
+    });
+    var rows = (body.orders || []).filter(function (o) {
+      return !oursOnly || o.ours;
+    });
+    var unknown = rows.filter(function (o) {
+      return o.ours && (o.desk_ticket === null || o.desk_ticket === undefined);
+    }).length;
+    if (unknown) {
+      html += '<div class="note mismatch">' + unknown + ' order(s) of ours ' +
+        'on OKX carry no desk ticket - sent by a run whose ledger is gone, ' +
+        'or not by this desk. Check them on OKX.</div>';
+    }
+    html += '<table class="okx-orders"><thead><tr><th>Updated</th>' +
+      '<th>Account</th><th>Instrument</th><th>Side</th><th>Pos</th>' +
+      '<th>Type</th><th>Price</th><th>Size</th><th>Filled</th>' +
+      '<th>Avg</th><th>State</th><th>Fee</th><th>Desk ticket</th>' +
+      '<th>Closes</th><th>Comment</th><th>OKX order id</th></tr></thead>' +
+      '<tbody>';
+    if (!rows.length) {
+      html += '<tr><td colspan="16">no orders on OKX in the last 7 days' +
+        (oursOnly ? ' from this desk' : '') + '</td></tr>';
+    }
+    rows.slice(0, 200).forEach(function (o) {
+      var working = o.state === 'live' || o.state === 'partially_filled';
+      var noTicket = o.ours && (o.desk_ticket === null ||
+                                o.desk_ticket === undefined);
+      var when = o.updated_ms ? new Date(o.updated_ms) : null;
+      html += '<tr class="' + (noTicket ? 'mismatch' : working ? 'working' : '')
+        + '">' +
+        '<td>' + (when ? when.toLocaleDateString() + ' ' +
+                  when.toLocaleTimeString() : DASH) + '</td>' +
+        '<td>' + escapeHtml(o.account) + '</td>' +
+        '<td>' + escapeHtml(o.symbol || DASH) + '</td>' +
+        '<td>' + escapeHtml(o.side) + '</td>' +
+        '<td>' + escapeHtml(o.pos_side || DASH) + '</td>' +
+        '<td>' + escapeHtml(o.ord_type) + '</td>' +
+        '<td>' + (o.price === null || o.price === undefined ? 'market'
+                  : fmt(o.price, 4)) + '</td>' +
+        '<td>' + qty(o.size) + '</td>' +
+        '<td>' + qty(o.filled) + '</td>' +
+        '<td>' + (o.avg_price ? fmt(o.avg_price, 4) : DASH) + '</td>' +
+        '<td>' + escapeHtml(o.state) + '</td>' +
+        // OKX signs a fee negative when charged; shown as a COST here,
+        // positive, as on the Slippage page. A rebate reads negative.
+        '<td>' + (o.fee ? smallMoney(-o.fee) : DASH) + '</td>' +
+        '<td>' + (o.ours ? (noTicket ? '<b>none</b>'
+                  : escapeHtml(String(o.desk_ticket)))
+                 : '<span class="hint">not ours</span>') + '</td>' +
+        '<td>' + (o.position_ticket ? escapeHtml(String(o.position_ticket))
+                  : DASH) + '</td>' +
+        '<td>' + escapeHtml(o.comment || o.tag || '') + '</td>' +
+        '<td class="hint">' + escapeHtml(o.ord_id) + '</td></tr>';
+    });
+    html += '</tbody></table>';
+    html += '<div class="note">Every order the desk sends carries its own ' +
+      'id prefix and the tag <b>nexus</b>, so OKX\u2019s list and the ' +
+      'desk\u2019s tickets line up row for row. "Closes" is the position ' +
+      'ticket a closing order was sent against. A red row is an order of ' +
+      'ours the desk has no ticket for.</div>';
     return html;
   }
 
   function onMonitorClick(e) {
+    if (e.target.classList && e.target.classList.contains('okx-orders-ours')) {
+      state.okxOrdersOurs = e.target.checked;
+      render();
+      return;
+    }
     var button = e.target.closest('button');
     if (!button) { return; }
+    if (button.classList.contains('okx-orders-refresh')) {
+      loadOkxOrders(true);
+      return;
+    }
     if (button.classList.contains('an-toggle-unconfirmed')) {
       state.showUnconfirmed = !state.showUnconfirmed;
       render();

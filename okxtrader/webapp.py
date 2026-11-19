@@ -19,6 +19,7 @@ Two rules from the spec shape the endpoints here:
 
 import datetime
 import logging
+import json
 import os
 import re
 import secrets
@@ -518,6 +519,20 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
         except Exception as e:                    # a journal mid-write
             logging.error('the journal could not be counted: %s', e)
             body['journal'] = None
+        # Maker or taker, and the gap between the legs: from OKX's own
+        # fills over the same window, with this account's VIP rates.
+        try:
+            to_ms = window['to'] * 1000.0 + shift
+            fills = [f for f in db.fills(ours_only=True, since_ms=from_ms,
+                                         limit=5000)
+                     if (f.get('broker_time_ms') or 0) <= to_ms]
+            fee_bps = {key: (pair or {}).get('fee_bps')
+                       for key, pair in (snapshot.get('pairs') or {}).items()}
+            body['fill_quality'] = slippage.fill_quality(fills, positions,
+                                                         fee_bps)
+        except Exception as e:
+            logging.error('fill quality could not be read: %s', e)
+            body['fill_quality'] = None
         return body, None
 
     # -- the Analysis tab ------------------------------------------------------
@@ -706,7 +721,9 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
                    # Which LEG slipped: its own price points against the
                    # touch it was sent at, positive a cost.
                    'symbol_a', 'entry_leg_a', 'exit_leg_a',
-                   'symbol_b', 'entry_leg_b', 'exit_leg_b']
+                   'entry_leg_a_bps', 'exit_leg_a_bps',
+                   'symbol_b', 'entry_leg_b', 'exit_leg_b',
+                   'entry_leg_b_bps', 'exit_leg_b_bps']
         writer = csv.DictWriter(buffer, fieldnames=columns,
                                 extrasaction='ignore')
         writer.writeheader()
@@ -841,6 +858,61 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
             prefix='okxweb-'))
         broker.initialize()
         return LocalLeg(broker)
+
+    _okx_orders_cache = {}
+
+    def desk_ledger(name):
+        """The ENGINE's own ticket ledger for this account, read only:
+        which OKX order is which desk ticket. The web process never
+        writes it."""
+        base = os.environ.get('OKX_LEDGER_DIR', 'data')
+        path = os.path.join(base, f'okx_ledger_{name}.json')
+        try:
+            with open(path, encoding='utf-8') as handle:
+                return (json.load(handle) or {}).get('ords') or {}
+        except (OSError, ValueError):
+            return {}
+
+    @app.get('/api/okx_orders')
+    def api_okx_orders():
+        """Every OKX account's orders as OKX holds them: working ones,
+        and the last week's finished ones. Read live, cached ten
+        seconds - for reconciling what the desk sent with what OKX did."""
+        now = time.time()
+        cached = _okx_orders_cache.get('body')
+        if cached and now - cached[0] < 10 and not request.args.get('fresh'):
+            return jsonify(cached[1])
+        raw = cfg.load_raw(config_path)
+        accounts, rows, errors = (raw.get('accounts') or {}), [], {}
+        for name in sorted(accounts):
+            account = okx_config(name)
+            if account is None:
+                continue
+            leg = None
+            try:
+                leg = open_okx_leg(account)
+                ledger = desk_ledger(name)
+                for row in leg.broker.okx_orders():
+                    meta = ledger.get(row['ord_id']) or {}
+                    row.update({
+                        'account': name,
+                        'desk_ticket': meta.get('ticket'),
+                        'position_ticket': meta.get('position_ticket'),
+                        'entry': meta.get('entry'),
+                        'comment': meta.get('comment') or ''})
+                    rows.append(row)
+            except Exception as e:
+                errors[name] = str(e)
+            finally:
+                if leg is not None:
+                    try:
+                        leg.close()
+                    except Exception:
+                        pass
+        rows.sort(key=lambda o: -o['updated_ms'])
+        body = {'ok': True, 'at': now, 'orders': rows, 'errors': errors}
+        _okx_orders_cache['body'] = (now, body)
+        return jsonify(body)
 
     def okx_checklist(name, account):
         leg = open_okx_leg(account)
