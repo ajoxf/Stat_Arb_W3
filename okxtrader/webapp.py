@@ -1418,7 +1418,13 @@ def main():
             os.path.dirname(os.path.abspath(args.config)) or '.', '.env'))
     from . import telegram
     telegram.start(app)
-    app.run(host=args.host, port=args.port, threaded=True)
+    # Never Flask's debug mode or reloader, whatever the environment says:
+    # an old Stat_Arb_W3 .env carries FLASK_DEBUG=true, and Flask obeys it
+    # on its own - an interactive debugger on the trading desk, and a
+    # reloader that runs a second copy of this process (and its Telegram
+    # bot) beside the first.
+    app.run(host=args.host, port=args.port, threaded=True, debug=False,
+            use_reloader=False)
 
 
 if __name__ == '__main__':

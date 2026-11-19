@@ -518,3 +518,21 @@ def test_the_page_is_rebuilt_when_the_template_changes(paths, tmp_path):
     assert app.config['TEMPLATES_AUTO_RELOAD'] is True
 
 
+
+
+def test_the_desk_never_runs_flasks_debugger_whatever_the_env_says(
+        monkeypatch, tmp_path):
+    """An old Stat_Arb_W3 .env sets FLASK_DEBUG=true, and Flask obeys
+    that by itself unless told otherwise."""
+    import sys
+    from okxtrader import webapp
+    monkeypatch.setenv('FLASK_DEBUG', 'true')
+    seen = {}
+    monkeypatch.setattr('flask.Flask.run',
+                        lambda self, **kw: seen.update(kw))
+    monkeypatch.setattr(sys, 'argv', [
+        'webapp', '--config', str(tmp_path / 'config.json'),
+        '--status', str(tmp_path / 's.json'), '--port', '8999'])
+    (tmp_path / 'config.json').write_text('{"accounts": {}, "pairs": {}}')
+    webapp.main()
+    assert seen.get('debug') is False and seen.get('use_reloader') is False
