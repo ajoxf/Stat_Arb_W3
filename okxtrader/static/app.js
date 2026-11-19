@@ -2399,7 +2399,8 @@
       if (!contract) { return ''; }
       var units = lots * contract;
       return ' = ' + (units ? String(Number(units.toPrecision(4))) : '0') +
-        ' ' + String(symbol || '').split('-')[0];
+        ' ' + (String(symbol || '').indexOf('-') > 0
+               ? String(symbol).split('-')[0] : 'units');
     }
     note.textContent =
       'In force: 1 Qty = ' + fmt(lotsA, 2) + ' lots ' +
@@ -3327,6 +3328,12 @@
     return value === null || value === undefined ? DASH : money(value);
   }
 
+  function smallMoney(x) {
+    if (x === null || x === undefined) { return DASH; }
+    return '$' + (Math.abs(x) < 1 ? Number(x).toFixed(4)
+                                  : Number(x).toFixed(2));
+  }
+
   function kv(label, value, cls, title, wide) {
     return '<div class="aw-kv' + (wide ? ' wide' : '') + '"' +
       (title ? ' title="' + escapeHtml(title) + '"' : '')
@@ -3653,7 +3660,16 @@
          'expected capture ' + moneyOr(edge.capture) +
          ' (' + (params.edge_capture_frac || 0.5) + ' \u00d7 entry z \u00d7 '
          + '\u03c3) against the round trip, at the entry z', true) +
-      kv('Round trip', moneyOr(cost.total), '',
+      // The round trip in its two parts, ON the line: the bid-ask is
+      // the 0.0128 the leg book shows, in money; the fees are OKX's for
+      // both legs, in and out. Small sums keep four decimals - $0.00 is
+      // not what a fill costs.
+      kv('Round trip', moneyOr(cost.total) +
+         (cost.total === null || cost.total === undefined ? '' :
+          ' = fees ' + smallMoney(cost.commission) + ' + bid-ask ' +
+          smallMoney(cost.crossing) +
+          (cost.slippage ? ' + slip ' + smallMoney(cost.slippage) : '')),
+         '',
          'crossing ' + moneyOr(cost.crossing) + ' + commission ' +
          moneyOr(cost.commission) + ' + slippage ' + moneyOr(cost.slippage)) +
       kv('Today', (day.trades || 0) + (params.max_trades_day

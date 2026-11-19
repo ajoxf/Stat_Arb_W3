@@ -4137,8 +4137,8 @@ def test_the_lots_one_spread_costs_can_be_typed_and_says_what_is_in_force(
 
     note = ' '.join(page.text_content('.ladder .ls-clip-note').split())
     # PER QTY and FOR THE QTY IN THE BOX, side by side.
-    assert '1 Qty = 0.10 lots XAUUSD_ = 10.00 units' in note
-    assert '0.10 lots GC1226 = 10.00 units' in note
+    assert '1 Qty = 0.10 lots XAUUSD_ = 10 units' in note
+    assert '0.10 lots GC1226 = 10 units' in note
     assert 'per 1.00 of spread' in note
     assert 'Qty 1.00 sends 0.10 / 0.10 lots' in note
     # The contract size is MT5's, never the trader's.
