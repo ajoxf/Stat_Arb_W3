@@ -31,7 +31,7 @@ from flask import Flask, jsonify, render_template, request
 from . import analysis, atomicfile, config as cfg, diagnostics, fairvalue, \
     hedgeratio, signals, sizing, slippage
 from .commands import CommandLog
-from .legs import RemoteLeg
+from .legs import LocalLeg, RemoteLeg
 
 #: How old the status file may be before the UI says the engine is not
 #: running. Six polls at the default 0.3s: long enough not to flicker,
@@ -772,6 +772,21 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
         accounts = []
         for name, account in (raw.get('accounts') or {}).items():
             account = account or {}
+            okx = cfg.AccountConfig.from_dict(name, account)
+            if okx.is_okx:
+                # An OKX account: an API key, not a terminal. Only
+                # WHETHER each part is saved, and under which .env key -
+                # never the value.
+                accounts.append({
+                    'name': name, 'exchange': 'okx', 'demo': okx.demo,
+                    'base_url': account.get('base_url') or '',
+                    'key_env': okx.api_key_env,
+                    'secret_env': okx.secret_env,
+                    'passphrase_env': okx.passphrase_env,
+                    'key_set': bool(okx.api_key),
+                    'secret_set': bool(okx.api_secret),
+                    'passphrase_set': bool(okx.api_passphrase)})
+                continue
             accounts.append({
                 'name': name,
                 'endpoint': account.get('endpoint'),
@@ -822,6 +837,10 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
         raw = cfg.load_raw(config_path)
         raw.setdefault('accounts', {})
         account = raw['accounts'].setdefault(name, {})
+        if payload.get('exchange') == 'okx' or (
+                account.get('exchange') == 'okx'
+                and not payload.get('exchange')):
+            return save_okx_account(raw, name, account, payload)
         # What the row held BEFORE the edit: the guards must only refuse
         # a value being newly CLAIMED, or an existing clash is unfixable
         # because every save of either row trips over the other.
@@ -884,6 +903,75 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
                         'terminal_missing': cfg.terminal_missing(
                             account.get('terminal_path'))})
 
+    def save_okx_account(raw, name, account, payload):
+        """An OKX account: demo or live, an optional base URL, and the
+        three parts of its API key - which go to .env (and this
+        process's environment, so Test works at once), never to the
+        config and never to a log line."""
+        account['exchange'] = 'okx'
+        if 'demo' in payload:
+            account['demo'] = bool(payload.get('demo'))
+        account.setdefault('demo', True)
+        url = (payload.get('base_url') or '').strip()
+        if url and not re.match(r'^https?://', url):
+            return jsonify({'ok': False,
+                            'error': 'the base URL must start with https:// '
+                                     '- leave it blank for www.okx.com'}), 400
+        account['base_url'] = url or None
+        keys = cfg.okx_env_keys(name)
+        for env, field in zip(keys, ('api_key', 'secret', 'passphrase')):
+            account[{'api_key': 'api_key_env', 'secret': 'secret_env',
+                     'passphrase': 'passphrase_env'}[field]] = \
+                account.get({'api_key': 'api_key_env',
+                             'secret': 'secret_env',
+                             'passphrase': 'passphrase_env'}[field]) or env
+        for field, key_field in (('api_key', 'api_key_env'),
+                                 ('secret', 'secret_env'),
+                                 ('passphrase', 'passphrase_env')):
+            value = (payload.get(field) or '').strip()
+            if value:
+                env_path = os.path.join(os.path.dirname(
+                    os.path.abspath(config_path)) or '.', '.env')
+                cfg.write_env_value(env_path, account[key_field], value)
+                os.environ[account[key_field]] = value
+        cfg.save_raw(config_path, raw)
+        return jsonify({'ok': True, 'account': name, 'exchange': 'okx',
+                        'restart_required': True,
+                        'note': 'saved — the engine restarts by itself to '
+                                'pick it up'})
+
+    def okx_config(name):
+        """This account as an AccountConfig when it is an OKX one."""
+        raw = cfg.load_raw(config_path)
+        row = (raw.get('accounts') or {}).get(name)
+        if row is None:
+            return None
+        account = cfg.AccountConfig.from_dict(name, row)
+        return account if account.is_okx else None
+
+    def open_okx_leg(account):
+        """A short-lived direct connection to OKX for this account.
+
+        Its ticket ledger is a scratch copy, so nothing the web process
+        does can overwrite the engine's own record of its tickets."""
+        import tempfile
+        from .okx_broker import OKXBroker
+        broker = OKXBroker(account, ledger_path=tempfile.mkdtemp(
+            prefix='okxweb-'))
+        broker.initialize()
+        return LocalLeg(broker)
+
+    def okx_checklist(name, account):
+        leg = open_okx_leg(account)
+        checklist = diagnostics.Checklist()
+        try:
+            diagnostics.check_okx_account(
+                checklist, name, leg.broker,
+                has_keys=account.has_api_key or bool(account.base_url))
+        finally:
+            leg.close()
+        return checklist
+
     @app.get('/api/accounts/<path:name>/symbols')
     def api_find_symbols(name):
         """Search an account's symbols with the coordinator DOWN.
@@ -892,6 +980,18 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
         operator finds out which, and it must not need the engine that
         will not start until the answer is right.
         """
+        okx = okx_config(name)
+        if okx is not None:
+            # Every SPOT, SWAP and FUTURES instrument OKX lists, searched
+            # by name: BTC, ETH-USDT, -SWAP, 2612... No key needed.
+            leg = open_okx_leg(okx)
+            try:
+                found = leg.find_symbols(request.args.get('q', ''), 60)
+            finally:
+                leg.close()
+            return jsonify({'ok': True, 'symbols': found or [],
+                            'terminal': {'server': 'OKX demo' if okx.demo
+                                         else 'OKX live'}})
         raw = cfg.load_raw(config_path)
         account = (raw.get('accounts') or {}).get(name)
         if not account or not account.get('endpoint'):
@@ -928,6 +1028,11 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
         The first question, and the one whose answer is usually an
         instruction: start the runner, open the terminal, log in.
         """
+        okx = okx_config(name)
+        if okx is not None:
+            result = okx_checklist(name, okx).result()
+            return jsonify(dict(result, account=name,
+                                connected=result['ok']))
         leg, error, code = open_leg(name)
         checklist = diagnostics.Checklist()
         if leg is None:
@@ -956,6 +1061,14 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
         `10027 AutoTrading disabled by client` is a button in that
         terminal and nothing else on the screen will say so.
         """
+        okx = okx_config(name)
+        if okx is not None:
+            result = okx_checklist(name, okx).result()
+            return jsonify(dict(result, account=name,
+                                connected=result['ok'],
+                                problems=[c['message'] for c in
+                                          result['checks']
+                                          if c['status'] == 'FAIL']))
         leg, error, code = open_leg(name)
         checklist = diagnostics.Checklist()
         if leg is None:
@@ -999,9 +1112,15 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
             terminal = leg.terminal_report()
             account_info = leg.account_info()
             offset = leg.server_offset()
-            diagnostics.check_account(checklist, name, terminal, account_info,
-                                      offset,
-                                      expect_login=configured_login(name))
+            okx = okx_config(name)
+            if okx is not None:
+                diagnostics.check_okx_account(
+                    checklist, name, leg.broker,
+                    has_keys=okx.has_api_key or bool(okx.base_url))
+            else:
+                diagnostics.check_account(checklist, name, terminal,
+                                          account_info, offset,
+                                          expect_login=configured_login(name))
             for key, pair in pairs.items():
                 for symbol, role in ((pair.symbol_a, 'leg A'),
                                      (pair.symbol_b, 'leg B')):
@@ -1126,8 +1245,8 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
             # can trade" — the screen asserting a second leg that was
             # never configured.
             'summary': (f'Connected — {len(accounts)} account'
-                        f'{"" if len(accounts) == 1 else "s"} logged in, '
-                        f'Algo Trading on, and prices arriving. '
+                        f'{"" if len(accounts) == 1 else "s"} connected, '
+                        f'trading allowed, and prices arriving. '
                         f'You can trade.'
                         if not blockers else
                         'Not ready to trade: ' + blockers[0]),
@@ -1159,6 +1278,14 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
         (leg, error, status) — the caller closes it. This is the path
         that must work with the COORDINATOR down.
         """
+        okx = okx_config(name)
+        if okx is not None:
+            leg = open_okx_leg(okx)
+            if not leg.broker.connected:
+                error = leg.broker.last_error
+                leg.close()
+                return None, f'OKX did not answer for {name}: {error}', 503
+            return leg, None, 200
         raw = cfg.load_raw(config_path)
         account = (raw.get('accounts') or {}).get(name)
         if not account or not account.get('endpoint'):
@@ -1241,8 +1368,10 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
                                 'error': specs[side].get('error')}), 404
 
         price_a, price_b = _mid(specs['a']), _mid(specs['b'])
+        okx_type, okx_type_why = okx_pair_type(specs['a'], specs['b'])
         suggested, why = hedgeratio.suggest(
-            pair.get('pair_type', 'SPOT_FUTURE'), price_a, price_b)
+            pair.get('pair_type') or okx_type or 'SPOT_FUTURE',
+            price_a, price_b)
         beta = float(pair.get('hedge_ratio') or suggested or 1.0)
         # What one Qty means on each leg. BOTH are the trader's, and a
         # blank reads as 1 — nothing is derived here any more.
@@ -1262,6 +1391,16 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
             'specs': specs,
             'suggested_beta': suggested,
             'beta_reason': why,
+            # OKX: what the two instruments ARE decides the pair type -
+            # spot or perp against a perp or future of the same coin is a
+            # basis; two coins are two different instruments.
+            'pair_type_suggestion': okx_type,
+            'pair_type_reason': okx_type_why,
+            'fees_bps': {side: {'maker': specs[side].get('maker_bps'),
+                                'taker': specs[side].get('taker_bps')}
+                         for side in ('a', 'b')},
+            'funding': {side: specs[side].get('funding_rate')
+                        for side in ('a', 'b')},
             'stamped_for': hedgeratio.pair_signature(
                 (pair.get('leg_a') or {}).get('symbol'),
                 (pair.get('leg_b') or {}).get('symbol')),
@@ -1433,6 +1572,25 @@ def _tidy_key(key):
     """A pair key as everything else writes it: no stray whitespace, and
     one spelling of the separator."""
     return re.sub(r'\s*\|\s*', '|', str(key or '').strip())
+
+
+def okx_pair_type(spec_a, spec_b):
+    """(pair type, why) for two OKX instruments, or (None, None) when
+    either is not one. BTC-USDT / BTC-USDT-SWAP / BTC-USDT-261225: the
+    coin is the first part of the instrument id."""
+    kind_a, kind_b = spec_a.get('inst_type'), spec_b.get('inst_type')
+    if not kind_a or not kind_b:
+        return None, None
+    coin_a = str(spec_a.get('symbol') or '').split('-')[0]
+    coin_b = str(spec_b.get('symbol') or '').split('-')[0]
+    if coin_a != coin_b:
+        return 'RELATED', (f'{coin_a} against {coin_b}: two different '
+                           f'coins, priced by a hedge ratio, no carry')
+    if kind_a == 'FUTURES' and kind_b == 'FUTURES':
+        return 'FUTURE_FUTURE', (f'two {coin_a} futures: a calendar, decided '
+                                 f'when the near one expires')
+    return 'SPOT_FUTURE', (f'{coin_a} {kind_a.lower()} against '
+                           f'{kind_b.lower()}: a basis, beta 1')
 
 
 def _mid(report):

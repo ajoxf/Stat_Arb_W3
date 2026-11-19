@@ -715,20 +715,59 @@ class SimOKX:
 # -- HTTP ----------------------------------------------------------------
 
 
+def _auth_refusal(sim, headers, method, path, raw):
+    """OKX's own answer to a private request whose key is wrong, or
+    None. With `sim.keys` unset any signed request passes (the demo);
+    set to {api_key: (secret, passphrase)}, the key, passphrase and the
+    HMAC signature are all checked as OKX checks them, and a request
+    without the demo header is a live request (50101 on a demo key)."""
+    if not headers.get('OK-ACCESS-SIGN'):
+        return {'code': '50113', 'msg': 'Invalid Sign', 'data': []}
+    keys = getattr(sim, 'keys', None)
+    if not keys:
+        return None
+    key = headers.get('OK-ACCESS-KEY') or ''
+    if key not in keys:
+        return {'code': '50111', 'msg': 'Invalid OK-ACCESS-KEY', 'data': []}
+    secret, passphrase = keys[key]
+    if headers.get('x-simulated-trading') != '1':
+        return {'code': '50101', 'msg': 'APIKey does not match current '
+                                        'environment.', 'data': []}
+    if headers.get('OK-ACCESS-PASSPHRASE') != passphrase:
+        return {'code': '50105', 'msg': 'Invalid OK-ACCESS-PASSPHRASE',
+                'data': []}
+    import base64
+    import hashlib
+    import hmac
+    message = (headers.get('OK-ACCESS-TIMESTAMP', '') + method + path
+               + (raw.decode() if raw else ''))
+    want = base64.b64encode(hmac.new(secret.encode(), message.encode(),
+                                     hashlib.sha256).digest()).decode()
+    if not hmac.compare_digest(want, headers.get('OK-ACCESS-SIGN', '')):
+        return {'code': '50113', 'msg': 'Invalid Sign', 'data': []}
+    return None
+
+
 def make_handler(sim):
     class Handler(BaseHTTPRequestHandler):
         def _answer(self, method):
             url = urlparse(self.path)
             params = {k: v[0] for k, v in parse_qs(url.query).items()}
             body = None
+            raw = b''
             if method == 'POST':
                 length = int(self.headers.get('Content-Length') or 0)
                 raw = self.rfile.read(length) if length else b''
                 body = json.loads(raw or b'{}')
             private = (url.path.startswith('/api/v5/account')
                        or url.path.startswith('/api/v5/trade'))
-            if private and not self.headers.get('OK-ACCESS-SIGN'):
-                reply = {'code': '50113', 'msg': 'Invalid Sign', 'data': []}
+            refusal = None
+            if private:
+                refusal = _auth_refusal(sim, self.headers, method,
+                                        self.path, raw if method == 'POST'
+                                        else b'')
+            if refusal:
+                reply = refusal
             else:
                 reply = sim.handle(method, url.path, params, body)
             data = json.dumps(reply).encode()

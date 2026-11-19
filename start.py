@@ -98,7 +98,19 @@ def engine_fingerprint(config_path):
         key: {field: (pair or {}).get(field)
               for field in ('leg_a', 'leg_b', 'hedge_ratio', 'enabled')}
         for key, pair in (raw.get('pairs') or {}).items()}
-    return json.dumps({'accounts': accounts, 'pairs': pairs}, sort_keys=True)
+    # A key typed again on the Exchanges page keeps its .env NAME, so the
+    # names alone would never notice it: a digest of .env itself does
+    # (the digest only - no value is held or logged here).
+    import hashlib
+    env_path = os.path.join(os.path.dirname(os.path.abspath(config_path)),
+                            '.env')
+    try:
+        with open(env_path, 'rb') as f:
+            env_digest = hashlib.sha256(f.read()).hexdigest()
+    except OSError:
+        env_digest = None
+    return json.dumps({'accounts': accounts, 'pairs': pairs,
+                       'env': env_digest}, sort_keys=True)
 
 
 def check_config(path):

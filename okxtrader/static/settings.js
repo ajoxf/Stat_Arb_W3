@@ -172,9 +172,22 @@
 
   //: The blank "new account" row's fields, in render order.
   var NEW_ACCOUNT_FIELDS = ['f-name', 'f-terminal', 'f-login', 'f-server',
-                            'f-endpoint', 'f-password'];
+                            'f-endpoint', 'f-password', 'f-key', 'f-secret',
+                            'f-passphrase', 'f-baseurl'];
 
   function newAccountDraft(section) {
+    // Both blank rows - OKX's and, where there are MT5 accounts, MT5's.
+    if (!section) { return null; }
+    var drafts = {};
+    var any = false;
+    ['tr.new', 'tr.okx-new'].forEach(function (selector) {
+      var draft = oneDraft(section, selector);
+      if (draft) { drafts[selector] = draft; any = true; }
+    });
+    return any ? drafts : null;
+  }
+
+  function oneDraft(section, selector) {
     // What is half-typed into the NEW account row, or null.
     //
     // The connection poll repaints this table every 5 seconds and
@@ -185,7 +198,7 @@
     // name while the screen shows no reason at all. The row is unsaved
     // work: carry it across the repaint.
     if (!section) { return null; }
-    var row = section.querySelector('tr.new');
+    var row = section.querySelector(selector);
     if (!row) { return null; }
     var draft = {};
     NEW_ACCOUNT_FIELDS.forEach(function (field) {
@@ -215,7 +228,7 @@
     Array.prototype.forEach.call(
       section.querySelectorAll('tr[data-account]:not(.new)'), function (row) {
         Array.prototype.forEach.call(
-          row.querySelectorAll('input'), function (input) {
+          row.querySelectorAll('input, select'), function (input) {
             if (input.dataset.rendered === undefined) { return; }
             if (input.value === input.dataset.rendered) { return; }
             edits = edits || {};
@@ -239,10 +252,15 @@
     });
   }
 
-  function restoreNewAccount(section, draft) {
-    if (!draft || !section) { return; }
-    var row = section.querySelector('tr.new');
-    if (!row) { return; }
+  function restoreNewAccount(section, drafts) {
+    if (!drafts || !section) { return; }
+    Object.keys(drafts).forEach(function (selector) {
+      restoreOneDraft(section.querySelector(selector), drafts[selector]);
+    });
+  }
+
+  function restoreOneDraft(row, draft) {
+    if (!row || !draft) { return; }
     NEW_ACCOUNT_FIELDS.forEach(function (field) {
       var input = row.querySelector('.' + field);
       if (input) { input.value = draft[field]; }
@@ -378,7 +396,7 @@
       '<div class="hint">' + (reduce
         ? 'ON (default): a click the other way CLOSES open tickets ' +
           'first, oldest first, taking the last one in part. These ' +
-          'accounts are hedging, so MT5 never nets — without this, ' +
+          'accounts are in long/short mode, so OKX never nets — without this, ' +
           'covering a short leaves you holding a short AND a long, ' +
           'both paying carry. On a mixed book a click that ADDS to ' +
           'the net still clears an opposite ticket: the net moves by ' +
@@ -412,8 +430,8 @@
           'screen locks when you ask it to and when it is left alone - ' +
           'nothing on a locked screen can trade.') +
       ' It is stored as a one-way hash in .env, never as the PIN. ' +
-      'It does NOT stop somebody at this keyboard opening MetaTrader 5 ' +
-      'directly: a Windows account per trader is what does that.' +
+      'It does NOT stop somebody trading on the OKX app or website ' +
+      'directly: a separate OKX sub-account per trader is what does that.' +
       '</div>');
     html += field('Lock itself after (minutes)',
       '<input class="s-autolock" type="number" min="0" step="1" ' +
@@ -475,18 +493,95 @@
 
   // -- accounts -----------------------------------------------------------
 
-  function accountsHtml() {
-    var html = '<h3>Exchanges <small>one login, one terminal, one port — ' +
-      'the three things that cannot be shared</small></h3>';
-    html += connectionHtml();
-    html += '<table class="grid-form"><thead><tr><th>Name</th>' +
-      '<th>Terminal (terminal64.exe)</th><th>Login</th><th>Server</th>' +
-      '<th>Runner endpoint</th><th>Password</th><th></th></tr></thead><tbody>';
-    local.accounts.forEach(function (account) {
-      html += accountRow(account);
-    });
-    html += accountRow({name: '', endpoint: local.nextPort, isNew: true});
+  function okxAccountsHtml(rows) {
+    /* OKX: an account is an API key, not a terminal. Key, secret and
+     * passphrase go to .env when saved and are never shown again - the
+     * row says only whether each is set, and under which .env name. */
+    var html = '<table class="grid-form okx-accounts"><thead><tr>' +
+      '<th>Name</th><th>Mode</th><th>API key</th><th>Secret key</th>' +
+      '<th>Passphrase</th><th>Base URL</th><th></th></tr></thead><tbody>';
+    rows.forEach(function (account) { html += okxAccountRow(account); });
+    html += okxAccountRow({name: '', demo: true, isNew: true});
     html += '</tbody></table>';
+    html += '<div class="hint">Create the key on OKX: Profile &gt; API &gt; ' +
+      'Create API key, with <b>Read</b> and <b>Trade</b> - never ' +
+      'Withdraw. A Demo trading key is made under Demo trading and only ' +
+      'works with Mode = Demo. The account must be in Long/short position ' +
+      'mode; Test checks all of it before the first order.</div>';
+    return html;
+  }
+
+  function okxSecret(cls, set, envName, isNew, label) {
+    return '<td><input class="' + cls + '" type="password" ' +
+      'autocomplete="off" placeholder="' + (set ? 'set — type to replace'
+                                            : 'not set') + '">' +
+      '<div class="hint">' + (isNew ? label + ' → .env'
+                                    : '→ ' + escape(envName) + ' in .env') +
+      '</div></td>';
+  }
+
+  function okxAccountRow(account) {
+    var test = local.tests[account.name];
+    var html = '<tr data-account="' + escape(account.name) + '"' +
+      ' data-exchange="okx"' + (account.isNew ? ' class="okx-new"' : '') +
+      '>';
+    html += '<td>' + (account.isNew
+      ? '<input class="f-name" placeholder="e.g. okx">'
+      : escape(account.name)) + '</td>';
+    html += '<td><select class="f-demo">' +
+      '<option value="demo"' + (account.demo ? ' selected' : '') +
+      '>Demo trading</option><option value="live"' +
+      (account.demo ? '' : ' selected') + '>LIVE</option></select></td>';
+    html += okxSecret('f-key', account.key_set, account.key_env,
+                      account.isNew, 'API key');
+    html += okxSecret('f-secret', account.secret_set, account.secret_env,
+                      account.isNew, 'secret');
+    html += okxSecret('f-passphrase', account.passphrase_set,
+                      account.passphrase_env, account.isNew, 'passphrase');
+    html += '<td><input class="f-baseurl" value="' +
+      escape(account.base_url || '') + '" placeholder="www.okx.com"></td>';
+    html += '<td class="actions"><button class="btn save-account">Save' +
+      '</button>' + (account.isNew ? '' :
+        '<button class="btn test-account" title="Reach OKX, check the key ' +
+        'is accepted, has Trade permission, the account is in Long/short ' +
+        'mode and can short spot - and read the fee tier">Test</button>' +
+        '<button class="btn diagnose-account" title="Everything Test ' +
+        'checks, plus every instrument and pair on this account">' +
+        'Diagnose</button>' +
+        '<button class="btn danger delete-account">Delete</button>') +
+      '</td></tr>';
+    if (test) {
+      html += '<tr class="checklist"><td colspan="7">' +
+        checklistHtml(test) + '</td></tr>';
+    }
+    return html;
+  }
+
+  function accountsHtml() {
+    var okx = local.accounts.filter(function (a) {
+      return a.exchange === 'okx';
+    });
+    var mt5 = local.accounts.filter(function (a) {
+      return a.exchange !== 'okx';
+    });
+    var html = '<h3>Exchanges <small>OKX accounts: one API key each, ' +
+      'demo or live</small></h3>';
+    html += connectionHtml();
+    if (mt5.length) {
+      // A desk that still has MetaTrader 5 accounts keeps Mirror's own
+      // table for them, blank row and all.
+      html += '<h4>MetaTrader 5 accounts</h4>';
+      html += '<table class="grid-form"><thead><tr><th>Name</th>' +
+        '<th>Terminal (terminal64.exe)</th><th>Login</th><th>Server</th>' +
+        '<th>Runner endpoint</th><th>Password</th><th></th></tr></thead>' +
+        '<tbody>';
+      mt5.forEach(function (account) {
+        html += accountRow(account);
+      });
+      html += accountRow({name: '', endpoint: local.nextPort, isNew: true});
+      html += '</tbody></table><h4>OKX accounts</h4>';
+    }
+    html += okxAccountsHtml(okx);
     return html;
   }
 
@@ -835,6 +930,24 @@
         escape((derived.specs.a || {}).contract_size) + ' · B ' +
         escape((derived.specs.b || {}).contract_size) +
         ' (never typed in)</div>';
+      if (derived.pair_type_suggestion) {
+        html += '<div>Pair type: <b>' +
+          escape(derived.pair_type_suggestion) + '</b> — ' +
+          escape(derived.pair_type_reason || '') + '</div>';
+      }
+      var fees = derived.fees_bps || {};
+      if ((fees.a || {}).maker !== null && (fees.a || {}).maker !== undefined) {
+        html += '<div>Your OKX fees: A ' + UI.fmt(fees.a.maker, 1) + '/' +
+          UI.fmt(fees.a.taker, 1) + ' bp · B ' + UI.fmt(fees.b.maker, 1) +
+          '/' + UI.fmt(fees.b.taker, 1) + ' bp (maker/taker)</div>';
+      }
+      var funding = derived.funding || {};
+      ['a', 'b'].forEach(function (side) {
+        if (funding[side] !== null && funding[side] !== undefined) {
+          html += '<div>Funding on ' + side.toUpperCase() + ': ' +
+            UI.fmt(funding[side] * 100, 4) + '% per 8h</div>';
+        }
+      });
       html += '</div>';
     }
     html += '<div class="actions">' +
@@ -1124,7 +1237,14 @@
       UI.toast('an account needs a name before it can be saved');
       return;
     }
-    var body = {
+    var body = row.dataset.exchange === 'okx' ? {
+      exchange: 'okx',
+      demo: row.querySelector('.f-demo').value === 'demo',
+      api_key: row.querySelector('.f-key').value,
+      secret: row.querySelector('.f-secret').value,
+      passphrase: row.querySelector('.f-passphrase').value,
+      base_url: row.querySelector('.f-baseurl').value
+    } : {
       terminal_path: row.querySelector('.f-terminal').value,
       login: row.querySelector('.f-login').value,
       server: row.querySelector('.f-server').value,
@@ -1145,6 +1265,12 @@
       // any quotes - instead of carrying the pasted text back over it.
       Array.prototype.forEach.call(row.querySelectorAll('input'),
         function (input) { input.dataset.rendered = input.value; });
+      // A key, secret or passphrase is never left on the page once it
+      // is saved: the row now says only that it is set.
+      ['.f-key', '.f-secret', '.f-passphrase'].forEach(function (cls) {
+        var input = row.querySelector(cls);
+        if (input) { input.value = ''; input.dataset.rendered = ''; }
+      });
       if (result.body.terminal_missing) {
         // Saved, and still not launchable: say so plainly, not 'ok'.
         UI.toast('saved ' + name + ' \u2014 but ' +
@@ -1234,7 +1360,7 @@
     };
   }
 
-  function derive() {
+  function derive(again) {
     readDraft();
     var key = local.editing || cleanKey(local.draft.key) || autoKey();
     if (!key) {
@@ -1248,6 +1374,16 @@
       .then(function (result) {
         if (!result.ok) { UI.toast(result.body.error); return; }
         local.derived = result.body;
+        // A NEW pair takes the type its two OKX instruments are - a
+        // basis or two different coins - and is read once more with it,
+        // because the suggested beta follows the type.
+        var kind = result.body.pair_type_suggestion;
+        if (kind && !local.editing && !again &&
+            kind !== local.draft.pair_type) {
+          local.draft.pair_type = kind;
+          render();
+          return derive(true);
+        }
         render();
       });
   }

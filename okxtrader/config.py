@@ -986,8 +986,11 @@ class TraderConfig:
     @classmethod
     def from_file(cls, path):
         if load_dotenv is not None:
+            # .env WINS over an inherited variable: it is what the
+            # Exchanges page writes, so a key typed again there must be
+            # the key the engine uses after its restart.
             load_dotenv(os.path.join(os.path.dirname(os.path.abspath(path))
-                                     or '.', '.env'))
+                                     or '.', '.env'), override=True)
         return cls.from_raw(load_raw(path), path)
 
     def to_raw(self):

@@ -899,6 +899,16 @@ def test_the_settings_page_edits_accounts_and_pairs(page):
     where they get right."""
     page.click('#open-settings')
     page.wait_for_selector('.window.settings')
+    # OKX desk: the MetaTrader 5 table (and its blank row) is shown once
+    # the desk has an MT5 account - seed one through the page's own API.
+    page.evaluate("""async () => {
+        await fetch('/api/accounts/Seed MT5', {method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({endpoint: '127.0.0.1:9100',
+                                  login: '5000'})});
+        await window.MT5Settings.refresh();
+    }""")
+    page.wait_for_selector('.window.settings tr.new')
 
     # A new account, saved from the blank row at the bottom.
     add_account(page, 'CFI Spot', '127.0.0.1:9101', login='5001')
@@ -4691,7 +4701,7 @@ def test_why_an_opposite_click_closes_something_is_on_the_settings_page(page):
     text = page.text_content('.window.settings .trading-fields')
     assert 'reduce before opening' in text
     # ...and it says WHY, in the terms that make it matter here.
-    assert 'hedging' in text and 'never nets' in text
+    assert 'long/short mode' in text and 'never nets' in text
     # ...and what it costs, which is the part a trader has to weigh.
     assert 'CROSSES when the level prints' in text
 
@@ -6726,3 +6736,29 @@ def test_sessions_opens_a_timeline_with_the_moment_marked(page):
             "() => document.getElementById('mkt-panel').hidden") is True
     finally:
         _restore_sessions_clock(page)
+
+
+# -- the Exchanges page: an OKX account ----------------------------------------
+
+def test_an_okx_account_is_saved_from_its_row_and_its_key_leaves_the_page(page):
+    page.click('#open-settings')
+    page.wait_for_selector('.window.settings .okx-accounts')
+    row = page.locator('.window.settings tr.okx-new')
+    row.locator('.f-name').fill('OKX Desk')
+    row.locator('.f-demo').select_option('demo')
+    row.locator('.f-key').fill('key-abc')
+    row.locator('.f-secret').fill('secret-def')
+    row.locator('.f-passphrase').fill('pass-ghi')
+    row.locator('.save-account').click()
+    saved = 'tr[data-account="OKX Desk"][data-exchange="okx"]'
+    page.wait_for_selector(saved, timeout=WAIT)
+    # The row says the parts are SET, and where - never what they are.
+    text = page.inner_html(saved)
+    assert 'OKX_API_KEY_OKX_DESK' in text and 'set — type to replace' in text
+    assert 'secret-def' not in page.content()
+    for cls in ('.f-key', '.f-secret', '.f-passphrase'):
+        assert page.locator(saved + ' ' + cls).input_value() == ''
+    # Test and Diagnose are on it; Connect is an MT5 question.
+    assert page.locator(saved + ' .test-account').count() == 1
+    assert page.locator(saved + ' .diagnose-account').count() == 1
+    assert page.locator(saved + ' .connect-account').count() == 0

@@ -506,3 +506,126 @@ def check_pair(checklist, pair, report_a, report_b,
 def _mid(report):
     bid, ask = report.get('bid'), report.get('ask')
     return ((bid + ask) / 2.0) if (bid and ask) else None
+
+
+# -- OKX --------------------------------------------------------------------
+
+#: OKX's own codes for a key that is wrong, and what to do about each.
+OKX_KEY_FIXES = {
+    '50101': ['This key is for the OTHER environment: a demo-trading key '
+              'only works with Demo on, a live key only with it off',
+              'Flip Demo / Live on this row, or create the key in the '
+              'other environment on OKX'],
+    '50102': ['The request timestamp was refused - this PC\'s clock is '
+              'off. Turn on automatic time sync in the system settings'],
+    '50103': ['The API key is missing - paste it into this row'],
+    '50105': ['The passphrase is wrong - it is the one you typed when '
+              'creating THIS API key on OKX, not your login password'],
+    '50110': ['OKX refused this PC\'s IP address - add it to the key\'s IP '
+              'whitelist on OKX, or create a key without one'],
+    '50111': ['OKX does not know this API key - check it was pasted whole, '
+              'and that it was not deleted on OKX'],
+    '50113': ['The signature did not match - the SECRET KEY is wrong. '
+              'Paste it again (it is shown only once, when the key is '
+              'created; if it is lost, create a new key)'],
+}
+
+ACCT_LEVELS = {'1': 'Spot mode', '2': 'Spot and futures mode',
+               '3': 'Multi-currency margin', '4': 'Portfolio margin'}
+
+
+def check_okx_account(checklist, name, broker, has_keys=True):
+    """One OKX account: reachable, the key accepted, and set up the way
+    this desk trades - Trade permission, long/short position mode, an
+    account mode that can short spot and trade derivatives.
+
+    What Connect, Test and Diagnose all run for an OKX account. Every
+    failure names the switch on OKX, in OKX's words."""
+    scope = name
+    where = 'OKX demo trading' if broker.demo else 'OKX LIVE'
+    try:
+        offset = broker.client.sync_clock()
+    except Exception as exc:                      # OKXError or network
+        checklist.add(scope, 'OKX reachable', FAIL, str(exc),
+                      ['Check this PC is online and can reach www.okx.com',
+                       'A firewall or VPN can block it'])
+        return checklist
+    checklist.add(scope, 'OKX reachable', PASS,
+                  f'{where} answered; this PC\'s clock is '
+                  f'{abs(offset) * 1000:.0f} ms '
+                  f'{"behind" if offset > 0 else "ahead of"} OKX\'s')
+    if abs(offset) > 5:
+        checklist.add(scope, 'Clock', WARN,
+                      f'{offset:+.1f}s from OKX - OKX refuses a request '
+                      f'more than 30s off', ['Turn on automatic time sync'])
+    if not has_keys:
+        checklist.add(scope, 'API key', FAIL,
+                      'no API key, secret and passphrase saved for this '
+                      'account',
+                      ['Create an API key on OKX (Profile > API) with READ '
+                       'and TRADE permission - never Withdraw',
+                       'Paste the key, secret and passphrase into this row '
+                       'and Save: they go to .env, never to the config'])
+        return checklist
+    try:
+        config = broker.client.get('/api/v5/account/config', private=True)[0]
+    except Exception as exc:
+        code = getattr(exc, 'code', None) or getattr(exc, 's_code', None)
+        checklist.add(scope, 'API key', FAIL, str(exc),
+                      OKX_KEY_FIXES.get(str(code),
+                                        ['Check the key, secret and '
+                                         'passphrase on this row']))
+        return checklist
+    broker._config = config
+    checklist.add(scope, 'API key', PASS,
+                  f"accepted - account UID {config.get('uid')} on {where}")
+    perm = config.get('perm') or ''
+    if 'trade' in perm:
+        checklist.add(scope, 'Trade permission', PASS, perm)
+    else:
+        checklist.add(scope, 'Trade permission', FAIL,
+                      f'this key is {perm or "read-only"} - every order '
+                      f'will be refused',
+                      ['On OKX: Profile > API > edit this key > tick Trade'])
+    if 'withdraw' in perm:
+        checklist.add(scope, 'Withdraw permission', WARN,
+                      'this key can WITHDRAW funds - a trading desk never '
+                      'needs that', ['Create a key with Read and Trade only'])
+    if config.get('posMode') == 'long_short_mode':
+        checklist.add(scope, 'Position mode', PASS,
+                      'long/short - each ticket is closed on its own side')
+    else:
+        checklist.add(scope, 'Position mode', FAIL,
+                      'net mode - an opposite order NETS instead of closing '
+                      'the ticket it was meant for',
+                      ['On OKX: Trade > Settings > Position mode > '
+                       'Long/short mode (with no open positions)'])
+    level = str(config.get('acctLv') or '')
+    words = ACCT_LEVELS.get(level, f'account level {level}')
+    if level == '1':
+        checklist.add(scope, 'Account mode', FAIL,
+                      f'{words}: no perpetuals or futures, and no spot '
+                      f'short', ['On OKX: Trade > Settings > Account mode > '
+                                 'Single-currency or Multi-currency margin'])
+    elif level == '2':
+        checklist.add(scope, 'Account mode', WARN,
+                      f'{words}: derivatives yes, but spot cannot be sold '
+                      f'short - a SELL on a spot leg needs the coin',
+                      ['Multi-currency margin lets the spot leg borrow'])
+    else:
+        checklist.add(scope, 'Account mode', PASS, words)
+    try:
+        maker, taker = broker.fees_bps('BTC-USDT-SWAP') or (None, None)
+    except Exception:
+        maker = taker = None
+    if maker is not None:
+        checklist.add(scope, 'Fee tier', INFO,
+                      f"{config.get('level') or 'VIP ?'}: perpetuals "
+                      f"{maker:.1f} bp maker / {taker:.1f} bp taker - what "
+                      f"B/E and TP are priced from")
+    info = broker.account_info()
+    if info is not None:
+        checklist.add(scope, 'Equity', PASS if info.equity > 0 else WARN,
+                      f'{info.equity:,.2f} USD equity, '
+                      f'{info.margin_free:,.2f} free')
+    return checklist
