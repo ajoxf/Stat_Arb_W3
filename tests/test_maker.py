@@ -59,7 +59,7 @@ def desk(tmp_path):
                               clock=clock, maker=maker, done=done)
 
     def md():
-        broker._tick_cache = {}
+        broker._row_cache = {}
         a = leg.tick('BTC-USDT-SWAP')
         b = leg.tick('ETH-USDT-SWAP')
         return compute_spread(pair, a, b, pair.hedge_ratio, clock=clock)

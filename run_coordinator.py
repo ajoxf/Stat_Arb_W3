@@ -42,7 +42,7 @@ def okx_leg(account):
     None when OKX does not answer or refuses the key — retried later by
     `leg_factory`."""
     from okxtrader.okx_broker import OKXBroker
-    leg = LocalLeg(OKXBroker(account))
+    leg = LocalLeg(OKXBroker(account, stream=True))
     if leg.connect():
         logging.info("OKX account '%s' connected (%s)", account.name,
                      'demo' if account.demo else 'LIVE')

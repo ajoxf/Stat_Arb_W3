@@ -75,6 +75,16 @@ DEFAULT_PROTECTION_BPS = 20.0
 _EPS = 1e-9
 
 
+def _levels(row):
+    """An OKX book row (REST or books5) as the ladder's level list."""
+    out = []
+    for side, key in (('ask', 'asks'), ('bid', 'bids')):
+        for level in (row or {}).get(key) or ():
+            out.append({'type': side, 'price': float(level[0]),
+                        'volume': float(level[1])})
+    return out or None
+
+
 def _f(value, default=None):
     try:
         if value in (None, ''):
@@ -105,8 +115,12 @@ def fmt_price(value, tick):
 class OKXBroker:
     """One OKX account (demo or live) for every leg routed to it."""
 
-    def __init__(self, account, client=None, ledger_path=None):
+    def __init__(self, account, client=None, ledger_path=None, stream=False):
         self.account = account
+        #: OKX's WebSocket price feed, when asked for (the engine asks;
+        #: the web page's short-lived checks do not). None = REST only.
+        self._want_stream = stream
+        self.stream = None
         demo = bool(getattr(account, 'demo', True))
         self.client = client or OKXClient(
             api_key=getattr(account, 'api_key', '') or '',
@@ -138,6 +152,14 @@ class OKXBroker:
         self._config = None
         self._offset_at = 0.0
         self.tick_ttl = 0.25
+        #: Every instrument a price has been asked for: one REST round
+        #: fetches them all at once, in parallel.
+        self._watched = set()
+        self._row_cache = {}                   # instId -> (at, row)
+        self._book_watched = set()             # books the desk shows
+        #: Parallel fetches go over HTTP; an in-process transport (the
+        #: simulator in tests) is read one at a time.
+        self.parallel = self.client.transport is None
         name = getattr(account, 'name', 'okx')
         self.ledger_path = Path(ledger_path or os.environ.get(
             'OKX_LEDGER_DIR', 'data')) / f'okx_ledger_{name}.json'
@@ -191,6 +213,7 @@ class OKXBroker:
             if self.client.has_credentials or self.client.transport:
                 self._config = self.client.get('/api/v5/account/config',
                                                private=True)[0]
+            self._start_stream()
             self.connected = True
             self.last_error = ''
             return True
@@ -203,7 +226,37 @@ class OKXBroker:
 
     def shutdown(self):
         self.connected = False
+        if self.stream is not None:
+            self.stream.stop()
         self._save_ledger()
+
+    def _start_stream(self):
+        """Open OKX's public price feed, when this broker was asked for
+        one and it is a real OKX (not a test host). OKX_WEBSOCKET=0 turns
+        it off; OKX_WS_URL points it elsewhere."""
+        if not self._want_stream or self.stream is not None:
+            return
+        if os.environ.get('OKX_WEBSOCKET', '1').strip() in ('0', 'false',
+                                                             'off', 'no'):
+            return
+        url = os.environ.get('OKX_WS_URL')
+        if not url:
+            if self.client.transport is not None or 'okx.com' not in \
+                    self.client.base_url:
+                return                     # a simulator: REST only
+            from .okx_ws import DEMO_URL, LIVE_URL
+            url = DEMO_URL if self.demo else LIVE_URL
+        try:
+            import websocket  # noqa: F401  (websocket-client)
+        except ImportError:
+            logging.warning('websocket-client is not installed - prices '
+                            'from REST only (pip install -r '
+                            'requirements.txt)')
+            return
+        from .okx_ws import PriceStream
+        self.stream = PriceStream(url)
+        self.stream.watch(self._watched)
+        self.stream.start()
 
     def is_alive(self):
         return self.connected
@@ -356,14 +409,51 @@ class OKXBroker:
         return table
 
     def _ticker(self, symbol, fresh=False):
-        kind = self.inst_type(symbol)
-        if kind is None:
+        """The latest ticker row: from the WebSocket feed while it is
+        healthy, else REST - every watched instrument at once, in
+        parallel, so a pass costs one round trip, not one per symbol."""
+        if self.inst_type(symbol) is None:
             return None
-        try:
-            return self._tickers(kind, fresh).get(symbol)
-        except OKXError as exc:
-            self.last_error = str(exc)
-            return None
+        if symbol not in self._watched:
+            self._watched.add(symbol)
+            if self.stream is not None:
+                self.stream.watch({symbol})
+        if not fresh and self.stream is not None:
+            row = self.stream.row(symbol)
+            if row is not None:
+                return row
+        now = time.time()
+        cached = self._row_cache.get(symbol)
+        if cached and not fresh and now - cached[0] < self.tick_ttl:
+            return cached[1]
+        due = {symbol} | {s for s in self._watched
+                          if now - self._row_cache.get(s, (0, None))[0]
+                          >= self.tick_ttl}
+        self._fetch_rows(due)
+        cached = self._row_cache.get(symbol)
+        return cached[1] if cached else None
+
+    def _fetch_rows(self, symbols):
+        def one(sym):
+            try:
+                rows = self.client.get('/api/v5/market/ticker',
+                                       {'instId': sym})
+                return sym, (rows[0] if rows else None), None
+            except OKXError as exc:
+                return sym, None, exc
+        symbols = sorted(symbols)
+        if self.parallel and len(symbols) > 1:
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=min(8, len(symbols))) as ex:
+                results = list(ex.map(one, symbols))
+        else:
+            results = [one(s) for s in symbols]
+        at = time.time()
+        for sym, row, exc in results:
+            if row is not None:
+                self._row_cache[sym] = (at, row)
+            elif exc is not None:
+                self.last_error = str(exc)
 
     def symbol_tick(self, symbol):
         row = self._ticker(symbol)
@@ -388,25 +478,44 @@ class OKXBroker:
 
     def depth(self, symbol):
         """Five levels a side, in the instrument's own size units
-        (contracts on a perp, base currency on spot)."""
+        (contracts on a perp, base currency on spot): from the WebSocket
+        feed while it is healthy, else REST - every book the desk shows
+        at once, in parallel, so a snapshot costs one round trip."""
+        if symbol not in self._book_watched:
+            self._book_watched.add(symbol)
+            if self.stream is not None:
+                self.stream.watch({symbol})
+        if self.stream is not None:
+            row = self.stream.book(symbol)
+            if row is not None:
+                return _levels(row)
         now = time.time()
         cached = self._book_cache.get(symbol)
         if cached and now - cached[0] < 0.5:
             return cached[1]
-        try:
-            rows = self.client.get('/api/v5/market/books',
-                                   {'instId': symbol, 'sz': '5'})
-        except OKXError:
-            return None
-        if not rows:
-            return None
-        out = []
-        for side, key in (('ask', 'asks'), ('bid', 'bids')):
-            for level in rows[0].get(key) or ():
-                out.append({'type': side, 'price': float(level[0]),
-                            'volume': float(level[1])})
-        self._book_cache[symbol] = (now, out or None)
-        return out or None
+        due = {symbol} | {s for s in self._book_watched
+                          if now - self._book_cache.get(s, (0, None))[0]
+                          >= 0.5}
+
+        def one(sym):
+            try:
+                rows = self.client.get('/api/v5/market/books',
+                                       {'instId': sym, 'sz': '5'})
+                return sym, (_levels(rows[0]) if rows else None)
+            except OKXError:
+                return sym, None
+        due = sorted(due)
+        if self.parallel and len(due) > 1:
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=min(8, len(due))) as ex:
+                results = list(ex.map(one, due))
+        else:
+            results = [one(s) for s in due]
+        at = time.time()
+        for sym, levels in results:
+            self._book_cache[sym] = (at, levels)
+        cached = self._book_cache.get(symbol)
+        return cached[1] if cached else None
 
     def rates(self, symbol, timeframe_min, count):
         """The last `count` bars, oldest first, the forming one last; or

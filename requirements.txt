@@ -2,6 +2,8 @@
 Flask>=3.0.0
 python-dotenv>=1.0.0
 requests>=2.31.0
+# OKX's WebSocket price feed (REST is the fallback without it).
+websocket-client>=1.6.0
 
 # Tests. Playwright drives a real Chromium for the browser tests, which
 # skip cleanly where no browser is installed.
