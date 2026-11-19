@@ -145,3 +145,11 @@ def test_a_combined_position_reads_its_total_over_its_total_bases():
     [row] = combined.combine(rows)
     assert row['pnl_pct_notional'] == pytest.approx(0.1)   # 2 of 2000
     assert row['pnl_pct_margin'] == pytest.approx(1.0)     # 2 of 200
+
+
+def test_the_algo_window_is_handed_the_positions_return():
+    """The Algo passes only a named list of position fields to its
+    window; the % figures must be on it or the panel never sees them."""
+    from okxtrader import algo
+    for name in ('notional', 'margin', 'pnl_pct_notional', 'pnl_pct_margin'):
+        assert name in algo._POSITION_DISPLAY
