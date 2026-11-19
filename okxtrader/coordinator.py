@@ -2141,6 +2141,10 @@ class Coordinator:
     #: candle's high and low are the spread's own: (sub-bar minutes,
     #: sub-bars per candle).
     CHART_FRAMES = {15: (1, 15), 60: (5, 12), 240: (15, 16)}
+    #: OKX serves 5m, 15m and 1H candles itself, and its history is
+    #: rate-limited (about 20 requests per 2 s): coarser sub-bars keep a
+    #: chart to a handful of requests instead of thirty-odd.
+    OKX_CHART_FRAMES = {15: (5, 3), 60: (15, 4), 240: (60, 4)}
     #: Candles drawn, and kept for the bands to warm up on before them.
     CHART_CANDLES = 120
     #: How long one ladder's candle history is reused. The newest candle
@@ -2164,7 +2168,11 @@ class Coordinator:
             timeframe_min = int(timeframe_min)
         except (TypeError, ValueError):
             timeframe_min = 15
-        frame = self.CHART_FRAMES.get(timeframe_min)
+        frames = self.CHART_FRAMES
+        if all(type(getattr(self.legs.get(a), 'broker', None)).__name__
+               == 'OKXBroker' for a in (pair.account_a, pair.account_b)):
+            frames = self.OKX_CHART_FRAMES
+        frame = frames.get(timeframe_min)
         if frame is None:
             return {'ok': False, 'reason': f'no {timeframe_min}-minute chart '
                                            f'- 15, 60 or 240'}
