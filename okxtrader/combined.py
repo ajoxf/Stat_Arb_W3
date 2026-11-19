@@ -136,6 +136,10 @@ def combine(rows, covered=None, now=None):
             'tp_pct': first.get('tp_pct'),
             'stop_loss_pct': first.get('stop_loss_pct'),
             'entry_margin': _weighted(group, weights, 'entry_margin'),
+            # One estimated fill makes the whole an estimate.
+            'entry_margin_source': ('leverage' if any(
+                r.get('entry_margin_source') == 'leverage' for r in group)
+                else first.get('entry_margin_source')),
             'stop_points': (None if sl is None or be is None
                             else abs(sl - be)),
             'spread_units': units,

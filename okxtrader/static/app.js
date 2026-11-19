@@ -3368,6 +3368,14 @@
       leg('B', row.account_b, row.symbol_b);
   }
 
+  function marginShare(position) {
+    /* " (-8.05% margin)": the P&L over what BOTH legs tied up. */
+    var back = positionReturns(position, position.net_pnl);
+    if (back.pct_margin === null) { return ''; }
+    return ' <small>(' + pctSigned(back.pct_margin, 2) + ' margin' +
+      (back.estimated ? ', est.' : '') + ')</small>';
+  }
+
   function limitLine(row) {
     /* The position limit, said where the position is read: how many
      * are on, how many working orders would open another, and the most
@@ -3555,8 +3563,10 @@
           'closing price now \u2212 entry: a LONG makes money when this is '
           + 'positive, a SHORT when it is negative') +
         kv('Entry z', signed(first.entry_z)) +
-        kv('Net P&amp;L', moneyOr(first.net_pnl) + shareWords(
-             first.pnl_pct_notional, first.pnl_pct_margin),
+        // Mirror's "(-8.05% margin)" where the entry margin is known;
+        // otherwise the engine's own shares of notional and margin.
+        kv('Net P&amp;L', moneyOr(first.net_pnl) + (marginShare(first) ||
+             shareWords(first.pnl_pct_notional, first.pnl_pct_margin)),
            first.net_pnl === null || first.net_pnl === undefined ? ''
              : (first.net_pnl >= 0 ? 'up' : 'down'),
            'net P&L as a share of both legs\u2019 notional at entry, and '
@@ -4850,16 +4860,50 @@
     });
   }
 
+  function pctSigned(value, digits) {
+    return (value > 0 ? '+' : '') + Number(value).toFixed(digits) + '%';
+  }
+
+  function pctCell(value, digits, estimated) {
+    if (value === null || value === undefined) {
+      return '<td>' + DASH + '</td>';
+    }
+    return '<td class="' + (value > 0 ? 'up' : value < 0 ? 'down' : '') +
+      '">' + pctSigned(value, digits) +
+      (estimated ? ' <small class="hint">est.</small>' : '') + '</td>';
+  }
+
+  function positionReturns(position, pnl) {
+    /* The margin BOTH legs tied up at entry (per spread x size) and the
+     * notional of both legs, with the P&L as a share of each. The same
+     * arithmetic as Telegram's and the Analysis tab's. Unmeasured: null. */
+    var margin = position.entry_margin
+      ? Number(position.entry_margin) * Number(position.quantity || 1) : null;
+    var notional = 0;
+    ['leg_a', 'leg_b'].forEach(function (name) {
+      var leg = position[name] || {};
+      if (notional === null || !leg.volume || !leg.contract_size ||
+          !leg.price) { notional = null; return; }
+      notional += leg.volume * leg.contract_size * leg.price;
+    });
+    var have = pnl !== null && pnl !== undefined;
+    return {margin: margin, notional: notional,
+            estimated: position.entry_margin_source === 'leverage',
+            pct_margin: have && margin ? pnl / margin * 100 : null,
+            pct_notional: have && notional ? pnl / notional * 100 : null};
+  }
+
   function positionsTable() {
     var html = '<table><thead><tr><th>Pair</th><th>Side</th><th>Net</th>' +
       '<th>Avg entry</th><th>Mark</th>' +
       '<th title="points the spread has moved in your favour, entry to ' +
       'where it would close">Move</th>' +
       '<th>Open P&amp;L</th>' +
-      '<th title="net P&amp;L over both legs\u2019 face value at entry: ' +
-      'the return on what is traded">% notional</th>' +
-      '<th title="net P&amp;L over the margin the position ties up: the ' +
-      'base the TP % and SL % are set on">% margin</th><th>Mode</th>' +
+      '<th title="open P&amp;L (net of costs) \u00f7 the margin BOTH legs ' +
+      'tied up at entry, priced by OKX - the same base as the TP % and ' +
+      'SL %">% on margin</th><th>Margin</th>' +
+      '<th title="open P&amp;L \u00f7 both legs\u2019 face value at entry">' +
+      '% of notional</th><th>Mode</th>' +
       '<th>Slip</th><th>Click→on</th><th>Naked</th><th>Legs</th>' +
       '<th></th></tr></thead><tbody>';
     var any = false;
@@ -4875,12 +4919,28 @@
         signedOr(position.spread_move, 4) + '</td>';
       html += '<td class="' + (position.net_pnl > 0 ? 'up' : 'down') + '">' +
         money(position.net_pnl) + '</td>';
-      html += '<td class="' + updown(position.pnl_pct_notional) + '"' +
-        ' title="of ' + money(position.notional) + ' notional">' +
-        pctOr(position.pnl_pct_notional, 3) + '</td>';
-      html += '<td class="' + updown(position.pnl_pct_margin) + '"' +
-        ' title="of ' + money(position.margin) + ' margin">' +
-        pctOr(position.pnl_pct_margin, 2) + '</td>';
+      // As Mirror: % on margin, the margin itself, % of notional - and
+      // "est." where the margin was estimated from leverage rather than
+      // priced by the exchange.
+      var est = position.entry_margin_source === 'leverage'
+        ? ' <small class="hint">est.</small>' : '';
+      // The engine's figures where it sent them; otherwise worked out
+      // here from the position, as Mirror does.
+      var back = positionReturns(position, position.net_pnl);
+      var pctM = position.pnl_pct_margin === null ||
+        position.pnl_pct_margin === undefined ? back.pct_margin
+        : position.pnl_pct_margin;
+      var pctN = position.pnl_pct_notional === null ||
+        position.pnl_pct_notional === undefined ? back.pct_notional
+        : position.pnl_pct_notional;
+      var marginNow = position.margin === null ||
+        position.margin === undefined ? back.margin : position.margin;
+      html += '<td class="' + updown(pctM) + '">' + pctOr(pctM, 2) +
+        (pctM === null || pctM === undefined ? '' : est) + '</td>';
+      html += '<td>' + (marginNow === null || marginNow === undefined
+        ? DASH : money(marginNow) + est) + '</td>';
+      html += '<td class="' + updown(pctN) + '">' + pctOr(pctN, 3) +
+        '</td>';
       html += '<td>' + position.order_type + '</td>';
       html += '<td>' + fmt(position.entry_slippage, 4) + '</td>';
       html += '<td>' + (position.click_to_on_ms === null ||
@@ -4903,11 +4963,11 @@
         legText(position.leg_b) + '</td>';
       html += '<td><button class="btn close-position">Flatten</button></td>';
       html += '</tr>';
-      html += '<tr class="detail"><td colspan="14">' +
+      html += '<tr class="detail"><td colspan="16">' +
         legDetail(position.leg_a, 'A') + ' &nbsp; ' +
         legDetail(position.leg_b, 'B') + '</td></tr>';
     });
-    if (!any) { html += '<tr><td colspan="14">nothing open</td></tr>'; }
+    if (!any) { html += '<tr><td colspan="16">nothing open</td></tr>'; }
     html += '</tbody></table>';
     html += accountReconciliation();
     return html;
@@ -5374,40 +5434,49 @@
       '<th>Cost</th><th>Split</th></tr></thead>';
   }
 
-  function slippageTable() {
-    var report = state.slippage;
-    var html = '<div class="journal-controls">' +
-      '<label class="check"><input type="checkbox" class="all-sessions"' +
-      (state.slippageAll ? ' checked' : '') + '> every session</label>' +
-      '<a class="btn" href="/api/slippage.csv' +
-      (state.slippageAll ? '?session=all' : '') + '" download>Export CSV</a>' +
-      '<span class="hint">Measured against the price that was clicked, ' +
-      'on the fills the broker actually gave us.</span></div>';
+  function slipCard(label, value, sub, cls) {
+    return '<div class="slip-card"><div class="k">' + label + '</div>' +
+      '<div class="v ' + (cls || '') + '">' + value + '</div>' +
+      '<div class="s">' + sub + '</div></div>';
+  }
 
-    if (report === null) { return html + '<p class="note">loading…</p>'; }
-    if (report.error) {
-      return html + '<p class="note mismatch">' + report.error + '</p>';
+  function slipCost(value) {
+    /* Money, coloured as a cost (red) or a gain (green); unmeasured "—". */
+    if (value === null || value === undefined) { return DASH; }
+    return money(value);
+  }
+
+  function costClass(value) {
+    return value === null || value === undefined ? ''
+      : value > 0 ? 'down' : value < 0 ? 'up' : '';
+  }
+
+  function slipBar(label, part) {
+    /* One end's slippage as its two parts: the market moving while the
+     * legs were sent, and the broker filling off the price sent. */
+    part = part || {};
+    if (!part.measured) {
+      return '<div class="slip-split"><b>' + label + '</b><div class="hint">' +
+        'not measured \u2014 a leg\u2019s send price was not kept</div></div>';
     }
-
-    var window_ = report.window || {};
-    html += '<table><tbody><tr><td>' + (window_.label || DASH) + '</td>' +
-      '<td>' + report.counts.positions + ' positions (' +
-      report.counts.open + ' still open)</td>';
-    var journal = report.journal;
-    html += '<td>' + (journal
-      ? journal.fills + ' of our fills at the broker over the same window'
-      : 'the journal could not be counted') + '</td></tr></tbody></table>';
-    if (window_.note) {
-      html += '<div class="' + (window_.clock === 'broker' ? 'hint' : 'note') +
-        '">' + window_.note + '</div>';
+    var moved = part.moved_money || 0, broker = part.broker_money || 0;
+    var total = Math.abs(moved) + Math.abs(broker);
+    var pm = total ? Math.abs(moved) / total * 100 : 50;
+    function seg(cls, width, text) {
+      return width > 0 ? '<div class="' + cls + '" style="width:' + width +
+        '%">' + text + '</div>' : '';
     }
+    return '<div class="slip-split"><b>' + label + '</b><div class="slip-bar">' +
+      (total ? seg('moved', pm, 'market moved while sending ' +
+                   fmt(part.moved_points_mean, 4) + ' \u00b7 ' + money(moved)) +
+        seg('broker', 100 - pm, 'broker fill ' +
+            fmt(part.broker_points_mean, 4) + ' \u00b7 ' + money(broker))
+        : '<div class="none" style="width:100%">no slippage</div>') +
+      '</div></div>';
+  }
 
-    if (!report.counts.positions) {
-      return html + '<p class="note">nothing was traded in this window. ' +
-        'That is not a slippage of zero — there is nothing to measure ' +
-        'yet.</p>';
-    }
-
+  function slipDetailTables(report) {
+    var html = '';
     html += '<table>' + slipHead('This session');
     html += '<tbody>';
     html += slipRow('Entries', report.overall.entry);
@@ -5431,66 +5500,169 @@
     });
     html += '</tbody></table>';
 
-    // WHICH LEG it comes from: each leg against the touch it was SENT
-    // at, in that leg's own price points (positive a cost).
-    html += '<table><thead><tr><th>By leg (own price points, and bp)</th>' +
-      '<th>Leg A</th><th>Leg A entry</th><th>Leg A exit</th>' +
-      '<th>Leg B</th><th>Leg B entry</th><th>Leg B exit</th>' +
-      '</tr></thead><tbody>';
-    Object.keys(report.by_pair).forEach(function (key) {
-      var group = report.by_pair[key];
-      var legs = group.legs || {};
-      var sample = (report.rows || []).filter(function (r) {
-        return r.pair_key === key;
-      })[0] || {};
-      function cell(name) {
-        var leg = legs[name] || {};
-        if (!leg.measured) {
-          return '<td><span class="hint">not kept</span></td>';
-        }
-        // The leg's own points, and the same in basis points of its
-        // price - the one unit a BTC leg and an ETH leg share.
-        var bps = leg.bps_mean === null || leg.bps_mean === undefined
-          ? '' : ' <span class="hint">(' + bpsText(leg.bps_mean) + ')</span>';
-        return slipPoints(leg.points_mean).replace('</td>', bps + '</td>');
-      }
-      html += '<tr><td>' + escapeHtml(group.name || key) + '</td>' +
-        '<td>' + escapeHtml(sample.symbol_a || 'A') + '</td>' +
-        cell('entry_leg_a') + cell('exit_leg_a') +
-        '<td>' + escapeHtml(sample.symbol_b || 'B') + '</td>' +
-        cell('entry_leg_b') + cell('exit_leg_b') + '</tr>';
+    return html;
+  }
+
+  function slippageTable() {
+    var report = state.slippage;
+    var html = '<div class="journal-controls">' +
+      '<label class="check"><input type="checkbox" class="all-sessions"' +
+      (state.slippageAll ? ' checked' : '') + '> every session</label>' +
+      '<a class="btn" href="/api/slippage.csv' +
+      (state.slippageAll ? '?session=all' : '') + '" download>Export CSV</a>' +
+      '<span class="hint">Measured on the fills the broker actually gave ' +
+      'us. Positive is a cost at both ends.</span></div>';
+
+    if (report === null) { return html + '<p class="note">loading…</p>'; }
+    if (report.error) {
+      return html + '<p class="note mismatch">' + report.error + '</p>';
+    }
+
+    var window_ = report.window || {};
+    var journal = report.journal;
+    html += '<div class="hint">Session <b>' + (window_.label || DASH) +
+      '</b> \u00b7 ' + report.counts.positions + ' positions (' +
+      report.counts.open + ' still open) \u00b7 ' + (journal
+        ? journal.fills + ' of our fills at the broker over the same window'
+        : 'the journal could not be counted') + '</div>';
+    if (window_.note) {
+      html += '<div class="' + (window_.clock === 'broker' ? 'hint' : 'note') +
+        '">' + window_.note + '</div>';
+    }
+
+    if (!report.counts.positions) {
+      return html + '<p class="note">nothing was traded in this window. ' +
+        'That is not a slippage of zero \u2014 there is nothing to measure ' +
+        'yet.</p>';
+    }
+
+    var o = report.overall || {};
+    var entry = o.entry || {}, exit_ = o.exit || {}, rt = o.round_trip || {};
+    var pnl = report.pnl || {};
+    var legs = (report.by_account || []).length;
+    html += '<div class="slip-cards">' +
+      slipCard('Slippage cost', slipCost(rt.measured ? rt.money_total
+                                                     : entry.money_total),
+               (rt.measured ? rt.measured + ' round turn' +
+                 (rt.measured > 1 ? 's' : '') : 'entries only so far') +
+               ' \u00b7 ' + legs + ' leg' + (legs === 1 ? '' : 's') +
+               (journal ? ' \u00b7 ' + journal.fills + ' fills' : ''),
+               costClass(rt.measured ? rt.money_total : entry.money_total)) +
+      slipCard('Entries', slipCost(entry.money_total),
+               entry.measured ? 'avg ' + fmt(entry.points_mean, 4) +
+                 ' per spread \u00b7 ' + entry.paid + ' paid / ' +
+                 entry.earned + ' earned' : 'not measured',
+               costClass(entry.money_total)) +
+      slipCard('Exits', slipCost(exit_.money_total),
+               exit_.measured ? 'avg ' + fmt(exit_.points_mean, 4) +
+                 ' per spread \u00b7 ' + exit_.paid + ' paid / ' +
+                 exit_.earned + ' earned' : 'no closed trade yet',
+               costClass(exit_.money_total)) +
+      slipCard('Share of the P&amp;L', pnl.share === null ||
+                 pnl.share === undefined ? DASH
+                 : (pnl.share * 100).toFixed(1) + '%',
+               !pnl.trades ? 'no closed trade measured yet'
+                 : pnl.share === null || pnl.share === undefined
+                   ? 'the trades lost ' + money(-pnl.net) + ' net \u2014 ' +
+                     'slippage added ' + money(pnl.slippage)
+                   : money(pnl.slippage) + ' of ' + money(pnl.before) +
+                     ' before slippage \u00b7 net ' + money(pnl.net)) +
+      slipCard('Click \u2192 both legs on',
+               report.click_to_on_median_ms === null ||
+                 report.click_to_on_median_ms === undefined ? DASH
+                 : Math.round(report.click_to_on_median_ms) + ' ms',
+               'median this session') +
+      '</div>';
+
+    // WHERE IT CAME FROM: the part a faster send would save, and the
+    // part the broker's fills cost.
+    var split = report.split || {};
+    html += '<h4 class="slip-h">Where the slippage came from</h4>' +
+      '<div class="slip-splits">' + slipBar('Entries', split.entry) +
+      slipBar('Exits', split.exit) + '</div>' +
+      '<div class="hint"><b class="moved-t">Market moved while sending</b>: ' +
+      'the spread changed between the decision and the moment the legs ' +
+      'were sent (latency). <b class="broker-t">Broker fill</b>: a leg ' +
+      'filled worse than the price it was sent at.</div>';
+
+    // BY ACCOUNT: which broker the slippage comes from.
+    var info = report.account_info || {};
+    html += '<h4 class="slip-h">By account (broker)</h4><table>' +
+      '<thead><tr><th>Leg</th><th>Symbol</th><th>Account \u00b7 broker</th>' +
+      '<th>Fills</th><th>Entry avg</th><th>Exit avg</th><th>Worst</th>' +
+      '<th>Cost</th><th>Paid / earned</th></tr></thead><tbody>';
+    (report.by_account || []).forEach(function (a) {
+      var who = info[a.account] || {};
+      html += '<tr><td>' + escapeHtml(a.legs || '') + '</td><td>' +
+        escapeHtml(a.symbol || DASH) + '</td><td>' +
+        escapeHtml(a.account || DASH) +
+        (who.login ? ' \u00b7 #' + escapeHtml(String(who.login)) : '') +
+        (who.broker ? ' \u00b7 ' + escapeHtml(who.broker) : '') + '</td>' +
+        '<td>' + a.fills + '</td>' +
+        withBps(slipPoints(a.entry_points_mean), a.entry_bps_mean) +
+        withBps(slipPoints(a.exit_points_mean), a.exit_bps_mean) +
+        slipPoints(a.points_worst) +
+        slipMoney(a.money_total) + '<td>' + a.paid + ' / ' + a.earned +
+        '</td></tr>';
     });
     html += '</tbody></table>';
 
-    if ((report.worst || []).length) {
-      html += '<table><thead><tr><th>Worst entries</th><th>Side</th>' +
-        '<th>Qty</th><th>Type</th><th>Slip</th><th>Cost</th>' +
-        '<th>Leg A</th><th>Leg B</th>' +
-        '<th>Click→on</th><th>Opened</th></tr></thead><tbody>';
-      report.worst.forEach(function (row) {
-        html += '<tr><td>' + (row.pair_key || DASH) + '</td>';
-        html += '<td>' + (row.side || DASH) + '</td>';
-        html += '<td>' + qty(row.quantity) + '</td>';
-        html += '<td>' + (row.order_type || DASH) + '</td>';
-        html += slipPoints(row.entry_points);
-        html += slipMoney(row.entry_money);
-        html += slipPoints(row.entry_leg_a).replace('</td>',
-          row.entry_leg_a_bps === null || row.entry_leg_a_bps === undefined
-            ? '</td>' : ' <span class="hint">(' +
-              bpsText(row.entry_leg_a_bps) + ')</span></td>');
-        html += slipPoints(row.entry_leg_b).replace('</td>',
-          row.entry_leg_b_bps === null || row.entry_leg_b_bps === undefined
-            ? '</td>' : ' <span class="hint">(' +
-              bpsText(row.entry_leg_b_bps) + ')</span></td>');
-        html += '<td>' + (row.click_to_on_ms === null ||
-                          row.click_to_on_ms === undefined
-          ? DASH : Math.round(row.click_to_on_ms) + 'ms') + '</td>';
-        html += '<td>' + localTime(row.opened_at) + '</td></tr>';
-      });
-      html += '</tbody></table>';
-    }
+    // EVERY TRADE, newest first.
+    html += '<h4 class="slip-h">Trades</h4><table><thead><tr>' +
+      '<th>Opened</th><th>Ladder</th><th>Side</th><th>Qty</th><th>Type</th>' +
+      '<th>Entry slip</th><th>Exit slip</th><th>Round turn</th>' +
+      '<th>Moved / broker</th><th>Click\u2192on</th><th>Net P&amp;L</th>' +
+      '</tr></thead><tbody>';
+    (report.rows || []).slice(0, 50).forEach(function (r) {
+      var moved = r.entry_moved_money, broker = r.entry_broker_money;
+      if (!r.open && moved !== null && moved !== undefined &&
+          r.exit_moved_money !== null && r.exit_moved_money !== undefined) {
+        moved += r.exit_moved_money;
+        broker += r.exit_broker_money;
+      } else if (!r.open) {
+        moved = broker = null;
+      }
+      function both(points, cash) {
+        return points === null || points === undefined
+          ? '<td>' + DASH + '</td>'
+          : '<td class="' + costClass(points) + '">' + fmt(points, 4) +
+            ' \u00b7 ' + slipCost(cash) + '</td>';
+      }
+      html += '<tr><td>' + localTime(r.opened_at) + '</td><td>' +
+        escapeHtml((report.by_pair[r.pair_key] || {}).name || r.pair_key ||
+                   DASH) + '</td><td>' + (r.side || DASH) + '</td><td>' +
+        qty(r.quantity) + '</td><td>' + (r.order_type || DASH) + '</td>' +
+        both(r.entry_points, r.entry_money) +
+        (r.open ? '<td><span class="hint">open</span></td>'
+          : both(r.exit_points, r.exit_money)) +
+        (r.open ? '<td>' + DASH + '</td>' : slipMoney(r.round_trip_money)) +
+        '<td>' + (moved === null || moved === undefined ? DASH
+          : money(moved) + ' / ' + money(broker)) + '</td>' +
+        '<td>' + (r.click_to_on_ms === null || r.click_to_on_ms === undefined
+          ? DASH : Math.round(r.click_to_on_ms) + ' ms') + '</td>' +
+        (r.open ? '<td><span class="hint">open</span></td>'
+          : '<td class="' + costClass(-(r.realized_pnl || 0)) + '">' +
+            (r.realized_pnl === null || r.realized_pnl === undefined ? DASH
+              : money(r.realized_pnl)) + '</td>') + '</tr>';
+    });
+    html += '</tbody></table>';
+
+    // OKX: was each fill maker or taker, and how long the second leg
+    // took after the first - from OKX's own fills.
     html += fillQualityHtml(report.fill_quality);
+
+    // The full statistics, one click away.
+    html += '<details class="slip-detail"' +
+      (state.slipDetailOpen ? ' open' : '') + '><summary>Statistics: mean, ' +
+      'median, worst and best, by order type and by ladder</summary>' +
+      slipDetailTables(report) + '</details>';
     return html;
+  }
+
+  function withBps(cell, bps) {
+    if (bps === null || bps === undefined) { return cell; }
+    return cell.replace('</td>', ' <span class="hint">(' + bpsText(bps) +
+                        ')</span></td>');
   }
 
   function bpsText(x) {
@@ -5513,7 +5685,7 @@
     }
     (q.liquidity || []).forEach(function (r) {
       var share = r.taker_share;
-      html += '<tr class="' + (share ? 'mismatch' : '') + '">' +
+      html += '<tr>' +
         '<td>' + escapeHtml(pairName(r.pair_key)) + '</td>' +
         '<td>' + escapeHtml(r.leg) + ' <span class="hint">' +
         escapeHtml(r.symbol || '') + '</span></td>' +
@@ -5523,8 +5695,9 @@
         fmt(r.maker_volume, 2) + ' lots</span></td>' +
         '<td>' + r.taker_fills + ' <span class="hint">' +
         fmt(r.taker_volume, 2) + ' lots</span></td>' +
-        '<td>' + (share === null || share === undefined ? DASH
-                  : Math.round(share * 100) + '%') + '</td>' +
+        '<td class="' + (share ? 'down' : '') + '">' +
+        (share === null || share === undefined ? DASH
+         : Math.round(share * 100) + '%') + '</td>' +
         '<td>' + smallMoney(r.fees) + '</td>' +
         '<td>' + (r.extra === null || r.extra === undefined ? DASH
                   : smallMoney(r.extra)) + '</td></tr>';
@@ -5554,7 +5727,7 @@
     });
     html += '</tbody></table>';
     html += '<div class="note">Maker or taker is OKX\u2019s own marking of ' +
-      'each fill. A row is highlighted when any of it went in as taker. ' +
+      'each fill; a taker share above 0% is in red. ' +
       'The gap is from one leg\u2019s last fill to the other\u2019s: under ' +
       'the maker fill, that is the time the first leg is on alone.</div>';
     return html;
@@ -6296,6 +6469,13 @@
            'realized, after the commission the settings charge') +
       anTile('Win rate', anPct(s.win_rate), '',
            (s.wins || 0) + ' won, ' + (s.losses || 0) + ' lost') +
+      anTile('Return on margin', s.return_on_margin === null ||
+               s.return_on_margin === undefined ? DASH
+               : pctSigned(s.return_on_margin, 2),
+             anSign(s.return_on_margin),
+             'net P&L \u00f7 the margin both legs used, over the ' +
+             (s.margin_trades || 0) + ' closed trade(s) whose margin was ' +
+             'priced') +
       '</div>';
 
     // 1b. NOTIONAL TRADED: lots x contract size x price, on the broker's
@@ -6420,7 +6600,11 @@
       '<th title="How far past the level it was measured against the ' +
       'close actually went">vs level</th>' +
       '<th>Leg A in</th><th>Leg B in</th>' +
-      '<th>Held</th><th class="l">Exit</th><th>Net P&amp;L</th><th>Running</th>' +
+      '<th>Held</th><th class="l">Exit</th><th>Net P&amp;L</th>' +
+      '<th title="net P&amp;L \u00f7 the margin BOTH legs tied up at entry - ' +
+      'the base the TP % and SL % are set on">% on margin</th>' +
+      '<th title="net P&amp;L \u00f7 both legs\u2019 face value at entry">' +
+      '% of notional</th><th>Running</th>' +
       '</tr></thead><tbody>';
     if (!trips.length) {
       html += '<tr><td colspan="17" class="hint">no closed trade in this ' +
@@ -6446,7 +6630,9 @@
         '</td><td>' + anHeld(t.held_sec) + '</td><td class="l">' +
         escapeHtml(t.exit_reason || DASH) +
         '</td><td class="' + anSign(t.pnl) + '">' + money(t.pnl) +
-        '</td><td class="' + anSign(t.cum_pnl) + '">' + money(t.cum_pnl) +
+        '</td>' + pctCell(t.pct_margin, 2, t.margin_estimated) +
+        pctCell(t.pct_notional, 3, false) +
+        '<td class="' + anSign(t.cum_pnl) + '">' + money(t.cum_pnl) +
         '</td></tr>';
     });
     html += '</tbody></table>';
@@ -7710,6 +7896,10 @@
   // `toggle` does not bubble, so it is caught on the way down.
   document.addEventListener('toggle', function (event) {
     var box = event.target;
+    if (box && box.classList && box.classList.contains('slip-detail')) {
+      state.slipDetailOpen = box.open;
+      return;
+    }
     if (!box || !box.classList || !box.classList.contains('aw-fills')) {
       return;
     }

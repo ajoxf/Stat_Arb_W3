@@ -38,7 +38,7 @@ def session_window(now, offset_sec, close_hour=16, close_minute=55):
     """The session `now` is in, as (from, to) epoch seconds on OUR clock.
 
     The cut is taken on the BROKER's clock and converted back, so the
-    window lines up with the deal stamps in MT5's own History. With no
+    window lines up with the deal stamps in OKX's own fill history. With no
     measured offset the report still runs — on this machine's clock, and
     saying so, because a report that refuses to open teaches nobody
     anything.
@@ -56,7 +56,7 @@ def session_window(now, offset_sec, close_hour=16, close_minute=55):
     if measured:
         note = (f'the session is cut on the broker clock, '
                 f'{(offset_sec or 0) / 3600.0:+.1f}h from this machine — '
-                f'the same clock MT5 stamps its deals with')
+                f'the same clock OKX stamps its fills with')
     else:
         note = ('the broker clock has not been measured, so this window is '
                 'cut on THIS machine\'s clock — it may not line up with the '
@@ -211,9 +211,136 @@ def _rows(positions):
             'realized_pnl': position.get('realized_pnl'),
             'symbol_a': (position.get('leg_a') or {}).get('symbol'),
             'symbol_b': (position.get('leg_b') or {}).get('symbol'),
+            'account_a': (position.get('leg_a') or {}).get('account'),
+            'account_b': (position.get('leg_b') or {}).get('account'),
             **_leg_slips(position),
         })
+        _split(rows[-1], position)
     return rows
+
+
+def _split(row, position):
+    """Where each end's slippage came from, in two parts that add up.
+
+    BROKER FILL: each leg against the price it was SENT at - what the
+    broker did, summed over both legs in money. MARKET MOVED WHILE
+    SENDING: the rest - the spread changing between the decision and
+    the moment the legs went (latency). Either part unmeasured makes
+    both None: a split with one side guessed is not a split.
+    """
+    units = position.get('spread_units')
+    quantity = position.get('quantity')
+    per_point = (float(units) * float(quantity)) if units and quantity \
+        else None
+    for end in ('entry', 'exit'):
+        total = row[f'{end}_money']
+        legs = (row.get(f'{end}_leg_a_money'), row.get(f'{end}_leg_b_money'))
+        broker = None if any(v is None for v in legs) else sum(legs)
+        if total is None or broker is None:
+            row[f'{end}_broker_money'] = row[f'{end}_moved_money'] = None
+            row[f'{end}_broker_points'] = row[f'{end}_moved_points'] = None
+            continue
+        row[f'{end}_broker_money'] = broker
+        row[f'{end}_moved_money'] = total - broker
+        row[f'{end}_broker_points'] = (broker / per_point
+                                       if per_point else None)
+        row[f'{end}_moved_points'] = (
+            None if row[f'{end}_broker_points'] is None
+            else row[f'{end}_points'] - row[f'{end}_broker_points'])
+
+
+def _split_summary(rows):
+    out = {}
+    for end in ('entry', 'exit'):
+        pick = [r for r in rows if r.get(f'{end}_broker_money') is not None]
+        if end == 'exit':
+            pick = [r for r in pick if not r['open']]
+        out[end] = {
+            'measured': len(pick),
+            'moved_money': sum(r[f'{end}_moved_money'] for r in pick)
+            if pick else None,
+            'broker_money': sum(r[f'{end}_broker_money'] for r in pick)
+            if pick else None,
+            'moved_points_mean': _mean([r[f'{end}_moved_points']
+                                        for r in pick]),
+            'broker_points_mean': _mean([r[f'{end}_broker_points']
+                                         for r in pick]),
+        }
+    return out
+
+
+def _by_account(rows):
+    """Each leg's account and symbol: its fills, its own slip at entry
+    and at exit, its worst, and what it cost - which BROKER the
+    slippage comes from."""
+    groups = {}
+    for row in rows:
+        for leg in ('a', 'b'):
+            key = (row.get(f'account_{leg}'), row.get(f'symbol_{leg}'))
+            if key == (None, None):
+                continue
+            g = groups.setdefault(key, {'entry': [], 'exit': [], 'money': [],
+                                        'entry_bps': [], 'exit_bps': [],
+                                        'legs': set()})
+            g['legs'].add(leg.upper())
+            for end in ('entry', 'exit'):
+                points = row.get(f'{end}_leg_{leg}')
+                if points is None:
+                    continue
+                g[end].append(points)
+                g[f'{end}_bps'].append(row.get(f'{end}_leg_{leg}_bps'))
+                money_ = row.get(f'{end}_leg_{leg}_money')
+                if money_ is not None:
+                    g['money'].append(money_)
+    out = []
+    for (account, symbol), g in sorted(groups.items(),
+                                       key=lambda kv: (str(kv[0][0]),
+                                                       str(kv[0][1]))):
+        points = g['entry'] + g['exit']
+        out.append({
+            'account': account, 'symbol': symbol,
+            'legs': ''.join(sorted(g['legs'])),
+            'fills': len(points),
+            'entry_points_mean': _mean(g['entry']),
+            'exit_points_mean': _mean(g['exit']),
+            # The same in basis points of the leg's own price: a BTC
+            # point and an ETH point are not the same size.
+            'entry_bps_mean': _mean(g['entry_bps']),
+            'exit_bps_mean': _mean(g['exit_bps']),
+            'points_worst': max(points) if points else None,
+            'money_total': sum(g['money']) if g['money'] else None,
+            'paid': sum(1 for p in points if p > 0),
+            'earned': sum(1 for p in points if p < 0),
+        })
+    return out
+
+
+def _median(values):
+    values = sorted(v for v in values if v is not None)
+    if not values:
+        return None
+    middle = len(values) // 2
+    return values[middle] if len(values) % 2 else \
+        (values[middle - 1] + values[middle]) / 2.0
+
+
+def _against_pnl(rows):
+    """Round-turn slippage beside the closed trades' net P&L: the
+    share of the P&L before slippage that slippage took. Only trades
+    with BOTH measured count; a share of a loss is not a share, so it
+    is None and the screen says so."""
+    pick = [r for r in rows if not r['open']
+            and r.get('round_trip_money') is not None
+            and r.get('realized_pnl') is not None]
+    if not pick:
+        return {'trades': 0, 'slippage': None, 'net': None, 'before': None,
+                'share': None}
+    slip = sum(r['round_trip_money'] for r in pick)
+    net = sum(float(r['realized_pnl']) for r in pick)
+    before = net + slip
+    return {'trades': len(pick), 'slippage': slip, 'net': net,
+            'before': before,
+            'share': (slip / before) if before > 0 else None}
 
 
 def _summarise(rows):
@@ -260,6 +387,11 @@ def report(positions, window=None, names=None, worst_n=WORST_N):
                           for key, group in sorted(by_type.items())},
         'worst': worst,
         'rows': sorted(rows, key=lambda r: -(r['opened_at'] or 0)),
+        'split': _split_summary(rows),
+        'by_account': _by_account(rows),
+        'click_to_on_median_ms': _median([r['click_to_on_ms']
+                                          for r in rows]),
+        'pnl': _against_pnl(rows),
         'counts': {
             'positions': len(rows),
             'open': sum(1 for r in rows if r['open']),

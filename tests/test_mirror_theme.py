@@ -11,8 +11,8 @@ from pathlib import Path
 
 STATIC = Path(__file__).resolve().parent.parent / 'okxtrader' / 'static'
 
-#: sha256 of Mirror's mt5trader/static/ladder.css (claude/clever-bell-h72qf4-telegram @ 2ed0d9b).
-MIRROR_LADDER_CSS = 'a1b9154c25128c71f3e6374e9c702c7592ccf64c45c87fc36613bc196a707901'
+#: sha256 of Mirror's mt5trader/static/ladder.css (claude/clever-bell-h72qf4-telegram @ 7b5028d, the new Slippage page).
+MIRROR_LADDER_CSS = '92b30a1beaac45c4ddc136c042e6dc7fe7eba0e396b6eed827e46dce79f549d9'
 
 
 def test_the_ladder_and_window_theme_is_mirrors_byte_for_byte():

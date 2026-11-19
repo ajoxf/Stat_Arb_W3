@@ -286,18 +286,52 @@ def _gross(row):
     return (exit_ - entry) * sign * units
 
 
+def returns(row, pnl):
+    """Net P&L as a share of the margin BOTH legs tied up at entry -
+    the base the TP % and SL % are set on - and of the notional (both
+    legs' face value). Each None when its base was not measured."""
+    margin = row.get('entry_margin')
+    quantity = row.get('quantity')
+    margin = (float(margin) * float(quantity or 1.0)) if margin else None
+    notional = 0.0
+    for leg in ('a', 'b'):
+        fill = row.get('leg_' + leg) or {}
+        try:
+            notional += (float(fill['volume']) * float(fill['contract_size'])
+                         * float(fill['price']))
+        except (KeyError, TypeError, ValueError):
+            notional = None
+            break
+    return {'margin': None if margin is None else round(margin, 2),
+            'margin_estimated': row.get('entry_margin_source') == 'leverage',
+            'pct_margin': (None if pnl is None or not margin
+                           else round(pnl / margin * 100.0, 4)),
+            'notional': None if not notional else round(notional, 2),
+            'pct_notional': (None if pnl is None or not notional
+                             else round(pnl / notional * 100.0, 6))}
+
+
 def summary(positions):
     """Trades opened in the window, the closed ones' net and win rate."""
     rows = list(positions or ())
     closed = [r for r in rows if r.get('closed_at') is not None
               and _pnl(r) is not None]
     wins = [r for r in closed if _pnl(r) > 0]
+    # RETURN ON MARGIN over the trades whose margin WAS measured: their
+    # net over the margin they used. A trade with no margin is left out
+    # of both sides, never counted as using none.
+    based = [(r, returns(r, _pnl(r))['margin']) for r in closed]
+    based = [(r, m) for r, m in based if m]
+    used = sum(m for _r, m in based)
     return {'count': len(rows), 'closed': len(closed),
             'open': sum(1 for r in rows if r.get('closed_at') is None),
             'net_pnl': (round(sum(_pnl(r) for r in closed), 2)
                         if closed else None),
             'wins': len(wins), 'losses': len(closed) - len(wins),
-            'win_rate': _rate(len(wins), len(closed))}
+            'win_rate': _rate(len(wins), len(closed)),
+            'return_on_margin': (round(sum(_pnl(r) for r, _m in based)
+                                       / used * 100.0, 4) if used else None),
+            'margin_trades': len(based)}
 
 
 def drawdown(positions):
@@ -555,6 +589,7 @@ def journal(positions, entry_z=None, exit_z=None):
             # hit from a stop that was in the wrong place.
             'exit': exit_columns(row),
             'pnl': None if pnl is None else round(pnl, 2),
+            **returns(row, pnl),
             # The spread's move times k, before commission; the fees
             # are what lies between that and the net. Either is None
             # when a side of it was not measured.

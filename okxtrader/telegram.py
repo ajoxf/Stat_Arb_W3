@@ -514,8 +514,10 @@ def pnl_shares(pnl, position):
 
     def share(base, digits):
         return f'{pnl / base * 100:+.{digits}f}%' if base else '—'
+    estimated = position.get('entry_margin_source') == 'leverage'
     return (f'  ({share(face, 4)} of notional \u00b7 '
-            f'{share(margin, 2)} of margin)')
+            f'{share(margin, 2)} of margin'
+            f'{" (estimated)" if estimated and margin else ""})')
 
 
 def margin_text(position):
@@ -524,9 +526,13 @@ def margin_text(position):
         return '—'
     margin = float(margin) * float(position.get('quantity') or 1.0)
     face = notional(position)
+    # The terminals could not price it: this is each leg's notional over
+    # its own account's leverage - an estimate, said as one.
+    note = ('  · estimated from leverage'
+            if position.get('entry_margin_source') == 'leverage' else '')
     if face and margin:
-        return f'{usd(margin, False)}  ({face / margin:.0f}x)'
-    return usd(margin, False)
+        return f'{usd(margin, False)}  ({face / margin:.0f}x){note}'
+    return usd(margin, False) + note
 
 
 def _sign(side):

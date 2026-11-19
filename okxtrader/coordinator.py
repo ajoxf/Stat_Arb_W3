@@ -805,7 +805,7 @@ class Coordinator:
         """
         return (self.margin_detail(pair) or {}).get('money')
 
-    def margin_detail(self, pair):
+    def margin_detail(self, pair, side=None):
         """What one spread ties up, WITH where the figure came from.
 
         The terminals price it themselves (`order_calc_margin`), which
@@ -819,23 +819,31 @@ class Coordinator:
         No leverage either, and there is NO suggestion: a target on a
         base nobody set is worse than no target.
         """
+        # IN THE TRADE'S OWN DIRECTION: a BUY spread buys B and sells A,
+        # a SELL spread the reverse. Each leg is priced on the side it
+        # is actually on - a sell at the bid, a buy at the ask. No side
+        # given is a BUY spread, as before.
+        side = 'SELL' if getattr(side, 'value', side) == 'SELL' else 'BUY'
         ttl = float(self.config.get('MARGIN_TTL_SEC', 60.0))
         now = self.clock()
-        cached = self._margin_cache.get(pair.key)
+        key = (pair.key, side)
+        cached = self._margin_cache.get(key)
         if cached and now - cached[0] < ttl:
             return cached[1]
-        detail = self._price_margin(pair)
-        self._margin_cache[pair.key] = (now, detail)
+        detail = self._price_margin(pair, side)
+        self._margin_cache[key] = (now, detail)
         return detail
 
-    def _price_margin(self, pair):
+    def _price_margin(self, pair, spread_side='BUY'):
         total = 0.0
         source = 'terminal'
+        leg_a_side = 'SELL' if spread_side == 'BUY' else 'BUY'
+        leg_b_side = 'BUY' if spread_side == 'BUY' else 'SELL'
         for meta, account, symbol, lots, side in (
                 (pair.meta_a, pair.account_a, pair.symbol_a,
-                 pair.clip_lots_a, 'SELL'),
+                 pair.clip_lots_a, leg_a_side),
                 (pair.meta_b, pair.account_b, pair.symbol_b,
-                 pair.clip_lots_b, 'BUY')):
+                 pair.clip_lots_b, leg_b_side)):
             leg = self.legs.get(account)
             if leg is None or not symbol or not lots:
                 total = None
@@ -1789,7 +1797,8 @@ class Coordinator:
             one = sizing.spread_units(pair.clip_lots_b,
                                       (pair.meta_b or {}).get('contract_size'))
             side_params = algo_module.for_side(params, side)
-            row['entry_margin'] = (self.margin_detail(pair) or {}).get('money')
+            row['entry_margin'] = (self.margin_detail(pair, side)
+                                   or {}).get('money')
             row['entry_atr'] = (
                 algofilters.atr(closed, side_params['atr_period'])
                 if 'ATR' in (side_params['stop_mode'],
@@ -2074,6 +2083,7 @@ class Coordinator:
                                            if params['stop_loss_on']
                                            else None),
                          'entry_margin': margin,
+                         'entry_margin_source': position.entry_margin_source,
                          'stop_points': stop,
                          'spread_units': units,
                          **self._leg_marks(position, md)})
@@ -2086,9 +2096,15 @@ class Coordinator:
         were set. Until the terminals can price it, None — never a
         guess."""
         if position.entry_margin is None:
-            margin = (self.margin_detail(pair) or {}).get('money')
+            detail = self.margin_detail(pair, position.side) or {}
+            margin = detail.get('money')
             if margin:
                 position.entry_margin = float(margin)
+                # Where it came from, kept with it: the terminals' own
+                # figure, or each leg's notional over its leverage when
+                # they could not price it - which is an estimate, and
+                # every screen that shows it says so.
+                position.entry_margin_source = detail.get('source')
                 self.remember(position)
         return position.entry_margin
 

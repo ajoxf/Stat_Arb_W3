@@ -6654,3 +6654,172 @@ def test_an_error_toast_is_given_a_timer_so_refusals_stop_stacking(page):
             if (window.__realTimeout) { window.setTimeout = window.__realTimeout; }
             document.getElementById('toasts').innerHTML = '';
         }""")
+
+
+# -- the Slippage page -----------------------------------------------------------
+
+def _slip_report(**over):
+    """A report as `/api/slippage` builds it, from the real report code."""
+    from okxtrader import slippage
+    from test_slippage_split import position
+    body = slippage.report([position(**over)], names={'OIL': 'USOIL|UKOIL'},
+                           window={'label': 'since Wed 18 Nov 16:55 broker '
+                                            'time', 'clock': 'broker',
+                                   'note': ''})
+    body['journal'] = {'fills': 4}
+    body['account_info'] = {'CFI': {'login': 19514405,
+                                    'broker': 'CFI Financial Markets'},
+                            'AC': {'login': 7001, 'broker': 'AC Markets'}}
+    return body
+
+
+def _show_slippage(page, report):
+    page.evaluate("""(report) => {
+        const s = window.MT5Trader.state;
+        s.open = ['monitor:']; s.monitorTab = 'slippage';
+        s.slippage = report; s.slippageAt = Date.now() + 60000;
+        window.MT5Trader.render();
+    }""", report)
+    page.wait_for_selector('.monitor .slip-cards', timeout=WAIT)
+
+
+def test_the_slippage_page_says_what_it_cost_and_where_it_came_from(page):
+    open_ladder(page)
+    try:
+        _show_slippage(page, _slip_report())
+        cards = page.text_content('.monitor .slip-cards')
+        assert '$10.00' in cards and '$2.00' in cards and '$8.00' in cards
+        assert '7.4%' in cards and '752 ms' in cards
+        bars = page.text_content('.monitor .slip-splits')
+        assert 'market moved while sending' in bars
+        assert 'broker fill' not in bars             # the broker cost nothing
+        pane = page.text_content('.monitor .pane')
+        assert '#19514405 · CFI Financial Markets' in pane
+        assert '#7001 · AC Markets' in pane
+        assert 'USOIL|UKOIL' in pane and '$124.30' in pane   # net P&L
+        # The full statistics are there, folded away.
+        assert page.evaluate(
+            "() => document.querySelector('.slip-detail').open") is False
+        assert 'Round turn' in pane and 'Entries by ladder' in pane
+    finally:
+        page.evaluate("""() => { const s = window.MT5Trader.state;
+            s.slippage = null; s.monitorTab = 'positions';
+            s.open = []; window.MT5Trader.render(); }""")
+
+
+def test_a_broker_that_filled_off_its_price_shows_as_the_broker(page):
+    open_ladder(page)
+    try:
+        _show_slippage(page, _slip_report(fill_b=91.999))
+        assert 'broker fill' in page.text_content('.monitor .slip-splits')
+        # Control: a leg with no send price is unmeasured, said in words.
+        report = _slip_report()
+        for row in report['rows']:
+            for end in ('entry', 'exit'):
+                row[end + '_broker_money'] = row[end + '_moved_money'] = None
+        report['split'] = {'entry': {'measured': 0},
+                           'exit': {'measured': 0}}
+        _show_slippage(page, report)
+        assert 'not measured' in page.text_content('.monitor .slip-splits')
+    finally:
+        page.evaluate("""() => { const s = window.MT5Trader.state;
+            s.slippage = null; s.monitorTab = 'positions';
+            s.open = []; window.MT5Trader.render(); }""")
+
+
+# -- profit % on margin --------------------------------------------------------
+
+def _open_position(**over):
+    leg = lambda side, price: {'side': side, 'volume': 1.0,
+                               'contract_size': 1000.0, 'price': price,
+                               'symbol': 'X', 'account': 'acct_a',
+                               'position_tickets': [], 'order_ticket': None}
+    base = {'position_id': 'PX', 'side': 'SELL', 'quantity': 2.0,
+            'entry_spread': 9.76, 'closing_spread': 9.90, 'net_pnl': -280.0,
+            'order_type': 'LIMIT', 'entry_slippage': 0.002,
+            'click_to_on_ms': 752.0, 'entry_margin': 1740.0,
+            'entry_margin_source': 'terminal',
+            'leg_a': leg('BUY', 82.0), 'leg_b': leg('SELL', 92.0)}
+    base.update(over)
+    return base
+
+
+def test_the_positions_tab_shows_profit_on_both_legs_margin(page):
+    open_ladder(page)
+    publisher = page.paths['publisher']
+    try:
+        publisher.positions = [_open_position()]
+        publisher.publish()
+        page.wait_for_function(
+            "() => (window.MT5Trader.state.snapshot.pairs['XAUUSD_|GC1226']"
+            ".positions || []).length === 1", timeout=WAIT)
+        page.evaluate("""() => { const s = window.MT5Trader.state;
+            s.open = ['monitor:']; s.monitorTab = 'positions';
+            window.MT5Trader.render(); }""")
+        page.wait_for_selector('.monitor tr[data-position="PX"]',
+                               timeout=WAIT)
+        row = page.text_content('.monitor tr[data-position="PX"]')
+        assert '-8.05%' in row and '$3,480.00' in row     # -280 / (1,740 x 2)
+        assert 'est.' not in row
+        # An estimated margin says so; no margin is a dash, never 0%.
+        publisher.positions = [_open_position(entry_margin_source='leverage')]
+        publisher.publish()
+        page.wait_for_function(
+            "() => (window.MT5Trader.state.snapshot.pairs['XAUUSD_|GC1226']"
+            ".positions || [{}])[0].entry_margin_source === 'leverage'",
+            timeout=WAIT)
+        page.evaluate("() => window.MT5Trader.render()")
+        page.wait_for_function(
+            "() => (document.querySelector('.monitor tr[data-position=\"PX\"]')"
+            " || {textContent: ''}).textContent.includes('est.')",
+            timeout=WAIT)
+        publisher.positions = [_open_position(entry_margin=None)]
+        publisher.publish()
+        page.wait_for_function(
+            "() => ((window.MT5Trader.state.snapshot.pairs['XAUUSD_|GC1226']"
+            ".positions || [{}])[0] || {}).entry_margin === null",
+            timeout=WAIT)
+        page.evaluate("() => window.MT5Trader.render()")
+        page.wait_for_function(
+            "() => !(document.querySelector('.monitor tr[data-position=\"PX\"]')"
+            " || {textContent: '%'}).textContent.includes('-8.05%')",
+            timeout=WAIT)
+        assert '0.00%' not in page.text_content(
+            '.monitor tr[data-position="PX"]')
+    finally:
+        publisher.positions = None
+        publisher.publish()
+        page.evaluate("""() => { const s = window.MT5Trader.state;
+            s.open = []; window.MT5Trader.render(); }""")
+
+
+def test_the_algo_window_says_the_pnl_as_a_share_of_margin(page):
+    open_ladder(page)
+    publisher = page.paths['publisher']
+    levels = page.evaluate(
+        """() => window.MT5Trader.state.snapshot
+             .pairs['XAUUSD_|GC1226'].rows.map(r => r.level)""")
+    held = dict(_combined_short(levels), net_pnl=-280.0, entry_margin=1740.0,
+                entry_margin_source='terminal')
+    publisher.algo = 'ALGO'
+    publisher.algo_block = _algo_block(state='IN_POSITION', signal=None,
+                                       positions=[held])
+    try:
+        publisher.publish()
+        page.wait_for_function(
+            "() => (document.querySelector('.window.algowin .aw-signal')"
+            " || {textContent: ''}).textContent.includes('margin)')",
+            timeout=WAIT)
+        assert '(-8.05% margin)' in page.text_content(
+            '.window.algowin .aw-signal')
+        # Control: no margin priced, no share shown.
+        held['entry_margin'] = None
+        publisher.publish()
+        page.wait_for_function(
+            "() => !(document.querySelector('.window.algowin .aw-signal')"
+            " || {textContent: 'margin)'}).textContent.includes('margin)')",
+            timeout=WAIT)
+    finally:
+        publisher.algo = 'NONE'
+        publisher.algo_block = None
+        publisher.publish()

@@ -119,10 +119,15 @@ def test_the_analysis_page_carries_the_notional(tmp_path):
     db_path = str(tmp_path / 'trader.db')
     store = Store(db_path)
     now = time.time()
+    # Ten minutes ago - but never before the broker's midnight, or in the
+    # first ten minutes of its day this deal would be yesterday's.
+    broker_now = now + OFFSET
+    day_start = broker_now - broker_now % 86400.0 - OFFSET
+    at = max(now - 600, day_start + 1)
     store.record_fills('CFI', [{
         'inst_type': 'DEAL', 'deal_id': '501', 'symbol': 'USOIL_F7',
         'side': 'buy', 'pos_side': 'open', 'fill_qty': 2.0,
-        'fill_price': 61.5, 'filled_at': int((now - 600 + OFFSET) * 1000),
+        'fill_price': 61.5, 'filled_at': int((at + OFFSET) * 1000),
         'server_offset_sec': OFFSET, 'is_bot': True}],
         resolve=lambda account, symbol: ('USOIL_F7|UKOIL_F7', 'A'))
     status = tmp_path / 'status.json'

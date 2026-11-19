@@ -507,6 +507,12 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
         names = {key: (pair or {}).get('name') or key
                  for key, pair in (raw.get('pairs') or {}).items()}
         body = slippage.report(positions, window=window, names=names)
+        # Which MT5 account, at which broker: the terminal's own word.
+        body['account_info'] = {
+            name: {'login': (info or {}).get('login'),
+                   'broker': ((info or {}).get('company')
+                              or (info or {}).get('server'))}
+            for name, info in (snapshot.get('accounts') or {}).items()}
         # The journal over the SAME window, on the broker's stamps, as
         # the check on coverage: positions we know about against deals
         # the account actually saw.

@@ -425,7 +425,10 @@ _POSITION_DISPLAY = ('quantity', 'opened_at', 'age_sec', 'source',
                      # What the net P&L is a percent OF: both legs'
                      # notional and the margin the position ties up.
                      'notional', 'margin', 'pnl_pct_notional',
-                     'pnl_pct_margin')
+                     'pnl_pct_margin',
+                     # The margin both legs tied up at entry, and where
+                     # that figure came from: the P&L's share of it.
+                     'entry_margin', 'entry_margin_source')
 
 
 def reentry_window(p):
