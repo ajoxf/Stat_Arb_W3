@@ -4336,7 +4336,7 @@ def test_the_lots_one_spread_costs_can_be_typed_and_says_what_is_in_force(
     assert 'per 1.00 of spread' in note
     assert 'Qty 1.00 sends 0.10 / 0.10 lots' in note
     # The contract size is MT5's, never the trader's.
-    assert 'come from MT5 and are never typed in' in note
+    assert 'come from OKX and are never typed in' in note
 
     page.evaluate(SPY_ON_PAIR_SAVE)
     page.fill('.ladder .ls-clip-a', '1')

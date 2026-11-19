@@ -1268,7 +1268,7 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
             'increment': increment,
             'increment_derivation': (
                 f'max(tick B {tick_b:g}, beta {beta:g} x tick A {tick_a:g})'
-                if increment else 'both legs need a tick size from MT5'),
+                if increment else 'both legs need a tick size from OKX'),
             'clip_lots_a': clip_a, 'clip_lots_b': clip_b,
             'clip_derivation': (
                 f'1 Qty = {clip_a:g} lots A / {clip_b:g} lots B. This '
@@ -1478,7 +1478,7 @@ def _open_position(snapshot, key):
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description='MT5-Trader web UI')
+    parser = argparse.ArgumentParser(description='OKX spread desk web UI')
     parser.add_argument('--config', default='config.json')
     parser.add_argument('--status', default='status.json')
     parser.add_argument('--commands', default='commands.jsonl')

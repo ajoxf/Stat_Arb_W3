@@ -1481,7 +1481,7 @@
     if (!hist || !hist.ok || !(hist.candles || []).length) {
       var why = state.chartHistNote[id];
       var waiting = '<div class="cw-empty">' + escapeHtml(why
-        ? 'no candles: ' + why : 'reading MT5’s bars…') + '</div>';
+        ? 'no candles: ' + why : 'reading OKX’s candles…') + '</div>';
       zBox.innerHTML = waiting;
       sBox.innerHTML = waiting;
       nowBox.textContent = '';
@@ -1581,7 +1581,7 @@
       (own ? ', on its own ' + tf + '-minute candles: these are its bands.'
         : '; the Algo itself reads ' + hist.algo_timeframe_min +
           '-minute candles.') +
-      ' Outlined: closed beyond the entry band. Candles from MT5’s ' +
+      ' Outlined: closed beyond the entry band. Candles from OKX’s ' +
       'bars, the newest moving live.';
   }
 
@@ -2374,7 +2374,7 @@
     function overridden(used, fromMt5, symbol) {
       if (!used || !fromMt5 || Math.abs(used - fromMt5) < 1e-9) { return ''; }
       return (symbol || '') + ' set to ' + fmt(used, 2) +
-        ', MT5 says ' + fmt(fromMt5, 2);
+        ', OKX says ' + fmt(fromMt5, 2);
     }
     function inUnits(lots, contract) {
       return contract ? ' = ' + fmt(lots * contract, 2) + ' units' : '';
@@ -2397,7 +2397,7 @@
           [overridden(live.contract_a, live.contract_a_mt5, live.symbol_a),
            overridden(live.contract_b, live.contract_b_mt5, live.symbol_b)]
             .filter(Boolean).join('; ') + '.'
-        : ' Contract sizes come from MT5 and are never typed in.');
+        : ' Contract sizes (ctVal) come from OKX and are never typed in.');
   }
 
   function fairKindFields(pane, saved) {
@@ -2428,7 +2428,7 @@
         var input = row.querySelector('input');
         row.classList.toggle('not-applicable', !entry[1]);
         input.disabled = !entry[1];
-        input.placeholder = entry[1] ? 'from MT5' : entry[2];
+        input.placeholder = entry[1] ? 'from OKX' : entry[2];
       });
   }
 
@@ -3231,7 +3231,7 @@
         '</th><th>z</th><th>Exit</th><th>P&amp;L</th></tr>' + rows +
         '</table>' : '') +
       '<div class="hint" title="' + escapeHtml((data.caveats || []).join('; ')) +
-      '">' + (s.candles || 0) + ' candles of MT5 history, ' + when(s.from) +
+      '">' + (s.candles || 0) + ' candles of OKX history, ' + when(s.from) +
       ' \u2013 ' + when(s.to) + ' \u00b7 hover for what a backtest cannot see' +
       '</div>';
   }
@@ -3920,7 +3920,7 @@
         (visible === undefined || visible === null ? ''
           : (visible ? '. In Market Watch: the terminal is subscribed, so '
                      + 'a frozen age here means it is receiving nothing — '
-                     + 'look at this symbol in MT5'
+                     + 'look at this instrument on OKX'
                      : '. NOT in Market Watch — not subscribed. Press '
                      + 'Feed, and add it in the terminal')) +
         (stamp ? '. Broker stamp ' + stamp : '');
@@ -4754,7 +4754,7 @@
      */
     var check = state.snapshot.pnl_check;
     if (!check) {
-      return '<div class="note">our P&amp;L and MT5’s own have not yet ' +
+      return '<div class="note">our P&amp;L and OKX’s own have not yet ' +
         'been read together, so there is nothing to reconcile — ' +
         'unmeasured, not zero.</div>';
     }
@@ -4762,7 +4762,7 @@
         check.theirs === null || check.theirs === undefined) {
       return '<div class="note">' + (
         check.theirs === null || check.theirs === undefined
-          ? 'MT5’s own profit could not be read'
+          ? 'OKX’s own profit could not be read'
           : 'a position could not be marked, so our own total is unknown') +
         ', so there is nothing to reconcile against — unmeasured, not ' +
         'zero.</div>';
@@ -4779,7 +4779,7 @@
         '</td>';
     return '<table><tbody><tr' + (bad ? ' class="mismatch"' : '') +
       '><td>our total (gross)</td><td>' + money(check.ours) +
-      '</td><td>MT5’s own</td><td>' + money(check.theirs) +
+      '</td><td>OKX’s own</td><td>' + money(check.theirs) +
       '</td><td>difference</td><td>' + money(check.difference) +
       '</td>' + net +
       '<td>' + agoText(check.at) + '</td></tr></tbody></table>';
@@ -4978,7 +4978,7 @@
       'title="Every Algo entry and exit signal: time, z, spread, and what ' +
       'an exit would have made after costs. Signals only — none was sent.">' +
       'Algo signals CSV</a>' +
-      '<span class="hint">Read back from MT5\'s own deal history — so it ' +
+      '<span class="hint">Read back from OKX\'s own fill history — so it ' +
       'carries the trader\'s terminal clicks too, marked as not ours.' +
       '</span></div>';
 
@@ -5526,7 +5526,7 @@
   function deriveSignals() {
     if (state.deriving) { return; }
     state.deriving = true;
-    state.deriveNote = {html: 'reading MT5\u2019s bars\u2026', cls: 'hint'};
+    state.deriveNote = {html: 'reading OKX\u2019s candles\u2026', cls: 'hint'};
     render();
     function done(html, cls) {
       state.deriving = false;
@@ -5647,7 +5647,7 @@
              'over the trades that were actually taken') +
       '</div>' +
       '<div class="hint">' + t.live + ' recorded live off the book, ' +
-      t.replayed + ' replayed from MT5\u2019s bars. A replayed row ' +
+      t.replayed + ' replayed from OKX\u2019s candles. A replayed row ' +
       'sees one look per candle: a stop touched and recovered inside ' +
       'one is not seen, and the bid-ask is today\u2019s width held ' +
       'constant.</div>';
@@ -5766,7 +5766,7 @@
         '<td class="l">' + anSide(r.side) + '</td>' +
         '<td class="l' + (r.source === 'REPLAY' ? ' hint' : '') +
         '" title="' + (r.source === 'REPLAY' ?
-          'replayed afterwards from MT5’s bars — one look per ' +
+          'replayed afterwards from OKX’s candles — one look per ' +
           'candle, so a stop touched and recovered inside one is not seen' :
           'recorded live off the book, as it happened') + '">' +
         (r.source === 'REPLAY' ? 'replayed' : 'live') + '</td>' +
@@ -5821,7 +5821,7 @@
       'the Algo on or off. What did not happen is the ORDER — ' +
       'nothing here was sent, so Net P&amp;L is what the trade would ' +
       'have made, not money taken. A row marked <i>replayed</i> is the ' +
-      'exception: it was reconstructed from MT5’s bars by ' +
+      'exception: it was reconstructed from OKX’s candles by ' +
       '“Derive 30 days” and sees one look per candle. The ' +
       'stop is checked before the target, so a poll where both look ' +
       'reached is booked as the stop.</div>';
@@ -6156,7 +6156,7 @@
 
     // 5. The backtest.
     var bt = state.analysisBt;
-    html += '<h4>Backtest <small>\u2014 the Algo\u2019s own, on MT5\u2019s ' +
+    html += '<h4>Backtest <small>\u2014 the Algo\u2019s own, on OKX\u2019s ' +
       'history; nothing is sent</small></h4><div class="an-bar">' +
       (state.analysisPair ? escapeHtml((pairs[state.analysisPair] || {}).name ||
         state.analysisPair) : '<span class="hint">pick one ladder above</span>') +
@@ -6547,7 +6547,7 @@
               detail: worst + '. If this instrument is simply quiet, ' +
                       'raise MAX_QUOTE_AGE_SEC in Settings; if the ' +
                       'terminal has lost its feed, the price is frozen ' +
-                      'in MT5 too.'};
+                      'on OKX too.'};
     }
     return {state: 'ok',
             text: 'LIVE · ' + known.length + '/' + names.length +
@@ -6811,12 +6811,12 @@
     banner.innerHTML = closeButton() +
       '<button class="banner-open">Exchanges</button>' +
       logins.map(function (login) {
-        return '<b>' + same[login].join(' and ') + ' are both on MT5 ' +
+        return '<b>' + same[login].join(' and ') + ' are both on OKX ' +
           'account #' + login + '.</b> One account, not two.';
       }).join(' ');
     banner.title = logins.map(function (login) {
       return same[login].join(' and ') + ' are configured as two accounts ' +
-        'but are both attached to MT5 login #' + login + '. If two ' +
+        'but are both on OKX account #' + login + '. If two ' +
         'terminals were intended, give each account its own terminal_path ' +
         'on the Exchanges page. If this really is ONE account trading ' +
         'both legs — spot and the future at one broker is an ordinary ' +

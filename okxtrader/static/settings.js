@@ -831,14 +831,14 @@
         (derived.min_notional_usd
           ? UI.money(derived.min_notional_usd) + ' a leg' : DASH) +
         '</b> — state it before anyone tries to trade under it</div>';
-      html += '<div>Contract sizes read from MT5: A ' +
+      html += '<div>Contract sizes read from OKX: A ' +
         escape((derived.specs.a || {}).contract_size) + ' · B ' +
         escape((derived.specs.b || {}).contract_size) +
         ' (never typed in)</div>';
       html += '</div>';
     }
     html += '<div class="actions">' +
-      '<button class="btn derive-pair">Read both legs from MT5</button>' +
+      '<button class="btn derive-pair">Read both legs from OKX</button>' +
       '<button class="btn save-pair">Save pair</button>' +
       '<button class="btn cancel-pair">Cancel</button></div></div>';
     return html;

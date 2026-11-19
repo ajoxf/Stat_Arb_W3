@@ -2194,11 +2194,11 @@ class Coordinator:
             bars_a = leg_a.rates(pair.symbol_a, sub_min, count)
             bars_b = leg_b.rates(pair.symbol_b, sub_min, count)
         except Exception as e:
-            return {'ok': False, 'reason': f'MT5 history unavailable ({e})'}
+            return {'ok': False, 'reason': f'OKX history unavailable ({e})'}
         if not bars_a or not bars_b:
             which = 'leg A' if not bars_a else 'leg B'
             return {'ok': False,
-                    'reason': f'MT5 returned no {sub_min}-minute bars for '
+                    'reason': f'OKX returned no {sub_min}-minute candles for '
                               f'{which} ({pair.symbol_a if not bars_a else pair.symbol_b})'}
         offset_a = self._offset_of(pair.account_a)
         offset_b = self._offset_of(pair.account_b)
@@ -2257,7 +2257,7 @@ class Coordinator:
         params = algo_module.clean_params(pair.algo_params)
         rows, note = self.algos.history(pair, days)
         if not rows:
-            return {'ok': False, 'reason': note or 'no history from MT5'}
+            return {'ok': False, 'reason': note or 'no history from OKX'}
         md = self.market.get(pair_key)
         if not md or md.get('long_spread') is None \
                 or md.get('short_spread') is None:
@@ -2760,7 +2760,7 @@ class Coordinator:
             return {'ok': False, 'refused': True,
                     'reason': (
                         f"'{pair.account_a}' and '{pair.account_b}' are "
-                        f"both attached to MT5 login #{shared}, and "
+                        f"both on OKX account #{shared}, and "
                         f"REFUSE_SHARED_ACCOUNT is on.")}
 
         md = self.market.get(pair_key)

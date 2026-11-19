@@ -1082,7 +1082,7 @@ class Bot:
         if check.get('ours') is not None:
             parts.append('<b>Total</b>\n'
                          + table([('Open P&L', money(check.get('ours'))),
-                                  ('MT5 says', money(check.get('theirs')))]))
+                                  ('OKX says', money(check.get('theirs')))]))
         buttons.append([('Refresh', 'dashboard', ()),
                         ('Main menu', 'main', ())])
         self.show(chat, message_id, '\n\n'.join(parts), buttons)
@@ -1385,7 +1385,7 @@ class Bot:
             account = ' · '.join(str(v) for v in (info.get('login'),
                                                   info.get('server')) if v)
             parts.append(f'<b>{esc(name)}</b>\n' + table([
-                ('Account', f'{account}  (MT5)' if account else 'MT5'),
+                ('Account', f'{account}  (OKX)' if account else 'OKX'),
                 ('Equity', amount('equity')),
                 ('Available', amount('margin_free')),
                 ('Used', amount('margin')),

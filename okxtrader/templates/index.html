@@ -285,7 +285,7 @@
       <div class="aw-section aw-backtest">
         <div class="aw-head">Backtest</div>
         <div class="aw-bt-controls">
-          <select class="aw-bt-days" title="How much history, from MT5's own bars">
+          <select class="aw-bt-days" title="How much history, from OKX's own candles">
             <option value="3">last 3 days</option>
             <option value="5" selected>last 5 days</option>
             <option value="10">last 10 days</option>
@@ -340,7 +340,7 @@
         <!-- Which two accounts this ladder is routed across, with their
              MT5 logins: two accounts is the whole architecture, and
              which one a leg is on is not something to go and look up. -->
-        <div class="route-box row" title="Leg A and leg B, with the MT5 login each is on">
+        <div class="route-box row" title="Leg A and leg B, with the OKX account each is on">
           <div class="route-leg route-a">A <b>—</b></div>
           <div class="route-leg route-b">B <b>—</b></div>
         </div>
@@ -489,12 +489,12 @@
                number is wrong — and it is loud when it is set. -->
           <label class="lsf"><span>Contract A</span>
             <input class="ls-contract-a" type="number" min="0" step="1"
-                   placeholder="from MT5"
-                   title="What ONE LOT of leg A is, in the instrument's own units — 100 oz of gold, 1,000 barrels of oil. Leave it blank: MT5 reports this and it is right almost always. Set it only when the broker's own number is wrong, because every money figure on this ladder runs through it."></label>
+                   placeholder="from OKX"
+                   title="What ONE LOT of leg A is, in the instrument's own units — 100 oz of gold, 1,000 barrels of oil. Leave it blank: OKX reports this (ctVal) and it is right almost always. Set it only when the broker's own number is wrong, because every money figure on this ladder runs through it."></label>
           <label class="lsf"><span>Contract B</span>
             <input class="ls-contract-b" type="number" min="0" step="1"
-                   placeholder="from MT5"
-                   title="What ONE LOT of leg B is, in the instrument's own units. Leave it blank to use MT5's."></label>
+                   placeholder="from OKX"
+                   title="What ONE LOT of leg B is, in the instrument's own units. Leave it blank to use OKX's (ctVal)."></label>
           <div class="lsf-note ls-clip-note"></div>
           <label class="lsf"><span>Quoting leg</span>
             <select class="ls-quoting" title="Which leg rests the real pending in LIMIT mode. Default: the wider bid-ask — that is the spread you earn.">
@@ -574,17 +574,17 @@
                blank. Which leg has one follows the pair type, so the
                row says which of the two it is. -->
           <label class="lsf row-expiry-a"><span>Expiry A</span>
-            <input class="ls-expiry-a" type="text" placeholder="from MT5"></label>
+            <input class="ls-expiry-a" type="text" placeholder="from OKX"></label>
           <label class="lsf row-expiry-b"><span>Expiry B</span>
-            <input class="ls-expiry" type="text" placeholder="from MT5"></label>
+            <input class="ls-expiry" type="text" placeholder="from OKX"></label>
           <label class="lsf"><span>Swap A long</span>
-            <input class="ls-swap-a-long" type="number" step="0.01" placeholder="from MT5"></label>
+            <input class="ls-swap-a-long" type="number" step="0.01" placeholder="from OKX"></label>
           <label class="lsf"><span>Swap A short</span>
-            <input class="ls-swap-a-short" type="number" step="0.01" placeholder="from MT5"></label>
+            <input class="ls-swap-a-short" type="number" step="0.01" placeholder="from OKX"></label>
           <label class="lsf"><span>Swap B long</span>
-            <input class="ls-swap-b-long" type="number" step="0.01" placeholder="from MT5"></label>
+            <input class="ls-swap-b-long" type="number" step="0.01" placeholder="from OKX"></label>
           <label class="lsf"><span>Swap B short</span>
-            <input class="ls-swap-b-short" type="number" step="0.01" placeholder="from MT5"></label>
+            <input class="ls-swap-b-short" type="number" step="0.01" placeholder="from OKX"></label>
           <label class="lsf"><span>Carry rate % a year</span>
             <input class="ls-carry-rate" type="number" step="0.1" placeholder="no cross-check"></label>
         </div>
@@ -617,7 +617,7 @@
               <option value="H_TO_L">H to L only</option>
               <option value="L_TO_H">L to H only</option>
             </select></label>
-          <label class="lsf" title="The candle the band is built from. MT5&#8217;s own bars are loaded for it when the Algo is turned on.">
+          <label class="lsf" title="The candle the band is built from. OKX&#8217;s own candles are loaded for it when the Algo is turned on.">
             <span>Candle</span>
             <select class="ls-az-tf">
               <option value="1">1 min</option>
@@ -649,7 +649,7 @@
           <label class="lsf" title="No new entry signal for this long after an exit signal or a close.">
             <span>Cooldown (min)</span>
             <input class="ls-az-cooldown" type="number" min="0" step="1"></label>
-          <label class="lsf" title="No entry until the Algo has watched this many minutes of LIVE prices since it was turned on — even when MT5's history fills the band at once. Time with no price does not count. Signals counts: warm up in Signals, then switch to LIVE. 0 = off.">
+          <label class="lsf" title="No entry until the Algo has watched this many minutes of LIVE prices since it was turned on — even when OKX's history fills the band at once. Time with no price does not count. Signals counts: warm up in Signals, then switch to LIVE. 0 = off.">
             <span>Warm-up (min)</span>
             <input class="ls-az-warmup" type="number" min="0" step="1"></label>
           <label class="lsf check-row" title="Also signal EXIT if the spread runs against the position to this |z|.">
@@ -776,7 +776,7 @@
       <span class="feed" title="The staleness and jump guards (a guard may withhold an order; it never prevents a close)">—</span>
       <!-- The thing to DO about a stale feed: take both symbols out of
            Market Watch and put them back. -->
-      <button class="btn refresh-feed" title="Re-subscribe both legs in their terminals. Use this when the price is moving in MT5 but the age here keeps climbing.">↻ Feed</button>
+      <button class="btn refresh-feed" title="Re-read both legs from OKX. Use this when the price is moving on OKX but the age here keeps climbing.">↻ Feed</button>
       <!-- The two legs' own quotes, in ONE place. A spread that is not
            moving is one leg that is not moving, and this says which. -->
       <span class="legs" title="Each leg's own bid/ask and how long since it last changed">—</span>
