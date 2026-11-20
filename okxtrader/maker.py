@@ -164,6 +164,9 @@ class MakerJob:
         self.rearm = False
         #: The level guard is holding a leg further out than the touch.
         self.held = False
+        #: When the first leg first filled: the other then has
+        #: MAKER_LEG_GAP_SEC to fill as maker before it crosses.
+        self.first_fill_at = None
 
     def to_dict(self, now):
         return {'id': self.id, 'pair': self.pair_key,
@@ -243,7 +246,12 @@ class MakerFills:
         now = self.clock()
         job = MakerJob(pair, side, spreads, plan,
                        executable_spread(md, side), level, source, now)
-        job.deadline = now + self._cfg('MAKER_TIMEOUT_SEC', 30.0)
+        # An ALGO entry acts on a signal that is good NOW: its legs rest
+        # as maker for ALGO_MAKER_TIMEOUT_SEC (5 s), not the 30 a click
+        # at a level gets. 31 s from signal to fill was live, and bad.
+        job.deadline = now + (self._cfg('ALGO_MAKER_TIMEOUT_SEC', 5.0)
+                              if source == 'algo'
+                              else self._cfg('MAKER_TIMEOUT_SEC', 30.0))
         sides = dict(zip(('a', 'b'), side.leg_sides()))
         for leg in ('a', 'b'):
             job.legs[leg] = MakerLeg(
@@ -267,10 +275,11 @@ class MakerFills:
                     self._cancel(pair, job.legs[k])
             if any(job.legs[k].filled > 0 for k in ('a', 'b')):
                 # A leg filled before it could be pulled: that is a leg
-                # on alone, and it goes through recovery.
+                # on alone - its other half crosses at market now.
                 self.jobs[pair.key] = job
                 job.reason = reason
-                self._begin_recovery(pair, job, md, now)
+                job.first_fill_at = now
+                self._cross_the_lag(pair, job, md, now)
                 result = ExecutionResult(True, reason=reason)
                 result.working = job.id
                 return result
@@ -493,6 +502,19 @@ class MakerFills:
         if done_a and done_b:
             self._finish(pair, job)
             return
+        # ONE LEG FILLED, THE OTHER NOT: it gets MAKER_LEG_GAP_SEC (5 s)
+        # to fill as maker, then crosses at market - a leg is not left on
+        # alone for half a minute and a minute of recovery behind it.
+        if job.first_fill_at is None and (a.filled > 0 or b.filled > 0):
+            job.first_fill_at = now
+        if job.first_fill_at is not None and \
+                now - job.first_fill_at >= self._cfg('MAKER_LEG_GAP_SEC',
+                                                     5.0):
+            frac = {k: (l.filled / l.planned if l.planned else 0.0)
+                    for k, l in job.legs.items()}
+            if abs(frac['a'] - frac['b']) > 1e-6:
+                self._cross_the_lag(pair, job, md, now)
+                return
         # A leg's POST-ONLY order cancelled by OKX (it would have
         # crossed: cancelSource 20 / 31) is not a failure - the original
         # desk re-priced and re-sent it, and so does this, until the
@@ -540,7 +562,9 @@ class MakerFills:
                 self._finish(pair, job)
                 return
             job.reason = why
-            self._begin_recovery(pair, job, md, now)
+            # A leg is on: cross what the other is missing now, rather
+            # than a minute of maker recovery.
+            self._cross_the_lag(pair, job, md, now)
             return
         if not md or md.get('guard_reason'):
             return                              # hold the peg on a bad print
@@ -557,6 +581,61 @@ class MakerFills:
             if _bps(target, ml.target or target) > \
                     self._cfg('MAKER_AMEND_BPS', 1.0):
                 self._amend(ml, target)
+
+    def _cross_the_lag(self, pair, job, md, now):
+        """One leg is ahead of the other. Stop both resting orders, then
+        send what the lagging leg is missing AT MARKET (OKX's IOC, capped
+        at its price limit), so the two match. Taker on that one piece
+        only. If the market order cannot go, fall back to the maker
+        recovery (and its unwind) - a leg is never left on alone."""
+        from . import sizing
+        a, b = job.legs['a'], job.legs['b']
+        self._cancel(pair, a)
+        self._cancel(pair, b)
+        frac = {k: (l.filled / l.planned if l.planned else 0.0)
+                for k, l in job.legs.items()}
+        if self._done_filling(a) and self._done_filling(b):
+            self._finish(pair, job)
+            return
+        lead = 'a' if frac['a'] >= frac['b'] else 'b'
+        lag = 'b' if lead == 'a' else 'a'
+        ml = job.legs[lag]
+        meta = (pair.meta_a if lag == 'a' else pair.meta_b) or {}
+        missing = ml.planned * frac[lead] - ml.filled
+        volume = sizing.round_step(missing, meta.get('volume_step'),
+                                   meta.get('volume_min'))
+        if volume <= 0:
+            self._finish(pair, job)
+            return
+        waited = now - (job.first_fill_at or job.started)
+        runner = self._runner(ml)
+        result = None
+        try:
+            result = runner.order(ml.symbol, ml.side, volume,
+                                  comment=f'{TAG}:{lag.upper()}X')
+        except Exception as e:
+            ml.error = f'the market order raised: {e}'
+        got = float((result or {}).get('filled_volume') or 0.0)
+        if got > 0 and (result or {}).get('ticket'):
+            ml.absorb(result['ticket'], {
+                'filled_volume': got, 'price': result.get('price'),
+                'position_tickets': result.get('position_tickets') or [],
+                'still_open': False})
+        logging.warning('%s: maker fill %s - leg %s filled, leg %s did not '
+                        'in %.1fs: crossed %g lots of leg %s at market (%s)',
+                        pair.key, job.id, lead.upper(), lag.upper(), waited,
+                        volume, lag.upper(),
+                        'ok' if got > 0 else
+                        (result or {}).get('error') or ml.error or 'refused')
+        job.reason = ((job.reason + '; ') if job.reason else '') + (
+            f'leg {lag.upper()} crossed at market after '
+            f'{waited:.1f}s alone')
+        if got >= volume - max(1e-12, volume * 1e-6):
+            self._finish(pair, job)
+            return
+        # The market order did not (fully) go: the old path, maker
+        # recovery and then the unwind, so nothing stays on alone.
+        self._begin_recovery(pair, job, md, now)
 
     def _begin_recovery(self, pair, job, md, now):
         """One leg is ahead. Rest the missing piece of the other as maker,

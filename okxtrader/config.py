@@ -129,6 +129,13 @@ DEFAULT_SETTINGS = {
     #: OKX_IOC_PROTECTION_BPS), taker fees, on in ~a second.
     'FILL_STYLE': 'maker',
     'MAKER_TIMEOUT_SEC': 30.0,
+    #: An Algo entry's legs rest as maker this long, not MAKER_TIMEOUT_SEC:
+    #: its signal is good now. Nothing filled by then: cancelled, and the
+    #: Algo enters again if its signal still holds.
+    'ALGO_MAKER_TIMEOUT_SEC': 5.0,
+    #: One leg filled and the other not: the other gets this long to fill
+    #: as maker, then what it is missing crosses at market (taker).
+    'MAKER_LEG_GAP_SEC': 5.0,
     'MAKER_OFFSET_BPS': 1.0,
     #: How far a maker order is kept from the OTHER side of its book.
     #: 1.0, as the original desk settled on with post-only: at 0.5 OKX

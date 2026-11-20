@@ -233,54 +233,6 @@ def test_CONTROL_a_fill_the_trader_cancelled_is_not_rearmed(desk):
     assert job.rearm is False
 
 
-def test_recovery_of_a_lone_leg_is_a_plain_limit(desk):
-    """The one maker order that is NOT post-only: a leg on alone has to
-    be matched, so its recovery order may fill as taker."""
-    desk.maker.start(desk.pair, SpreadSide.BUY, desk.md(), 1)
-    desk.fill('a')
-    for _ in range(31):
-        desk.tick()
-    live = _live(desk.sim)
-    assert len(live) == 1 and live[0]['ordType'] == 'limit'
-
-
-def test_a_leg_on_alone_is_recovered_as_maker(desk):
-    desk.maker.start(desk.pair, SpreadSide.BUY, desk.md(), 1)
-    desk.fill('a')
-    for _ in range(31):
-        desk.tick()
-    job = desk.maker.jobs[desk.pair.key]
-    assert job.phase == 'recovering' and job.recovery['leg'] == 'b'
-    assert job.recovery['want'] == pytest.approx(2.0)
-    desk.fill('b')
-    desk.tick()
-    assert desk.done and desk.done[0].ok
-    assert desk.done[0].position.leg_b.volume == pytest.approx(2.0)
-
-
-def test_recovery_nudges_toward_the_market(desk):
-    desk.maker.start(desk.pair, SpreadSide.BUY, desk.md(), 1)
-    desk.fill('a')
-    for _ in range(31):
-        desk.tick()
-    ml = desk.maker.jobs[desk.pair.key].legs['b']
-    first = ml.price
-    for _ in range(7):                               # past one 6 s step
-        desk.tick()
-    assert ml.price > first                          # a BUY moves up
-
-
-def test_recovery_out_of_time_closes_the_leg_that_went_on(desk):
-    desk.maker.start(desk.pair, SpreadSide.BUY, desk.md(), 1)
-    desk.fill('a')
-    for _ in range(31 + 61):
-        desk.tick()
-    assert desk.done and not desk.done[0].ok
-    assert 'closed at market' in desk.done[0].reason
-    assert desk.done[0].naked is None
-    assert desk.sim.positions == {} and _live(desk.sim) == []
-
-
 def test_one_fill_at_a_time_per_pair(desk):
     assert desk.maker.start(desk.pair, SpreadSide.BUY, desk.md(), 1).ok
     again = desk.maker.start(desk.pair, SpreadSide.BUY, desk.md(), 1)
@@ -410,3 +362,68 @@ def test_abandon_pulls_the_resting_closes(desk, closes):
     closes.abandon(position.position_id, 'CLOSE ALL')
     assert _live(desk.sim) == [] and not closes.jobs
     assert position.closed_at is None               # nothing settled here
+
+
+# -- a leg on alone: 5 s as maker, then the rest crosses ----------------------
+
+def test_a_leg_on_alone_crosses_at_market_after_five_seconds(desk):
+    """Live: 31 s from an Algo signal to the second leg. One leg filled,
+    the other gets MAKER_LEG_GAP_SEC (5 s) as maker, then what it is
+    missing crosses at market - taker on that one piece only."""
+    desk.maker.start(desk.pair, SpreadSide.BUY, desk.md(), 1)
+    desk.fill('a')
+    for _ in range(4):
+        desk.tick()
+    assert not desk.done                       # still 4 s: maker
+    desk.tick()
+    desk.tick()
+    assert desk.done and desk.done[0].ok
+    position = desk.done[0].position
+    assert position.leg_b.volume == pytest.approx(2.0)
+    assert 'crossed at market' in desk.done[0].reason
+    assert _live(desk.sim) == []               # nothing left resting
+
+
+def test_a_part_filled_lead_is_matched_not_overdone(desk):
+    desk.maker.start(desk.pair, SpreadSide.BUY, desk.md(), 1)
+    desk.fill('a', part=0.5)
+    for _ in range(6):
+        desk.tick()
+    assert desk.done and desk.done[0].ok
+    position = desk.done[0].position
+    assert position.leg_a.volume == pytest.approx(0.5)
+    assert position.leg_b.volume == pytest.approx(1.0)
+
+
+def test_an_algo_entry_rests_five_seconds_not_thirty(desk):
+    md = desk.md()
+    desk.maker.start(desk.pair, SpreadSide.BUY, md, 1, source='algo')
+    job = desk.maker.jobs[desk.pair.key]
+    assert job.deadline - job.started == pytest.approx(5.0)
+    for _ in range(6):
+        desk.tick()
+    assert desk.done and not desk.done[0].ok           # nothing filled
+    assert _live(desk.sim) == []
+
+
+def test_CONTROL_a_click_still_rests_thirty_seconds(desk):
+    desk.maker.start(desk.pair, SpreadSide.BUY, desk.md(), 1)
+    job = desk.maker.jobs[desk.pair.key]
+    assert job.deadline - job.started == pytest.approx(30.0)
+
+
+def test_if_the_market_order_fails_recovery_still_covers_it(desk):
+    """The fallback: a market order that cannot go leaves the old maker
+    recovery (a plain limit, nudged to the market) and then the unwind -
+    a leg is never left on alone."""
+    desk.maker.start(desk.pair, SpreadSide.BUY, desk.md(), 1)
+    desk.fill('a')
+    desk.leg.order = lambda *a, **k: {'ok': False, 'filled_volume': 0.0,
+                                      'error': 'refused'}
+    for _ in range(6):
+        desk.tick()
+    job = desk.maker.jobs[desk.pair.key]
+    assert job.phase == 'recovering' and job.recovery['leg'] == 'b'
+    live = _live(desk.sim)
+    assert len(live) == 1 and live[0]['ordType'] == 'limit'
+
