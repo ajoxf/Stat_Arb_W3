@@ -63,3 +63,23 @@
   align-items: center; column-gap: 6px; }
 .window.chartwin .cw-note { flex: 0 0 auto; white-space: nowrap;
   overflow: hidden; text-overflow: ellipsis; }
+
+/* THE TASKBAR, one line high whatever is open: every button on one
+ * line, all the same height and centred. A long window name is cut
+ * with "…" (all of it on hover) and the tabs give way before the
+ * buttons on the right, which never shrink. */
+#taskbar { min-width: 0; }
+#tabs { flex: 1 1 auto; min-width: 0; overflow: hidden; align-items: center; }
+#taskbar .tab, #taskbar .link, #taskbar .kill {
+  box-sizing: border-box; height: 22px; line-height: 16px;
+  white-space: nowrap; display: inline-flex; align-items: center;
+}
+#tabs .tab { flex: 0 1 auto; min-width: 48px; max-width: 220px; }
+#tabs .tab .tab-label {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  min-width: 0;
+}
+#tabs .tab .badge { flex: 0 0 auto; }
+#taskbar .plus { flex: 0 0 auto; }
+.taskbar-right { flex: 0 0 auto; white-space: nowrap; gap: 4px; }
+.taskbar-right .stat { white-space: nowrap; }

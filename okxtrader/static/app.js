@@ -974,7 +974,8 @@
 
   //: Candles drawn. The bands are worked out over the history before
   //: them too, so the first one drawn already has its band.
-  var CHART_SHOWN = 100;
+  //: Candles on screen before any zoom: wide enough to read each one.
+  var CHART_SHOWN = 60;
   //: How old a history may be before the engine is asked again. The
   //: engine reuses its own for five minutes as well.
   var CHART_HISTORY_MS = 300000;
@@ -1214,7 +1215,8 @@
   //: chart a trader already reads; the entry lines keep Arrow-statarb's.
   var CHART = {up: '#198754', down: '#dc3545', stop: '#6c757d',
                mean: '#fd7e14', sd: 'rgba(13,110,253,.55)',
-               grid: 'rgba(128,128,128,.25)', text: '#6c757d'};
+               grid: 'rgba(128,128,128,.25)', text: '#6c757d',
+               axis: '#343a40'};
 
   function mergeLive(history, live, seconds, anchor, since) {
     /* MT5's candles with the live 10-second ones folded into them: a
@@ -1283,7 +1285,7 @@
     // small chart, rather than a full-size one cropped by its frame.
     var w = Math.max(box.clientWidth, 120);
     var h = Math.max(box.clientHeight, 50);
-    var left = 52, right = 8, top = 8, bottom = 18;
+    var left = 52, right = 8, top = 8, bottom = 20;
     var lines = opts.lines || [], curves = opts.curves || [];
     var n = candles.length;
     var ys = [];
@@ -1310,13 +1312,30 @@
       return left + (times[i] + seconds / 2 - t0) / (t1 - t0) * plotW;
     }
     function Y(v) { return top + (hi - v) / (hi - lo) * (h - top - bottom); }
-    var body = Math.max(1, Math.min(12, slot * 0.7));
+    var body = Math.max(2, Math.min(14, slot * 0.7));
     var svg = '<svg width="' + w + '" height="' + h + '" viewBox="0 0 ' +
       w + ' ' + h + '" xmlns="http://www.w3.org/2000/svg">';
     // Ticks the caller names (z: whole sigmas), or five even ones.
-    var ticks = (opts.ticks || [0, 1, 2, 3, 4].map(function (k) {
-      return lo + (hi - lo) * k / 4;
-    })).filter(function (v) { return v >= lo && v <= hi; });
+    // ROUND numbers on the axis - 1, 2, 2.5 or 5 times a power of ten -
+    // not five even slices of whatever the range happens to be (which
+    // read 146.1903, 67.4153, -11.4542...).
+    var digits = opts.digits;
+    var ticks = opts.ticks;
+    if (!ticks) {
+      var want = Math.max(2, Math.min(6, Math.floor((h - top - bottom) / 28)));
+      var raw = (hi - lo) / want;
+      var mag = Math.pow(10, Math.floor(Math.log(raw) / Math.LN10));
+      var step = [1, 2, 2.5, 5, 10].map(function (k) { return k * mag; })
+        .filter(function (v) { return v >= raw; })[0] || 10 * mag;
+      ticks = [];
+      for (var v0 = Math.ceil(lo / step) * step; v0 <= hi + 1e-9;
+           v0 += step) {
+        ticks.push(Math.abs(v0) < step * 1e-9 ? 0 : v0);
+      }
+      digits = Math.max(0, -Math.floor(Math.log(step) / Math.LN10 + 1e-9)) +
+        (Math.abs(step / mag - 2.5) < 1e-9 ? 1 : 0);
+    }
+    ticks = ticks.filter(function (v) { return v >= lo && v <= hi; });
     // Thinned to the room there is: a label every 14 px at least, so a
     // small window shows fewer numbers rather than numbers on numbers.
     var room = h - top - bottom;
@@ -1331,9 +1350,9 @@
       svg += '<line x1="' + left + '" x2="' + (w - right) + '" y1="' +
         Y(v).toFixed(1) + '" y2="' + Y(v).toFixed(1) + '" stroke="' +
         CHART.grid + '" stroke-width="1"/>' +
-        '<text x="' + (left - 4) + '" y="' + (Y(v) + 3).toFixed(1) +
-        '" text-anchor="end" font-size="10" fill="' + CHART.text + '">' +
-        v.toFixed(opts.digits) + '</text>';
+        '<text x="' + (left - 4) + '" y="' + (Y(v) + 4).toFixed(1) +
+        '" text-anchor="end" font-size="11" fill="' + CHART.axis + '">' +
+        v.toFixed(digits) + '</text>';
     });
     lines.forEach(function (line) {
       svg += '<line class="' + (line.cls || '') + '" x1="' + left +
@@ -1367,14 +1386,36 @@
       var yTop = Y(Math.max(c.o, c.c)), yBot = Y(Math.min(c.o, c.c));
       svg += '<g class="cw-candle ' + (up ? 'up' : 'down') +
         (c.beyond ? ' beyond' : '') + '">' +
-        '<line x1="' + x.toFixed(1) + '" x2="' + x.toFixed(1) + '" y1="' +
+        '<line shape-rendering="crispEdges" x1="' + x.toFixed(1) +
+        '" x2="' + x.toFixed(1) + '" y1="' +
         Y(c.h).toFixed(1) + '" y2="' + Y(c.l).toFixed(1) + '" stroke="' +
         colour + '" stroke-width="1"/>' +
-        '<rect x="' + (x - body / 2).toFixed(1) + '" y="' + yTop.toFixed(1) +
+        '<rect shape-rendering="crispEdges" x="' +
+        (x - body / 2).toFixed(1) + '" y="' + yTop.toFixed(1) +
         '" width="' + body.toFixed(1) + '" height="' +
         Math.max(1, yBot - yTop).toFixed(1) + '" fill="' + colour +
         '" stroke="' + (c.beyond ? '#000' : colour) + '"/></g>';
     });
+    // WHERE IT IS NOW: the last close, as a dotted line across and its
+    // value in a tag at the right-hand end.
+    var lastC = null;
+    for (var li = candles.length - 1; li >= 0; li--) {
+      if (candles[li]) { lastC = candles[li].c; break; }
+    }
+    if (opts.nowTag && lastC !== null && isFinite(lastC)) {
+      var yl = Y(lastC);
+      var tag = lastC.toFixed(Math.max(digits, opts.nowDigits || 0));
+      var tw = tag.length * 6.6 + 8;
+      svg += '<line x1="' + left + '" x2="' + (w - right) + '" y1="' +
+        yl.toFixed(1) + '" y2="' + yl.toFixed(1) + '" stroke="#212529" ' +
+        'stroke-width="1" stroke-dasharray="1 3" opacity=".6"/>' +
+        '<rect x="' + (w - right - tw).toFixed(1) + '" y="' +
+        (yl - 8).toFixed(1) + '" width="' + tw.toFixed(1) +
+        '" height="16" rx="2" fill="#212529"/>' +
+        '<text x="' + (w - right - 4).toFixed(1) + '" y="' +
+        (yl + 4).toFixed(1) + '" text-anchor="end" font-size="11" ' +
+        'font-weight="700" fill="#fff">' + tag + '</text>';
+    }
     // The time along the bottom: five labels evenly across the clock,
     // the day added where the chart spans more than one.
     if (times.length) {
@@ -1389,8 +1430,8 @@
         var anchor = k === 0 ? 'start' : k === count - 1 ? 'end'
           : 'middle';
         svg += '<text x="' + (left + f * plotW).toFixed(1) + '" y="' +
-          (h - 4) + '" font-size="10" text-anchor="' + anchor + '" fill="' +
-          CHART.text + '">' + chartClock(t0 + f * (t1 - t0), withDay) +
+          (h - 4) + '" font-size="11" text-anchor="' + anchor + '" fill="' +
+          CHART.axis + '">' + chartClock(t0 + f * (t1 - t0), withDay) +
           '</text>';
       });
     }
@@ -1640,6 +1681,7 @@
     var geom = {z: null, s: null};
     if (zc.some(function (z) { return z; })) {
       var zPlot = svgCandles(zBox, zc, {lines: zLines, digits: 0,
+                                        nowTag: true, nowDigits: 2,
                                         ticks: [-4, -3, -2, -1, 0, 1, 2, 3,
                                                 4], times: times,
                                         seconds: seconds});
@@ -1663,6 +1705,7 @@
                    cls: 'cw-band-entry'});
     }
     var sPlot = svgCandles(sBox, shown, {curves: curves, digits: 4,
+                                         nowTag: true, nowDigits: 2,
                                          times: times, seconds: seconds});
     sBox.innerHTML = sPlot.svg;
     geom.s = sPlot.geom;
@@ -7642,8 +7685,12 @@
         var working = (row.working_buys || 0) + (row.working_sells || 0);
         if (working) { badge = '<span class="badge">' + working + '</span>'; }
       }
+      // The label in its own span, so a long one is cut with "…" on
+      // ONE line - the whole of it on hover.
       html += '<button class="tab' + (state.active === id ? ' on' : '') +
-        '" data-panel="' + id + '">' + label + badge + '</button>';
+        '" data-panel="' + id + '" title="' + escapeHtml(label) + '">' +
+        '<span class="tab-label">' + escapeHtml(label) + '</span>' + badge +
+        '</button>';
     });
     el('tabs').innerHTML = html;
   }

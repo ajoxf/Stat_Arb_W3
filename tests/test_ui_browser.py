@@ -6025,14 +6025,14 @@ def test_the_chart_opens_and_closes_from_the_ladder(page):
         .get_attribute('class')
     # The spread: candles, the band's middle, +-1 and +-2 sigma, and the
     # entry either side.
-    assert win.locator('.cw-spread .cw-candle').count() == 100
+    assert win.locator('.cw-spread .cw-candle').count() == 60
     assert win.locator('.cw-spread .cw-mean').count() == 1
     # The +-1 and +-2 sigma lines are not drawn: the entry and the mean
     # are the levels a trade is read against.
     assert win.locator('.cw-spread .cw-band').count() == 0
     assert win.locator('.cw-spread .cw-band-entry').count() == 2
     # z against each candle's own band, with the same levels across.
-    assert win.locator('.cw-z .cw-candle').count() == 100
+    assert win.locator('.cw-z .cw-candle').count() == 60
     assert win.locator('.cw-z .cw-sd').count() == 0
     assert win.locator('.cw-z .cw-entry-up').count() == 1
     assert win.locator('.cw-z .cw-entry-down').count() == 1
