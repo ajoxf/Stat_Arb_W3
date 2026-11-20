@@ -399,6 +399,12 @@ class AlgoDesk:
         if body.get('blocked_side'):
             run.last_blocked = {'side': body['blocked_side'],
                                 'z': body.get('blocked_z'), 'at': now,
+                                # The spread it would have gone on at:
+                                # the bid for a SELL, the offer for a BUY.
+                                'spread': (md or {}).get(
+                                    'short_spread'
+                                    if body['blocked_side'] == 'SELL'
+                                    else 'long_spread'),
                                 'reason': body.get('blocked')}
             self._journal_blocked(pair, run, now)
         for intent in body['intents']:

@@ -3949,7 +3949,9 @@
       kv('Size', fmt(filters.qty || params.algo_qty || 1, 2) + ' spread(s)') +
       '</div><div class="aw-blocked"><div class="aw-head2">Last signal blocked'
       + '</div>' + (last
-        ? '<div><b>' + escapeHtml(sideWords(last.side)) + '</b> z ' +
+        ? '<div><b>' + escapeHtml(sideWords(last.side)) + '</b>' +
+          (last.spread === null || last.spread === undefined ? ''
+            : ' @ ' + fmt(last.spread, 4)) + ' z ' +
           signed(last.z) + ' · ' +
           new Date(last.at * 1000).toLocaleTimeString() + '</div><div>' +
           escapeHtml(last.reason || '') + '</div>'
@@ -3988,6 +3990,8 @@
     if (!last) { return html + '<div class="hint">none yet</div></div>'; }
     var what = escapeHtml(last.action || '') + ' ' +
       escapeHtml(sideWords(last.side)) +
+      (last.spread === null || last.spread === undefined ? ''
+        : ' @ ' + fmt(last.spread, 4)) +
       (last.z === null || last.z === undefined ? '' : ' z ' + signed(last.z)) +
       ' · ' + new Date(last.at * 1000).toLocaleTimeString();
     var outcome;
