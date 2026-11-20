@@ -1155,8 +1155,12 @@ class Bot:
         rows += [None,
                  ('Feed', f'PROBLEM: {problem}' if problem else 'OK'),
                  ('Session', self._session_words(row))]
-        fill = 'maker (W3)' if row.get('fill_style') == 'maker' else \
-            'taker (both legs at market)'
+        # The ladder's Fill, all three of them: anything not 'maker' used
+        # to read as taker, so a Maker + taker ladder said "taker".
+        fill = {'maker': 'maker both legs (post-only, held to the level)',
+                'quote': 'maker + taker (one leg rests, the other crosses)',
+                'taker': 'taker both legs (at market)'}.get(
+                    row.get('fill_style'), 'maker both legs')
         rows.append(('Fills', fill))
         for job in row.get('maker_fills') or ():
             rows.append(('Working', maker_words(job)))

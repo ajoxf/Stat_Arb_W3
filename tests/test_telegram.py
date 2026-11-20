@@ -1141,7 +1141,7 @@ def test_the_dashboard_says_24_7_funding_and_the_maker_fill(bot):
     assert 'around the clock (24/7)' in text
     assert 'Next funding' in text and '16:00 UTC' in text
     assert 'open 24/7 (OKX, UTC)' in text
-    assert 'maker (W3)' in text
+    assert 'maker both legs' in text
     assert 'both legs resting as maker: A 0.00/1.00 · B 1.00/2.00' in text
 
 
@@ -1156,3 +1156,13 @@ def test_balance_lists_okx_positions_with_their_liquidation(bot):
     text = bot.api.texts()[-1]
     assert 'OKX WARNING' in text
     assert 'BTC-USDT-SWAP short' in text and '38.2% away' in text
+
+
+def test_status_names_all_three_fills():
+    """Every Fill but 'maker' used to read 'taker (both legs at
+    market)' - a Maker + taker ladder included."""
+    from okxtrader import telegram as tg
+    import inspect
+    source = inspect.getsource(tg)
+    for words in ('maker both legs', 'maker + taker', 'taker both legs'):
+        assert words in source
