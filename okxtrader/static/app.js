@@ -1859,6 +1859,41 @@
       setArmed(key, 'sell', size);
       render();
     });
+    // DOLLARS TO QTY: what one Qty is worth now, both legs, at the mids.
+    function sizeInDollars(dollars) {
+      var row = state.snapshot.pairs[key] || {};
+      var per = qtyDollars(row);
+      var box = node.querySelector('.usd-qty');
+      if (!per) {
+        toast('No live price to size in dollars yet.');
+        return;
+      }
+      var qty = Math.round(dollars / per * 100) / 100;
+      if (!(qty >= 0.01)) {
+        toast('$' + Number(dollars).toLocaleString() + ' is under one ' +
+              'order step here (1 Qty = $' + Math.round(per).toLocaleString() +
+              ').');
+        return;
+      }
+      setArmed(key, 'buy', qty);
+      setArmed(key, 'sell', qty);
+      state.armedUsd = state.armedUsd || {};
+      state.armedUsd[key] = dollars;
+      if (box) {
+        box.textContent = '= Qty ' + qty.toFixed(2);
+      }
+      render();
+    }
+    node.querySelector('.usd-keypad').addEventListener('click', function (e) {
+      var button = e.target.closest('.usd');
+      if (!button) { return; }
+      sizeInDollars(parseFloat(button.dataset.usd));
+    });
+    node.querySelector('.usd-box').addEventListener('keydown', function (e) {
+      if (e.key !== 'Enter') { return; }
+      var dollars = parseFloat(e.target.value);
+      if (isFinite(dollars) && dollars > 0) { sizeInDollars(dollars); }
+    });
     node.querySelector('.buy-touch').addEventListener('click', function () {
       atTouch(key, 'BUY');
     });
@@ -1940,6 +1975,20 @@
         e.preventDefault();
         send('cancel_order', {order_id: cell.dataset.orderId});
       });
+  }
+
+  function qtyDollars(row) {
+    /* What ONE Qty of this ladder is worth now: both legs' lots x
+     * contract x mid. Null without a price. */
+    var market = (row || {}).market || {};
+    function mid(l) {
+      var b = market['leg_' + l + '_bid'], a = market['leg_' + l + '_ask'];
+      return b && a ? (b + a) / 2 : null;
+    }
+    var ma = mid('a'), mb = mid('b');
+    if (!ma || !mb || !row.contract_a || !row.contract_b) { return null; }
+    return (row.clip_lots_a || 1) * row.contract_a * ma +
+      (row.clip_lots_b || 1) * row.contract_b * mb;
   }
 
   function setArmed(key, side, value) {
@@ -2914,7 +2963,8 @@
     var lockNote = node.querySelector('.algo-lock');
     if (lockNote) { lockNote.hidden = !algoLive; }
     node.querySelectorAll('.buy-touch, .sell-touch, .keypad button, ' +
-                          '.qty-box').forEach(function (control) {
+                          '.qty-box, .usd-keypad button, .usd-box')
+      .forEach(function (control) {
       control.disabled = algoLive;
     });
     node.querySelector('.title').textContent = row.name || key;

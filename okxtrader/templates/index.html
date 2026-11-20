@@ -382,6 +382,23 @@
              for a row: lift the offer, hit the bid, close what is on. -->
         <button class="quick buy-touch" title="Buy the spread at the offer (B)">BUY</button>
         <button class="quick sell-touch" title="Sell the spread at the bid (S)">SELL</button>
+        <!-- SIZE IN DOLLARS, for the next click: each button sets Qty BUY
+             and Qty SELL to what that many dollars of both legs is at
+             the live prices. It sizes clicks only - the Algo keeps its
+             own Algo qty. -->
+        <div class="usd-keypad" title="Set the next click's size in dollars of both legs together, at the live prices. Sets Qty BUY and Qty SELL; the Algo is not affected.">
+          <button class="usd" data-usd="1000">1K</button>
+          <button class="usd" data-usd="5000">5K</button>
+          <button class="usd" data-usd="10000">10K</button>
+          <button class="usd" data-usd="50000">50K</button>
+          <button class="usd" data-usd="100000">100K</button>
+        </div>
+        <div class="usd-row">
+          <input class="usd-box" type="number" min="0" step="100"
+                 placeholder="$ size"
+                 title="Type a dollar size and press Enter: Qty BUY and Qty SELL are set to that much of both legs, at the live prices.">
+          <span class="usd-qty hint"></span>
+        </div>
         <!-- The exit type is chosen in this ladder's settings, not
              here: the rail has no row to spare, and it is a decision
              made once rather than during the move. What the rail
