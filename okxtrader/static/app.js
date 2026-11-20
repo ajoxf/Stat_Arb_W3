@@ -2171,6 +2171,7 @@
     // LIVE, never blank. A blank box now MEANS 1, so leaving it empty
     // while the engine runs 0.10 would read as "derived" and send 1 on
     // the next Apply — a ten-fold resize nobody typed.
+    ['.ls-usd', 'usd_per_qty', 'blank-number'],
     ['.ls-clip-a', 'clip_lots_a', 'live-number'],
     ['.ls-clip-b', 'clip_lots_b', 'live-number'],
     // Blank is a REAL state here and the normal one: it means MT5's.
@@ -2563,7 +2564,26 @@
         ' ' + (String(symbol || '').indexOf('-') > 0
                ? String(symbol).split('-')[0] : 'units');
     }
-    note.textContent =
+    // Sized in dollars: the lots are the engine's, worked out from the
+    // prices - typed ones would be overwritten on the next pass.
+    var usd = live.usd_per_qty;
+    ['.ls-clip-a', '.ls-clip-b'].forEach(function (sel) {
+      var box = pane.querySelector(sel);
+      if (box) {
+        box.readOnly = !!usd;
+        if (usd) {
+          // The lots in force, not the ones once typed.
+          var now = sel === '.ls-clip-a' ? live.clip_lots_a
+                                         : live.clip_lots_b;
+          if (now) { box.value = Number(now).toFixed(4); }
+        }
+        box.title = usd ? 'Sized in dollars: worked out from the live ' +
+          'prices and beta. Clear "$ per Qty" to type lots.' : box.title;
+      }
+    });
+    note.textContent = (usd ? 'Sized in dollars: 1 Qty = $' +
+      Number(usd).toLocaleString() + ' (both legs), lots following the ' +
+      'prices. ' : '') +
       'In force: 1 Qty = ' + fmt(lotsA, 2) + ' lots ' +
       (live.symbol_a || 'A') + inUnits(lotsA, live.contract_a, live.symbol_a) +
       ' / ' + fmt(lotsB, 2) + ' lots ' +

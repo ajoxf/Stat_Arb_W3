@@ -247,3 +247,23 @@ def clip_plan(pair, meta_a, meta_b, price_a, price_b, spreads=1.0):
         'derivation': (f"Qty {spreads:g} = {lots_a:g} lots A / {lots_b:g} "
                        f"lots B, ${k:,.2f} per 1.00 of spread"),
     }
+
+
+def lots_for_dollars(dollars, beta, price_a, price_b, contract_a, contract_b):
+    """Leg A and leg B lots (unrounded) for ONE Qty worth `dollars` of
+    both legs together, hedged at `beta`: the spread is B - beta x A, so
+    each unit of B carries beta units of A.
+
+        B units = dollars / (P_B + beta x P_A)      A units = beta x B units
+
+    Returns (lots_a, lots_b), or None when any input is missing."""
+    try:
+        dollars, beta = float(dollars), float(beta)
+        pa, pb = float(price_a), float(price_b)
+        ca, cb = float(contract_a), float(contract_b)
+    except (TypeError, ValueError):
+        return None
+    if min(dollars, beta, pa, pb, ca, cb) <= 0:
+        return None
+    units_b = dollars / (pb + beta * pa)
+    return (beta * units_b / ca, units_b / cb)

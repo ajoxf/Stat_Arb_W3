@@ -714,6 +714,7 @@ class Coordinator:
             # see what they are clicking into (spec §8).
             md['feed_badge'] = _badge(md, stale, jumped)
             self._observe_session(key, md, pair)
+            self._size_in_dollars(pair, md)
             self.market[key] = md
             body = self._work_algo(pair, md)
             self._track(pair, md, body)
@@ -2733,6 +2734,36 @@ class Coordinator:
         return {'open': series[0], 'high': max(series),
                 'low': min(series), 'bars': len(series)}
 
+    #: Re-derive the dollar-sized lots when they move this much (0.1%):
+    #: not every tick, but never far from the money asked for.
+    SIZE_IN_DOLLARS_DRIFT = 0.001
+
+    def _size_in_dollars(self, pair, md):
+        """SIZE IN DOLLARS: with `usd_per_qty` set, this ladder's lots per
+        Qty follow the live prices and beta, so every figure that reads
+        them - the order sizes, k, fees, break-even, the depth - is for
+        a Qty worth that many dollars. Unrounded here; each ORDER rounds
+        to OKX's lot step."""
+        dollars = getattr(pair, 'usd_per_qty', None)
+        if not dollars:
+            # Off: the lots stay what they last were (the same money),
+            # and are the trader's to type from here.
+            return
+        lots = sizing.lots_for_dollars(
+            dollars, pair.hedge_ratio, (md or {}).get('leg_a_mid'),
+            (md or {}).get('leg_b_mid'),
+            (pair.meta_a or {}).get('contract_size'),
+            (pair.meta_b or {}).get('contract_size'))
+        if lots is None:
+            return
+        old_a = float(pair.clip_lots_a or 0.0)
+        if old_a and abs(lots[0] / old_a - 1.0) < self.SIZE_IN_DOLLARS_DRIFT \
+                and abs(lots[1] / float(pair.clip_lots_b or lots[1]) - 1.0) \
+                < self.SIZE_IN_DOLLARS_DRIFT:
+            return
+        pair.clip_lots_a, pair.clip_lots_b = round(lots[0], 6), \
+            round(lots[1], 6)
+
     def leg_session(self, account, symbol):
         """One leg's own session O/H/L/V, cached: it is an IPC round
         trip for numbers that move slowly, and the ladder polls three
@@ -4055,6 +4086,7 @@ class Coordinator:
                 # of prices.
                 'row_count': pair.rows,
                 'clip_lots_a': pair.clip_lots_a,
+                'usd_per_qty': getattr(pair, 'usd_per_qty', None),
                 'clip_lots_b': pair.clip_lots_b,
                 # What ONE LOT is, in the instrument's own units —
                 # 100 oz of gold, 5,000 of silver, 1,000 barrels of

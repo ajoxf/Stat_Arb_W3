@@ -488,6 +488,13 @@
                arithmetic, or lot for lot, or by equal notional — and
                every one of those could round a leg to zero or size a
                pair the desk had not asked for. -->
+          <!-- SIZE IN DOLLARS. Set, one Qty is this many dollars of both
+               legs together, and the lots below are worked out from the
+               live prices and beta on every pass. Blank: the lots typed. -->
+          <label class="lsf"><span>$ per Qty</span>
+            <input class="ls-usd" type="number" min="0" step="100"
+                   placeholder="off - typed lots"
+                   title="Size in dollars: what ONE Qty is worth, both legs together, in USD (e.g. 1000: Qty 100 = $100,000). The leg lots are then worked out from the live prices and the hedge ratio on every pass, and each order is rounded to OKX's lot step. Blank: the Leg A / Leg B lots you type are used."></label>
           <label class="lsf"><span>Leg A lots</span>
             <input class="ls-clip-a" type="number" min="0" step="0.01"
                    title="How many LOTS of leg A one unit of Qty is. Qty 100 at 1 sends 100 lots. Blank reads as 1."></label>
