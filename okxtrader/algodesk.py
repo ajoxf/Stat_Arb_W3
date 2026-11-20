@@ -76,11 +76,15 @@ class RecordingSink:
     def handle(self, pair_key, intent, mode=algo_module.DRY_RUN):
         detail = dict(intent, mode=mode)
         z = intent.get('z')
-        logging.info('[ALGO %s] %s %s %s z=%s spread=%s (%s, nothing sent)',
+        # Said as it is: in LIVE the next line is what was SENT and what
+        # came of it; only a dry run sends nothing.
+        logging.info('[ALGO %s] %s %s %s z=%s spread=%s (%s)',
                      pair_key, intent.get('action'), intent.get('side'),
                      intent.get('reason') or '',
                      '—' if z is None else f'{z:+.2f}',
-                     intent.get('spread'), mode)
+                     intent.get('spread'),
+                     'LIVE - sending' if mode == algo_module.LIVE
+                     else 'signal only, nothing sent')
         if self.store is not None:
             try:
                 self.store.event('algo_signal', pair_key, **detail)
