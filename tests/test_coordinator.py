@@ -268,3 +268,32 @@ def test_where_the_broker_publishes_no_session_ours_is_used_and_labelled(
     assert session['ours'] is True
     assert session['high'] is not None
     assert session['volume_a'] is None and session['volume_b'] is None
+
+
+def test_two_chart_histories_at_once_do_not_share_a_tmp_file(config, pair,
+                                                              legs, tmp_path):
+    """Two chart windows asking in the same second used to write ONE tmp
+    name; the first rename took it and the second failed with WinError 2
+    - its chart never read. Each write now has a tmp of its own."""
+    import threading as _t
+    legs['acct_a'].broker.bars[pair.symbol_a] = [
+        {'time': 900 * i, 'close': 4300.0 + i} for i in range(200)]
+    legs['acct_b'].broker.bars[pair.symbol_b] = [
+        {'time': 900 * i, 'close': 4360.0 + i} for i in range(200)]
+    coordinator = Coordinator(config, legs,
+                              status_path=str(tmp_path / 'status.json'))
+    errors = []
+
+    def ask():
+        try:
+            coordinator._chart_history = {}
+            coordinator.chart_history(pair.key, 15)
+        except Exception as e:                       # the old failure
+            errors.append(e)
+    threads = [_t.Thread(target=ask) for _ in range(6)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == []
+    assert not [p for p in tmp_path.iterdir() if p.name.endswith('.tmp')]

@@ -2314,11 +2314,21 @@ class Coordinator:
         # results: those are rewritten on every click's answer, and a
         # history in them would make every click's answer heavier.
         from .chart import history_path
-        tmp = history_path(self.status_path) + '.tmp'
-        with open(tmp, 'w', encoding='utf-8') as f:
-            json.dump({f'{key}#{tf}': body
-                       for (key, tf), (_, body) in cache.items()}, f)
-        atomicfile.replace(tmp, history_path(self.status_path))
+        # One writer at a time, each with its OWN tmp file. Two chart
+        # windows asking at once (ETH and SOL, the same second) used to
+        # share one tmp name: the first rename took it, the second found
+        # nothing to rename (WinError 2) and its chart never read.
+        lock = getattr(self, '_chart_history_lock', None)
+        if lock is None:
+            lock = self._chart_history_lock = threading.Lock()
+        with lock:
+            target = history_path(self.status_path)
+            tmp = f'{target}.{os.getpid()}.{threading.get_ident()}.tmp'
+            with open(tmp, 'w', encoding='utf-8') as f:
+                json.dump({f'{key}#{tf}': body
+                           for (key, tf), (_, body) in list(cache.items())},
+                          f)
+            atomicfile.replace(tmp, target)
         return self._history_summary(answer)
 
     @staticmethod
