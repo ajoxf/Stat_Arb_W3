@@ -1836,6 +1836,7 @@
       // second gesture. Blank goes back to the ladder's default rather
       // than arming zero, which would be a click that sends nothing.
       setArmed(key, 'buy', e.target.value);
+      if (state.armedUsd) { delete state.armedUsd[key]; }
       // Redraw THIS ladder as it is typed, so the button beside the box
       // carries the size before the next poll. The box being typed into
       // is never written back over — it has focus.
@@ -1845,6 +1846,7 @@
     });
     node.querySelector('.sell-qty').addEventListener('input', function (e) {
       setArmed(key, 'sell', e.target.value);
+      if (state.armedUsd) { delete state.armedUsd[key]; }
       if (state.snapshot.pairs[key]) {
         renderLadder(key, state.snapshot.pairs[key]);
       }
@@ -1857,6 +1859,7 @@
       var size = button.dataset.qty || '';
       setArmed(key, 'buy', size);
       setArmed(key, 'sell', size);
+      if (state.armedUsd) { delete state.armedUsd[key]; }
       render();
     });
     // DOLLARS TO QTY: what one Qty is worth now, both legs, at the mids.
@@ -1975,6 +1978,16 @@
         e.preventDefault();
         send('cancel_order', {order_id: cell.dataset.orderId});
       });
+  }
+
+  function kDollars(x) {
+    /* $25K, $2.5K, $850 - a dollar size as the keypad names it. */
+    var n = Math.abs(x);
+    if (n >= 1000) {
+      var k = n / 1000;
+      return '$' + (k >= 100 ? Math.round(k) : Math.round(k * 10) / 10) + 'K';
+    }
+    return '$' + Math.round(n);
   }
 
   function qtyDollars(row) {
@@ -3127,7 +3140,21 @@
       var sized = (size === null || size === undefined) ? '' : ' ' + size;
       var button = node.querySelector(
         side === 'buy' ? '.buy-touch' : '.sell-touch');
-      button.textContent = (side === 'buy' ? 'BUY' : 'SELL') + sized;
+      // IN DOLLARS where the size was set in dollars (the dollar keypad,
+      // or a ladder sized in $ per Qty): "BUY $25K" - both legs
+      // together, said on hover - so a K is never read as lots.
+      var dollars = null;
+      var per = qtyDollars(row);
+      var usdArmed = (state.armedUsd || {})[key];
+      if (size && per && (row.usd_per_qty || usdArmed)) {
+        dollars = size * per;
+      }
+      button.textContent = (side === 'buy' ? 'BUY' : 'SELL') +
+        (dollars ? ' ' + kDollars(dollars) : sized);
+      button.title = (side === 'buy' ? 'Buy' : 'Sell') + ' the spread ' +
+        (side === 'buy' ? 'at the offer (B)' : 'at the bid (S)') +
+        (dollars ? ' - ' + kDollars(dollars) + ' of BOTH legs together ' +
+          '(about ' + kDollars(dollars / 2) + ' each), Qty ' + size : '');
     });
     Array.prototype.forEach.call(node.querySelectorAll('.keypad .qty'),
       function (button) {

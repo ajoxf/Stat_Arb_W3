@@ -86,14 +86,16 @@
 
 /* The dollar keypad under BUY / SELL: five round sums on one row, and
  * a box for any other. */
-.usd-keypad { display: grid; grid-template-columns: repeat(5, 1fr);
+.usd-keypad { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 2px; margin: 2px 0; }
 .usd-keypad button { font: 700 9px var(--font); padding: 2px 0;
-  min-width: 0; letter-spacing: -0.2px; cursor: pointer; }
+  min-width: 0; letter-spacing: -0.2px; cursor: pointer; overflow: hidden;
+  text-overflow: clip; white-space: nowrap; }
 .usd-row { display: flex; align-items: center; gap: 4px; margin-bottom: 2px; }
 .usd-row .usd-box { flex: 1 1 auto; min-width: 0; width: 50%;
   -moz-appearance: textfield; }
 .usd-row .usd-box::-webkit-outer-spin-button,
 .usd-row .usd-box::-webkit-inner-spin-button { -webkit-appearance: none;
   margin: 0; }
-.usd-row .usd-qty { flex: 0 0 auto; white-space: nowrap; font-size: 10px; }
+.usd-row .usd-qty { flex: 0 1 auto; min-width: 0; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; font-size: 10px; }
