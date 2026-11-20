@@ -1194,3 +1194,50 @@ def test_a_maker_entry_keeps_the_z_its_signal_was_taken_at():
     desk._runs = {'K': run}
     desk.adopt('K', 'POS1')
     assert run.entry_z['POS1'] == -1.52 and run.pending_z is None
+
+
+def test_a_webhook_on_the_bot_is_cleared_so_commands_are_read():
+    """Live: alerts arrived, every command went unanswered. A webhook
+    on the bot makes Telegram refuse getUpdates (409), while sending
+    still works. The bot clears it and reads commands again."""
+    from okxtrader import telegram as tg
+
+    class Api:
+        def __init__(self):
+            self.calls, self.webhook = [], True
+
+        def call(self, method, **p):
+            self.calls.append(method)
+            if method == 'deleteWebhook':
+                self.webhook = False
+                return True
+            if method == 'getUpdates' and self.webhook:
+                raise tg.TelegramError("getUpdates: HTTP 409 Conflict: can't "
+                                       "use getUpdates method while webhook "
+                                       "is active; use deleteWebhook")
+            return []
+    api = Api()
+    bot = tg.Bot(api, None, {1})
+    try:
+        bot.poll_once(timeout=0)
+    except tg.TelegramError:
+        pass
+    assert 'deleteWebhook' in api.calls
+    assert bot.poll_once(timeout=0) == 0            # reading now
+
+
+def test_another_program_on_the_same_bot_is_named_in_the_log(caplog):
+    from okxtrader import telegram as tg
+
+    class Api:
+        def call(self, method, **p):
+            raise tg.TelegramError('getUpdates: HTTP 409 Conflict: terminated '
+                                   'by other getUpdates request')
+    bot = tg.Bot(Api(), None, {1})
+    import logging
+    with caplog.at_level(logging.ERROR):
+        try:
+            bot.poll_once(timeout=0)
+        except tg.TelegramError:
+            pass
+    assert 'ANOTHER PROGRAM' in caplog.text

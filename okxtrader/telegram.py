@@ -914,11 +914,45 @@ class Bot:
 
     # -- the transport --------------------------------------------------------
 
+    def clear_webhook(self):
+        """A bot with a WEBHOOK set gets no updates by polling: Telegram
+        answers every getUpdates with 409 'can't use getUpdates method
+        while webhook is active'. Messages still SEND, so alerts arrive
+        while every command goes unanswered. Cleared at start, and again
+        if Telegram says so. Pending messages are kept."""
+        try:
+            self.api.call('deleteWebhook', drop_pending_updates=False)
+            return True
+        except TelegramError as e:
+            logging.warning('[telegram] could not clear the webhook: %s', e)
+            return False
+
     def poll_once(self, timeout=25):
-        updates = self.api.call('getUpdates', offset=self.offset,
-                                timeout=timeout,
-                                allowed_updates=['message',
-                                                 'callback_query']) or []
+        try:
+            updates = self.api.call('getUpdates', offset=self.offset,
+                                    timeout=timeout,
+                                    allowed_updates=['message',
+                                                     'callback_query']) or []
+        except TelegramError as e:
+            text = str(e).lower()
+            if 'webhook' in text:
+                logging.warning('[telegram] a webhook is set on this bot, so '
+                                'it could not read commands - clearing it')
+                self.clear_webhook()
+            elif 'terminated by other getupdates' in text or \
+                    'conflict' in text:
+                # Two programs reading one bot take turns stealing each
+                # other's messages: commands answered at random, or not.
+                logging.error(
+                    '[telegram] ANOTHER PROGRAM is reading this bot (409 '
+                    'Conflict). Commands will be missed until it stops: '
+                    'close the old Stat_Arb_W3 app (or anything else using '
+                    'this TELEGRAM_BOT_TOKEN), or give the desk a bot of '
+                    'its own from @BotFather.')
+            raise
+        if updates and not getattr(self, '_said_reading', False):
+            self._said_reading = True
+            logging.info('[telegram] reading commands - first message in')
         for update in updates:
             self.offset = update['update_id'] + 1
             try:
@@ -2241,6 +2275,13 @@ def start(app, env=None, api=None):
     secret = secrets.token_urlsafe(24)
     app.config['BOT_SECRET'] = secret
     bot = Bot(api or TelegramAPI(token), WebDesk(app, secret), users)
+    try:
+        me = bot.api.call('getMe') or {}
+        logging.info('[telegram] connected as @%s', me.get('username') or '?')
+    except TelegramError as e:
+        logging.error('[telegram] the token was refused by Telegram: %s - '
+                      'check TELEGRAM_BOT_TOKEN in .env', e)
+    bot.clear_webhook()
     try:
         bot.register_commands()
     except TelegramError as e:
