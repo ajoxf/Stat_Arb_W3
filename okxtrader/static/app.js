@@ -3677,9 +3677,10 @@
       // not what a fill costs.
       kv('Round trip', moneyOr(cost.total) +
          (cost.total === null || cost.total === undefined ? '' :
-          ' = fees ' + smallMoney(cost.commission) + ' + bid-ask ' +
-          smallMoney(cost.crossing) +
-          (cost.slippage ? ' + slip ' + smallMoney(cost.slippage) : '')),
+          ' <small class="hint">fees ' + smallMoney(cost.commission) +
+          ' + bid-ask ' + smallMoney(cost.crossing) +
+          (cost.slippage ? ' + slip ' + smallMoney(cost.slippage) : '') +
+          '</small>'),
          '',
          'crossing ' + moneyOr(cost.crossing) + ' + commission ' +
          moneyOr(cost.commission) + ' + slippage ' + moneyOr(cost.slippage)) +

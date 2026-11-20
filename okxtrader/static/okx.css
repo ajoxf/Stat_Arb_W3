@@ -22,3 +22,23 @@
 }
 .spread-math .sm-num { padding-left: 8px; }
 .spread-math .sm-warn { color: #b03030; font-weight: 700; }
+
+/* The Algo window scrolls inside itself: a thin bar on the right of its
+ * body, the title bar fixed above it, so the backtest and the last
+ * order at the bottom are always reachable however short the window. */
+.window.algowin .aw-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: #9aa3ad transparent;
+}
+.window.algowin .aw-body::-webkit-scrollbar { width: 6px; }
+.window.algowin .aw-body::-webkit-scrollbar-thumb {
+  background: #9aa3ad; border-radius: 3px;
+}
+.window.algowin .aw-body::-webkit-scrollbar-track { background: transparent; }
+/* ...and never taller than the screen, so the bar appears instead of
+ * the bottom of the window going out of sight. */
+.window.algowin { max-height: calc(100vh - 70px); }
