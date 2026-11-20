@@ -2232,7 +2232,9 @@ class Coordinator:
     #: chart to a handful of requests instead of thirty-odd.
     OKX_CHART_FRAMES = {15: (5, 3), 60: (15, 4), 240: (60, 4)}
     #: Candles drawn, and kept for the bands to warm up on before them.
-    CHART_CANDLES = 120
+    #: Candles of history read for a chart: enough to zoom out to a
+    #: few days on 15-minute candles.
+    CHART_CANDLES = 400
     #: How long one ladder's candle history is reused. The newest candle
     #: moves on the screen meanwhile, from the live 10-second candles;
     #: this keeps thousands of bars off the trading connection.

@@ -1007,6 +1007,47 @@
       });
       box.addEventListener('mouseleave', function () { chartUnhover(node); });
     });
+    // ZOOM AND PAN, per chart window: the wheel zooms (about the
+    // candle under the pointer's side of the chart), a drag scrolls
+    // back in time, a double-click comes back to now. Both charts move
+    // together - the z and the spread are always the same candles.
+    [node.querySelector('.cw-z'), node.querySelector('.cw-spread')]
+      .forEach(function (box) {
+        box.addEventListener('wheel', function (e) {
+          e.preventDefault();
+          chartZoom(node, key, e.deltaY > 0 ? 1.25 : 0.8);
+        }, {passive: false});
+        box.addEventListener('mousedown', function (e) {
+          if (e.button !== 0) { return; }
+          var view = chartView(key);
+          var startX = e.clientX, startBack = view.back;
+          var width = Math.max(box.clientWidth - 60, 50);
+          box.classList.add('dragging');
+          function move(ev) {
+            var candles = (ev.clientX - startX) / width * view.shown;
+            chartPan(node, key, startBack + Math.round(candles));
+          }
+          function up() {
+            box.classList.remove('dragging');
+            document.removeEventListener('mousemove', move);
+            document.removeEventListener('mouseup', up);
+          }
+          document.addEventListener('mousemove', move);
+          document.addEventListener('mouseup', up);
+          e.preventDefault();
+        });
+        box.addEventListener('dblclick', function () {
+          chartResetView(node, key);
+        });
+      });
+    node.querySelector('.cw-zoom-in').addEventListener('click', function () {
+      chartZoom(node, key, 0.8);
+    });
+    node.querySelector('.cw-zoom-out').addEventListener('click', function () {
+      chartZoom(node, key, 1.25);
+    });
+    node.querySelector('.cw-zoom-reset').addEventListener('click',
+      function () { chartResetView(node, key); });
     node.querySelectorAll('.cw-tfs button').forEach(function (button) {
       button.addEventListener('click', function () {
         state.chartTf[key] = parseInt(button.dataset.tf, 10) || 15;
@@ -1017,6 +1058,47 @@
     });
     el('desktop').appendChild(node);
     return node;
+  }
+
+  //: The fewest candles a zoom goes in to.
+  var CHART_MIN_SHOWN = 10;
+
+  function chartView(key) {
+    /* How many candles are shown, and how far back from the latest the
+     * right-hand edge is. Per chart window, kept while it is open. */
+    state.chartView = state.chartView || {};
+    if (!state.chartView[key]) {
+      state.chartView[key] = {shown: CHART_SHOWN, back: 0, total: 0};
+    }
+    return state.chartView[key];
+  }
+
+  function chartZoom(node, key, factor) {
+    var view = chartView(key);
+    var most = Math.max(view.total || CHART_SHOWN, CHART_MIN_SHOWN);
+    view.shown = Math.max(CHART_MIN_SHOWN,
+                          Math.min(most, Math.round(view.shown * factor)));
+    view.back = Math.max(0, Math.min(view.back, most - view.shown));
+    node.dataset.drawn = '';
+    drawChart(node, key);
+  }
+
+  function chartPan(node, key, back) {
+    var view = chartView(key);
+    var most = Math.max((view.total || 0) - view.shown, 0);
+    var next = Math.max(0, Math.min(back, most));
+    if (next === view.back) { return; }
+    view.back = next;
+    node.dataset.drawn = '';
+    drawChart(node, key);
+  }
+
+  function chartResetView(node, key) {
+    var view = chartView(key);
+    view.shown = CHART_SHOWN;
+    view.back = 0;
+    node.dataset.drawn = '';
+    drawChart(node, key);
   }
 
   function chartRedraw(key) {
@@ -1197,8 +1279,10 @@
      * `opts.lines` [{y, colour, dash, cls}] go straight across;
      * `opts.curves` [{value(c), colour, dash, cls}] follow the candles,
      * like a band. Returns the SVG and the geometry the hover reads. */
-    var w = Math.max(box.clientWidth, 200);
-    var h = Math.max(box.clientHeight, 120);
+    // The room the box actually has: a window dragged small draws a
+    // small chart, rather than a full-size one cropped by its frame.
+    var w = Math.max(box.clientWidth, 120);
+    var h = Math.max(box.clientHeight, 50);
     var left = 52, right = 8, top = 8, bottom = 18;
     var lines = opts.lines || [], curves = opts.curves || [];
     var n = candles.length;
@@ -1233,6 +1317,16 @@
     var ticks = (opts.ticks || [0, 1, 2, 3, 4].map(function (k) {
       return lo + (hi - lo) * k / 4;
     })).filter(function (v) { return v >= lo && v <= hi; });
+    // Thinned to the room there is: a label every 14 px at least, so a
+    // small window shows fewer numbers rather than numbers on numbers.
+    var room = h - top - bottom;
+    var most = Math.max(2, Math.floor(room / 14) + 1);
+    if (ticks.length > most) {
+      var every = Math.ceil((ticks.length - 1) / (most - 1));
+      ticks = ticks.filter(function (_v, i) {
+        return i % every === 0 || i === ticks.length - 1;
+      });
+    }
     ticks.forEach(function (v) {
       svg += '<line x1="' + left + '" x2="' + (w - right) + '" y1="' +
         Y(v).toFixed(1) + '" y2="' + Y(v).toFixed(1) + '" stroke="' +
@@ -1285,8 +1379,15 @@
     // the day added where the chart spans more than one.
     if (times.length) {
       var withDay = t1 - t0 > 20 * 3600;
-      [0, 0.25, 0.5, 0.75, 1].forEach(function (f, k) {
-        var anchor = k === 0 ? 'start' : k === 4 ? 'end' : 'middle';
+      // As many labels as fit: about one per 95 px with the day, 60
+      // without, between two and five.
+      var gap = withDay ? 95 : 60;
+      var count = Math.max(2, Math.min(5, Math.floor(plotW / gap) + 1));
+      var marks = [];
+      for (var q = 0; q < count; q++) { marks.push(q / (count - 1)); }
+      marks.forEach(function (f, k) {
+        var anchor = k === 0 ? 'start' : k === count - 1 ? 'end'
+          : 'middle';
         svg += '<text x="' + (left + f * plotW).toFixed(1) + '" y="' +
           (h - 4) + '" font-size="10" text-anchor="' + anchor + '" fill="' +
           CHART.text + '">' + chartClock(t0 + f * (t1 - t0), withDay) +
@@ -1466,7 +1567,9 @@
     var zBox = node.querySelector('.cw-z');
     var sBox = node.querySelector('.cw-spread');
     // Only when the data or the room it is drawn in has changed.
-    var stamp = [tf, hist ? hist.at : '', live.at || '',
+    var view = chartView(key);
+    var stamp = [tf, view.shown, view.back, hist ? hist.at : '',
+                 live.at || '',
                  (live.candles || []).length, zBox.clientWidth,
                  zBox.clientHeight, sBox.clientWidth,
                  sBox.clientHeight].join('|');
@@ -1495,7 +1598,17 @@
     var entry = hist.entry_z, stop = hist.stop_z;
     var all = withBands(mergeLive(hist.candles, live.candles, seconds,
                                   hist.anchor || 0, hist.at || 0), length);
-    var shown = all.slice(-CHART_SHOWN);
+    // The window the trader has zoomed and scrolled to: `shown`
+    // candles, ending `back` candles before the latest.
+    view.total = all.length;
+    view.shown = Math.min(Math.max(view.shown, CHART_MIN_SHOWN),
+                          Math.max(all.length, CHART_MIN_SHOWN));
+    view.back = Math.max(0, Math.min(view.back, all.length - view.shown));
+    var end = all.length - view.back;
+    var shown = all.slice(Math.max(0, end - view.shown), end);
+    node.querySelector('.cw-size').textContent = label + ' \u00b7 ' +
+      shown.length + ' shown' + (view.back ? ' \u00b7 ' + view.back +
+      ' back from now' : '');
     // z of each candle against ITS OWN band: where it stood when it
     // was drawn, not against today's. Null where there is no band yet,
     // so the two charts keep the same slots.
@@ -1582,7 +1695,11 @@
         : '; the Algo itself reads ' + hist.algo_timeframe_min +
           '-minute candles.') +
       ' Outlined: closed beyond the entry band. Candles from OKX’s ' +
-      'bars, the newest moving live.';
+      'bars, the newest moving live. Wheel to zoom, drag to scroll back, ' +
+      'double-click for now.';
+    // One line on the window, all of it on hover: in a small window the
+    // charts keep the room.
+    note.title = note.textContent;
   }
 
   function wireLadder(node, key) {
