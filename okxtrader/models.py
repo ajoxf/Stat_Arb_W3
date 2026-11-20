@@ -295,6 +295,9 @@ class SpreadPosition:
         #: 'terminal' (priced by MT5 itself) or 'leverage' (each leg's
         #: notional over its account's leverage - an estimate).
         self.entry_margin_source = None
+        #: When the CLOSE was sent (epoch seconds) - with `closed_at`,
+        #: the exit's own latency. None until a close is sent.
+        self.exit_sent_at = None
         #: The spread's ATR (spread points) when this position was first
         #: priced, and kept - an ATR stop or target is sized from it and
         #: stays where it was set. None until read.
@@ -424,6 +427,7 @@ class SpreadPosition:
             'source': self.source,
             'entry_margin': self.entry_margin,
             'entry_margin_source': self.entry_margin_source,
+            'exit_sent_at': self.exit_sent_at,
             'entry_atr': self.entry_atr,
             'peak_pnl': self.peak_pnl, 'peak_min': self.peak_min,
             'trough_pnl': self.trough_pnl, 'trough_min': self.trough_min,
@@ -460,6 +464,7 @@ class SpreadPosition:
         position.source = raw.get('source') or MANUAL
         position.entry_margin = raw.get('entry_margin')
         position.entry_margin_source = raw.get('entry_margin_source')
+        position.exit_sent_at = raw.get('exit_sent_at')
         position.entry_atr = raw.get('entry_atr')
         for name in ('peak_pnl', 'peak_min', 'trough_pnl', 'trough_min',
                      'exit_levels'):

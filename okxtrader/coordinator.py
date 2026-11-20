@@ -1184,16 +1184,29 @@ class Coordinator:
     #: Algo exits that can wait for a maker close. Every stop crosses.
     MAKER_EXITS = ('PROFIT_TARGET', 'MEAN_REVERSION')
 
-    def close(self, pair, position, md, reason, maker=True):
+    def close(self, pair, position, md, reason, maker=True, level=None):
         """Close one position: as maker (W3) where it can wait, else at
-        market by ticket now."""
+        market by ticket now. `level`: a maker close held to this closing
+        spread (an Algo take-profit)."""
         if maker and self.maker.enabled(pair):
-            return self.maker_closes.start(pair, position, md, reason)
+            return self.maker_closes.start(pair, position, md, reason,
+                                           level=level)
         return self.executor.close_position(pair, position, md,
                                             reason=reason)
 
     def _maker_close_done(self, job, answer):
         with self.lock:
+            if answer.get('held'):
+                # Held to its take-profit and not filled: the position is
+                # still on. The Algo may close it again the next time the
+                # spread reaches the target.
+                self.algos.exit_retry(job.pair_key,
+                                      job.position.position_id)
+                if self.store is not None:
+                    self.store.event('algo_tp_held', job.pair_key,
+                                     position_id=job.position.position_id,
+                                     reason=answer.get('reason'))
+                return
             self.remember(job.position)
             if not answer.get('ok') and self.store is not None:
                 self.store.event('refused', job.pair_key,
@@ -1277,10 +1290,23 @@ class Coordinator:
                     return {'ok': False, 'held': True,
                             'reason': unconfirmed}
                 md = fresh
+            # A profit exit's maker close is HELD to its level: the
+            # take-profit itself, or (back to the mean) the closing price
+            # the exit was decided at. Live, a close triggered at -8.85
+            # followed the spread back and went through at -10.03.
+            level = None
+            if reason in self.MAKER_EXITS and md:
+                if reason == 'PROFIT_TARGET':
+                    rows = {r['position_id']: r
+                            for r in self._algo_positions(pair, md)}
+                    level = (rows.get(position_id) or {}).get('tp')
+                if level is None:
+                    level = executable_spread(md, position.side,
+                                              closing=True)
             result = self.close(
                 pair, position, md,
                 f'Algo: {algo_module.EXIT_WORDS.get(reason, reason)}',
-                maker=reason in self.MAKER_EXITS)
+                maker=reason in self.MAKER_EXITS, level=level)
             self.remember(position)
             return {'ok': bool(result.get('ok')),
                     'reason': result.get('reason') or result.get('error')}

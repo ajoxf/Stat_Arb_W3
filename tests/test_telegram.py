@@ -1166,3 +1166,31 @@ def test_status_names_all_three_fills():
     source = inspect.getsource(tg)
     for words in ('maker both legs', 'maker + taker', 'taker both legs'):
         assert words in source
+
+
+def test_a_trade_exit_says_when_its_close_was_sent_and_how_long_it_took():
+    """'Orders at - / Latency -' on every exit: the close's send time
+    was not kept. It is now (exit_sent_at)."""
+    from okxtrader import telegram as tg
+    record = {'position': {'side': 'BUY', 'opened_at': 1000.0,
+                           'closed_at': 1062.25, 'exit_sent_at': 1060.0,
+                           'entry_spread': -12.0, 'exit_spread': -10.0,
+                           'spread_units': 0.175, 'quantity': 5,
+                           'realized_pnl': 0.1, 'close_reason': 'x'},
+              'entry_z': -1.5, 'exit_z': -0.05}
+    text = tg.trade_exit_text(record, 'ETH vs BTC')
+    assert 'Latency  2250 ms' in text.replace('</b>', '').replace('<b>', '') \
+        or '2250 ms' in text
+    assert '-1.5000 -&gt; -0.0500' in text or '-1.5000 -> -0.0500' in text
+
+
+def test_a_maker_entry_keeps_the_z_its_signal_was_taken_at():
+    """The Algo's maker entries reported 'Z-score -': the position
+    arrives later, and the z was only kept for one booked on the spot."""
+    import types
+    from okxtrader.algodesk import AlgoDesk
+    desk = AlgoDesk.__new__(AlgoDesk)
+    run = types.SimpleNamespace(mine=set(), entry_z={}, pending_z=-1.52)
+    desk._runs = {'K': run}
+    desk.adopt('K', 'POS1')
+    assert run.entry_z['POS1'] == -1.52 and run.pending_z is None

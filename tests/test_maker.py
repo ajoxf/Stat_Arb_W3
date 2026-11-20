@@ -427,3 +427,57 @@ def test_if_the_market_order_fails_recovery_still_covers_it(desk):
     live = _live(desk.sim)
     assert len(live) == 1 and live[0]['ordType'] == 'limit'
 
+
+
+# -- a take-profit close held to its level ----------------------------------
+
+def test_a_take_profit_close_is_held_to_its_level(desk, closes):
+    """Live: a take-profit at -8.85 closed, as maker, at -10.03 - the
+    closing orders followed the spread back down. Held to its level,
+    the close rests where the spread IS the target, and never worse."""
+    from okxtrader.spread import executable_spread
+    position = _open(desk)
+    md = desk.md()
+    closing = executable_spread(md, position.side, closing=True)
+    level = closing + 5.0 if position.side.value == 'BUY' else closing - 5.0
+    closes.start(desk.pair, position, md, 'Algo: profit target', level=level)
+    job = closes.jobs[position.position_id]
+    assert job.held is True
+    price = {k: next(iter(leg['orders'].values()))['price']
+             for k, leg in job.legs.items()}
+    implied = price['b'] - desk.pair.hedge_ratio * price['a']
+    if position.side.value == 'BUY':
+        assert implied >= level - 0.02
+    else:
+        assert implied <= level + 0.02
+    assert position.exit_sent_at is not None
+
+
+def test_a_held_take_profit_not_filled_leaves_the_position_open(desk, closes):
+    from okxtrader.spread import executable_spread
+    position = _open(desk)
+    md = desk.md()
+    closing = executable_spread(md, position.side, closing=True)
+    level = closing + 5.0 if position.side.value == 'BUY' else closing - 5.0
+    closes.start(desk.pair, position, md, 'Algo: profit target', level=level)
+    for _ in range(31):
+        desk.clock.t += 1
+        closes.step(desk.pair, desk.md())
+    assert closes.done and closes.done[0].get('held') is True
+    assert position.closed_at is None                # still on
+    assert _live(desk.sim) == []                     # nothing resting
+    assert desk.sim.positions                        # nothing closed
+
+
+def test_a_close_with_one_leg_done_crosses_the_other_after_five_seconds(
+        desk, closes):
+    position = _open(desk)
+    closes.start(desk.pair, position, desk.md(), 'closed by trader')
+    _fill_close(desk, closes, position, leg_key='a')
+    for _ in range(6):
+        desk.clock.t += 1
+        closes.step(desk.pair, desk.md())
+    assert closes.done and closes.done[0]['ok']
+    assert position.closed_at is not None
+    assert desk.sim.positions == {} and _live(desk.sim) == []
+    assert '5s' in (closes.done[0].get('note') or '')

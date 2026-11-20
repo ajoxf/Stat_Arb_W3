@@ -782,8 +782,13 @@ class CloseJob:
     """One position being closed as maker: a closing limit per ticket on
     each leg, resting at the touch."""
 
-    def __init__(self, pair, position, md, reason, now):
+    def __init__(self, pair, position, md, reason, now, level=None):
         self.id = new_id('MC')
+        #: The closing spread this close is held to (an Algo take-profit):
+        #: its legs are never re-priced to a close worse than it.
+        self.level = level
+        self.held = False
+        self.first_fill_at = None
         self.pair_key = pair.key
         self.position = position
         self.md = md                       # the touch the close was decided on
@@ -809,7 +814,8 @@ class CloseJob:
         return {'id': self.id, 'pair': self.pair_key, 'kind': 'close',
                 'position_id': self.position.position_id,
                 'side': self.position.side.value, 'phase': 'closing',
-                'spreads': self.position.quantity, 'level': None,
+                'spreads': self.position.quantity, 'level': self.level,
+                'held_at_level': self.held,
                 'age_sec': round(now - self.started, 1), 'legs': legs,
                 'reason': self.why}
 
@@ -847,10 +853,60 @@ class MakerCloses:
     def _runner(self, leg):
         return self.legs.get(leg['account'])
 
-    def start(self, pair, position, md, reason):
+    def _close_targets(self, pair, job, md, keys):
+        """Each closing leg's maker price - and, for a close held to a
+        level (an Algo take-profit), never a pair of prices that closes
+        the spread worse than it: closing a BUY (selling B, buying A)
+        at or above the level, a SELL (buying B, selling A) at or below.
+        The leg still to fill is priced further out on its own book."""
+        targets = {}
+        for key in keys:
+            leg = job.legs.get(key) or {}
+            bid, ask = md.get(f'leg_{key}_bid'), md.get(f'leg_{key}_ask')
+            close_side = leg.get('close_side') or (
+                dict(zip(('a', 'b'),
+                         job.position.side.leg_sides()))[key].opposite.value)
+            if bid and ask:
+                targets[key] = passive_price(
+                    close_side, bid, ask, self._cfg('MAKER_OFFSET_BPS', 1.0),
+                    self._cfg('MAKER_SAFETY_BPS', 1.0))
+        if job.level is None or not MakerFills._hold_level(self):
+            return targets
+        beta = float(pair.hedge_ratio or 1.0)
+        if not beta:
+            return targets
+
+        def closed_avg(key):
+            leg = job.legs.get(key) or {}
+            orders = list((leg.get('orders') or {}).values())
+            got = sum(o['filled'] for o in orders)
+            if got <= 0 or self._left(leg) > max(1e-9, leg['found'] * 1e-6):
+                return None
+            return sum(o['filled'] * (o['avg'] or o['price'])
+                       for o in orders if o['filled'] > 0) / got
+        pa = closed_avg('a') or targets.get('a')
+        pb = closed_avg('b') or targets.get('b')
+        if pa is None or pb is None:
+            return targets
+        spread = pb - beta * pa
+        level = float(job.level)
+        buy = job.position.side is SpreadSide.BUY
+        worse = spread < level - 1e-12 if buy else spread > level + 1e-12
+        if not worse:
+            return targets
+        gap = level - spread
+        if 'b' in targets and closed_avg('b') is None:
+            targets['b'] = pb + gap
+        elif 'a' in targets and closed_avg('a') is None:
+            targets['a'] = pa - gap / beta
+        job.held = True
+        return targets
+
+    def start(self, pair, position, md, reason, level=None):
         """Rest the closing orders. Returns {'ok', 'working'} or, when
         anything about it cannot rest, the result of closing at market
-        right away."""
+        right away. `level`: hold the close to this closing spread (an
+        Algo take-profit) - see `_close_targets`."""
         pid = position.position_id
         if pid in self.jobs:
             return {'ok': True, 'working': self.jobs[pid].id,
@@ -859,7 +915,10 @@ class MakerCloses:
             return self._market(pair, position, md, reason,
                                 'no clean price to rest on')
         now = self.clock()
-        job = CloseJob(pair, position, md, reason, now)
+        job = CloseJob(pair, position, md, reason, now, level=level)
+        if getattr(position, 'exit_sent_at', None) is None:
+            position.exit_sent_at = now
+        targets = self._close_targets(pair, job, md, ('a', 'b'))
         job.deadline = now + self._cfg('MAKER_TIMEOUT_SEC', 30.0)
         sides = dict(zip(('a', 'b'), position.side.leg_sides()))
         for key, fill in (('a', position.leg_a), ('b', position.leg_b)):
@@ -879,9 +938,10 @@ class MakerCloses:
             held = {str(p['ticket']): float(p['volume']) for p in live}
             bid, ask = md.get(f'leg_{key}_bid'), md.get(f'leg_{key}_ask')
             leg['sent'] = ask if leg['close_side'] == 'BUY' else bid
-            price = passive_price(leg['close_side'], bid, ask,
-                                  self._cfg('MAKER_OFFSET_BPS', 1.0),
-                                  self._cfg('MAKER_SAFETY_BPS', 1.0))
+            price = targets.get(key) or passive_price(
+                leg['close_side'], bid, ask,
+                self._cfg('MAKER_OFFSET_BPS', 1.0),
+                self._cfg('MAKER_SAFETY_BPS', 1.0))
             for ticket in leg['tickets']:
                 volume = held.get(str(ticket))
                 if not volume:
@@ -986,7 +1046,37 @@ class MakerCloses:
                for leg in job.legs.values()):
             self._settle(pair, job, market={})
             return
-        if now >= job.deadline:
+        filled_any = any(sum(o['filled'] for o in leg['orders'].values())
+                         > 0 for leg in job.legs.values())
+        if filled_any and job.first_fill_at is None:
+            job.first_fill_at = now
+        fracs = [1.0 - self._left(leg) / leg['found'] if leg['found'] else 1.0
+                 for leg in job.legs.values()]
+        split = len(fracs) == 2 and abs(fracs[0] - fracs[1]) > 1e-6
+        gap_over = (job.first_fill_at is not None and split and
+                    now - job.first_fill_at >= self._cfg('MAKER_LEG_GAP_SEC',
+                                                         5.0))
+        if now >= job.deadline and job.level is not None and not filled_any:
+            # A close HELD to its level that the market did not come back
+            # to: nothing closed, so nothing is closed at market either.
+            # The position stays on, its stop still stands, and the Algo
+            # closes again the next time the spread reaches the target.
+            self._pull(job)
+            self.jobs.pop(job.position.position_id, None)
+            note = (f'take-profit close held at {job.level:.4f}: not filled '
+                    f'as maker in {self._cfg("MAKER_TIMEOUT_SEC", 30.0):g}s '
+                    f'— position stays open, the target is worked again')
+            logging.info('%s: maker close %s of %s - %s', pair.key, job.id,
+                         job.position.position_id, note)
+            if self.on_done is not None:
+                try:
+                    self.on_done(job, {'ok': False, 'held': True,
+                                       'reason': note})
+                except Exception as e:
+                    logging.exception('maker close %s: on_done raised: %s',
+                                      job.id, e)
+            return
+        if now >= job.deadline or gap_over:
             self._pull(job)
             market = {}
             for key, leg in job.legs.items():
@@ -996,19 +1086,21 @@ class MakerCloses:
                     self._runner(leg), leg['symbol'], leg['tickets'],
                     leg['entry_side'], comment='CLOSE')
             self._settle(pair, job, market,
-                         note=f'not all filled as maker in '
-                              f'{self._cfg("MAKER_TIMEOUT_SEC", 30.0):g}s '
-                              f'— the rest closed at market')
+                         note=(f'one leg closed, the other not in '
+                               f'{self._cfg("MAKER_LEG_GAP_SEC", 5.0):g}s '
+                               f'— the rest closed at market')
+                         if gap_over and now < job.deadline else
+                         f'not all filled as maker in '
+                         f'{self._cfg("MAKER_TIMEOUT_SEC", 30.0):g}s '
+                         f'— the rest closed at market')
             return
         if not md or md.get('guard_reason'):
             return
+        held_targets = self._close_targets(pair, job, md, tuple(job.legs))
         for key, leg in job.legs.items():
-            bid, ask = md.get(f'leg_{key}_bid'), md.get(f'leg_{key}_ask')
-            if not bid or not ask:
+            target = held_targets.get(key)
+            if target is None:
                 continue
-            target = passive_price(leg['close_side'], bid, ask,
-                                   self._cfg('MAKER_OFFSET_BPS', 1.0),
-                                   self._cfg('MAKER_SAFETY_BPS', 1.0))
             # A post-only closing order OKX cancelled (it would have
             # crossed) is placed again for what it still had to close,
             # against the same position ticket.

@@ -643,9 +643,12 @@ def trade_exit_text(record, ladder):
                  ('  (with)' if change >= 0 else '  (against)'))), None,
              # The close's own clock: when it was on is all the desk
              # keeps for an exit, so the send time is not invented.
-             ('Orders at', '—'),
+             ('Orders at', stamp_ms(position.get('exit_sent_at'))
+              if position.get('exit_sent_at') else '—'),
              ('Filled at', stamp_ms(closed)),
-             ('Latency', '—'), None,
+             ('Latency', '—' if not position.get('exit_sent_at') or not closed
+              else f'{(closed - position["exit_sent_at"]) * 1000:.0f} ms'),
+             None,
              ('Gross PnL', w3(gross, 4)),
              ('Est. Fees', f'{w3fee(fees, 4)}  (commission, both legs)'
               if fees is not None else '—'),

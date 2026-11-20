@@ -554,6 +554,9 @@ class PairExecutor:
         there would mark a close that WORKED as 'cancelled', and would
         delete the level a close that FAILED still has to be watched at.
         """
+        if getattr(position, 'exit_sent_at', None) is None:
+            # When the close went out: the exit's own latency.
+            position.exit_sent_at = self.clock()
         share = 1.0
         if quantity is not None and position.quantity:
             share = max(0.0, min(1.0, float(quantity) /

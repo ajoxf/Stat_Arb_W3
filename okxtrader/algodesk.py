@@ -174,6 +174,9 @@ class _Run:
         self.last_blocked = None
         #: position id -> the z the Algo entered it at.
         self.entry_z = {}
+        #: The z of an entry still working as maker: `adopt` gives it to
+        #: the position when that fills.
+        self.pending_z = None
         #: Seconds of LIVE prices watched since it was turned on, and
         #: when the last one counted came in — the warm-up.
         self.live_sec = 0.0
@@ -296,10 +299,22 @@ class AlgoDesk:
 
     def adopt(self, key, position_id):
         """A LIVE entry that filled later (the W3 maker fill) is this
-        ladder's Algo's position, exactly as one booked on the spot."""
+        ladder's Algo's position, exactly as one booked on the spot -
+        with the z its entry signal was taken at."""
         run = self._runs.get(key)
         if run is not None:
             run.mine.add(position_id)
+            z = getattr(run, 'pending_z', None)
+            if z is not None and position_id not in run.entry_z:
+                run.entry_z[position_id] = z
+            run.pending_z = None
+
+    def exit_retry(self, key, position_id):
+        """An exit that was sent and did not close (a take-profit held
+        to its level): the Algo may send it again."""
+        run = self._runs.get(key)
+        if run is not None:
+            run.signal.exit_failed(position_id)
 
     def owned(self, key):
         """The position ids this ladder's Algo owns now."""
@@ -325,6 +340,7 @@ class AlgoDesk:
             # the positions it had to close. The live tape it has
             # watched has still been watched: the warm-up carries too.
             for name in ('mode', 'mine', 'day', 'retry', 'entry_z',
+                         'pending_z',
                          'blocked_journal', 'signal_alert',
                          'recent', 'last_blocked', 'live_sec', 'live_at',
                          'signal'):
@@ -489,6 +505,10 @@ class AlgoDesk:
                 if answer.get('position_id'):
                     run.mine.add(answer['position_id'])
                     run.entry_z[answer['position_id']] = intent.get('z')
+                else:
+                    # Working as maker: the position arrives later
+                    # (`adopt`), and takes this z with it.
+                    run.pending_z = intent.get('z')
             else:
                 run.signal.entry_failed(now)
         elif not answer.get('ok'):
