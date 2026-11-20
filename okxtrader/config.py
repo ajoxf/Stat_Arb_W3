@@ -84,6 +84,16 @@ def _choice(enum, value, default, key, field):
             f"{', '.join(member.value for member in enum)}") from None
 
 
+#: The ways a click at a level can be filled (PairConfig.fill_style).
+FILL_STYLES = ('maker', 'quote', 'taker')
+
+
+def clean_fill_style(value):
+    """'maker' / 'quote' / 'taker', or None (= the desk's FILL_STYLE)."""
+    text = str(value or '').strip().lower()
+    return text if text in FILL_STYLES else None
+
+
 def _blank_to_none(value):
     """A number from the UI, where blank means "unset" and 0 does not.
 
@@ -109,14 +119,25 @@ except ImportError:            # dotenv optional; the shell can set them
 #: corrected from measurement, which needs them on screen first.
 DEFAULT_SETTINGS = {
     # --- how a spread is FILLED on OKX (see maker.py) -----------------
-    #: 'maker': the W3 fill - both legs rest at the touch as plain
-    #: limits, re-pegged by amend, maker fees at the account's VIP tier.
+    #: 'maker': the W3 fill - both legs rest at the touch POST-ONLY,
+    #: re-pegged by amend, maker fees at the account's VIP tier (the
+    #: original desk's June 2026 rules: post-only on every maker order,
+    #: a 1 bp buffer, both legs placed at once).
+    #: 'quote': one leg rests post-only priced to the clicked level, the
+    #: other crosses when it fills (Mirror's quote).
     #: 'taker': Mirror's crossing - both legs at market (IOC capped at
     #: OKX_IOC_PROTECTION_BPS), taker fees, on in ~a second.
     'FILL_STYLE': 'maker',
     'MAKER_TIMEOUT_SEC': 30.0,
     'MAKER_OFFSET_BPS': 1.0,
-    'MAKER_SAFETY_BPS': 0.5,
+    #: How far a maker order is kept from the OTHER side of its book.
+    #: 1.0, as the original desk settled on with post-only: at 0.5 OKX
+    #: refused 5-10% of orders as would-have-crossed.
+    'MAKER_SAFETY_BPS': 1.0,
+    #: A maker fill from a clicked level never re-prices its legs to a
+    #: spread worse than that level: a SELL at -3 never goes on below
+    #: -3. Off lets the legs follow the market wherever it goes.
+    'MAKER_HOLD_LEVEL': True,
     'MAKER_REPEG_SEC': 1.0,
     'MAKER_AMEND_BPS': 1.0,
     'MAKER_RECOVERY_SEC': 60.0,
@@ -479,7 +500,7 @@ class PairConfig:
                  exit_type=OrderType.MARKET.value,
                  time_in_force=TimeInForce.DAY.value,
                  overnight=OvernightMode.ALLOW.value,
-                 quoting_leg=None, enabled=True, rows=30,
+                 quoting_leg=None, fill_style=None, enabled=True, rows=30,
                  expiry=None, expiry_a=None,
                  swap_a_long_per_lot=None, swap_a_short_per_lot=None,
                  swap_b_long_per_lot=None, swap_b_short_per_lot=None,
@@ -572,6 +593,13 @@ class PairConfig:
         #: the wider bid-ask (that is the spread being earned), measured
         #: not assumed (spec §4, open question 10).
         self.quoting_leg = quoting_leg
+        #: How a click at a level is FILLED on this ladder, over the
+        #: desk's FILL_STYLE: 'maker' (both legs rest as maker, the W3
+        #: fill), 'quote' (one leg rests as maker priced to the clicked
+        #: level, the other crosses as taker when it fills - Mirror's
+        #: quote) or 'taker' (both legs cross at market when the spread
+        #: reaches the level - Mirror's default). None: the desk's.
+        self.fill_style = clean_fill_style(fill_style)
         self.enabled = True if enabled is None else bool(enabled)
         self.rows = int(rows or 30)
         #: The futures leg's expiry, and what carrying one spread for
@@ -775,7 +803,7 @@ class PairConfig:
                    'swap_b_long_per_lot', 'swap_b_short_per_lot',
                    'order_type', 'exit_type',
                    'time_in_force', 'overnight', 'increment',
-                   'default_quantity', 'quoting_leg', 'rows',
+                   'default_quantity', 'quoting_leg', 'fill_style', 'rows',
                    # What ONE spread means in leg A lots. Leg B is
                    # never typed: it is the hedge, and it is derived.
                    'clip_lots_a', 'clip_lots_b',
@@ -806,6 +834,8 @@ class PairConfig:
                 value = bool(value)
             elif field == 'pair_type':
                 value = pair_type_name(value)
+            elif field == 'fill_style':
+                value = clean_fill_style(value)
             elif field == 'algo_params':
                 value = _clean_algo_params(value)
             elif field in ('session_open', 'session_close', 'break_start',
@@ -866,6 +896,7 @@ class PairConfig:
             'time_in_force': self.time_in_force.value,
             'overnight': self.overnight.value,
             'quoting_leg': self.quoting_leg,
+            'fill_style': self.fill_style,
             'enabled': self.enabled, 'rows': self.rows,
             'expiry': self.expiry,
             'expiry_a': self.expiry_a,

@@ -506,6 +506,14 @@
                    placeholder="from OKX"
                    title="What ONE LOT of leg B is, in the instrument's own units. Leave it blank to use OKX's (ctVal)."></label>
           <div class="lsf-note ls-clip-note"></div>
+          <!-- HOW A CLICK AT A LEVEL FILLS. Three ways, each with its
+               cost said on the option. -->
+          <label class="lsf"><span>Fill</span>
+            <select class="ls-fill" title="How a click at a level is filled on this ladder.&#10;Maker, both legs: both rest as maker and follow the market (W3) - cheapest fees, but they chase a moving spread and can fill worse than the level.&#10;One maker, one taker: the quoting leg rests as maker priced so the spread is EXACTLY your level, the other crosses at market the moment it fills (Mirror's quote) - your price, one maker fee and one taker fee.&#10;Taker, both legs: both cross at market when the spread reaches your level (Mirror's default) - fills at the level, taker fees on both.">
+              <option value="maker">Maker both</option>
+              <option value="quote">Maker + taker</option>
+              <option value="taker">Taker both</option>
+            </select></label>
           <label class="lsf"><span>Quoting leg</span>
             <select class="ls-quoting" title="Which leg rests the real pending in LIMIT mode. Default: the wider bid-ask — that is the spread you earn.">
               <option value="">wider book</option>

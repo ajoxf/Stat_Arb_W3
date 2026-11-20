@@ -205,6 +205,28 @@ def peg_price(pair, md, side, level, leg):
     return (anchor - level) / beta, leg_a_side
 
 
+def passive_clamp(md, leg, order_side, price):
+    """Keep a quoting leg's order on ITS OWN passive side.
+
+    OKX rests the quote post-only (maker or nothing), and a post-only
+    order priced through the market is cancelled the instant it lands.
+    That happens whenever the clicked level is already there or better:
+    the peg price for a SELL of the spread at -3.4 with the spread at
+    +2.8 is a buy of BTC above its own ask. The level is then BETTER
+    than asked for, so the order joins its own touch - a buy at the
+    bid, a sell at the ask - which is still maker and still at least
+    the clicked level. Returns (price, clamped)."""
+    bid, ask = md.get(f'leg_{leg}_bid'), md.get(f'leg_{leg}_ask')
+    side = getattr(order_side, 'value', order_side)
+    # Only a price that would CROSS is moved; one resting inside the
+    # bid-ask is maker already and stays where the level puts it.
+    if side == 'BUY' and bid and ask and price >= ask:
+        return bid, True
+    if side == 'SELL' and bid and ask and price <= bid:
+        return ask, True
+    return price, False
+
+
 def implied_spread(pair, md, side, leg, price):
     """What spread a pending resting at `price` currently implies."""
     beta = float(pair.hedge_ratio or 1.0)
@@ -286,7 +308,7 @@ class Quoter:
             group = QuoteGroup(order.pair_key, order.side, order.level,
                                quoting_leg(pair),
                                position_id=order.position_id)
-            group.held = order.position_id is None and self.triggers()
+            group.held = order.position_id is None and self.triggers(pair)
             self.groups[key] = group
         if order not in group.orders:
             group.orders.append(order)
@@ -476,6 +498,7 @@ class Quoter:
 
         price, order_side = peg_price(pair, md, group.side, group.level,
                                       group.leg)
+        price, clamped = passive_clamp(md, group.leg, order_side, price)
         volume, unsized = self._wanted_volume(pair, group, md)
         if volume <= 0:
             return self._held_off(
@@ -521,10 +544,29 @@ class Quoter:
 
         drift = self._drift(pair, md, group)
         band = self._dead_band(pair)
+        if clamped and group.price is not None and \
+                abs(group.price - price) > 1e-12:
+            # At the touch because the level is already there: follow
+            # the touch, not the (unreachable) peg.
+            drift = band + 1.0
         if drift is None or drift <= band:
             return None
         result = leg.modify_order(group.ticket, price)
         if not result.get('ok'):
+            # An order OKX has already finished (filled, or cancelled as
+            # post-only would-cross) cannot be amended. Read it: a fill
+            # is hedged, a cancel is re-placed on the next pass.
+            state = leg.order_state(group.ticket)
+            if state.get('readable', True) is not False and \
+                    state.get('still_open') is False:
+                if state.get('filled_volume'):
+                    return self._on_fill(pair, group, state)
+                group.ticket = None
+                group.reason = ('OKX cancelled the resting order (post-only '
+                                'would have crossed) — placing it again')
+                return {'group': (group.pair_key, group.side.value,
+                                  group.level, group.position_id),
+                        'action': 'replace'}
             group.reason = result.get('error')
             return {'group': (group.pair_key, group.side.value, group.level,
                               group.position_id),
@@ -645,6 +687,16 @@ class Quoter:
         # not grow a row per ticket for the life of the process.
         self._unreadable_said.pop((pair.key, group.ticket), None)
         if not state.get('filled_volume'):
+            if state.get('still_open') is False:
+                # Gone at the broker with nothing filled: OKX cancelled
+                # it (a post-only order that would have crossed). The
+                # level is still wanted - forget the ticket and the next
+                # pass places it again, instead of amending a dead order
+                # for ever (OKX 51503).
+                group.ticket = None
+                group.price = None
+                group.reason = ('OKX cancelled the resting order (post-only '
+                                'would have crossed) — placing it again')
             return None
         return self._on_fill(pair, group, state)
 
@@ -858,9 +910,18 @@ class Quoter:
                          or state.get('position_tickets'))
         return state, filled
 
-    def triggers(self):
+    def triggers(self, pair=None):
         """Are entries held here and crossed at the level (the default),
-        rather than quoted on one leg at the broker?"""
+        rather than quoted on one leg at the broker?
+
+        A ladder whose Fill is 'quote' (one leg maker, one taker) always
+        quotes; otherwise the desk's WORKING_ORDERS decides."""
+        if pair is not None:
+            from .maker import fill_style
+            if fill_style(pair, self.config) == 'quote':
+                return False
+            if getattr(pair, 'fill_style', None) in ('maker', 'taker'):
+                return True
         return str(self.config.get('WORKING_ORDERS', 'TRIGGER')
                    or 'TRIGGER').upper() != 'QUOTE'
 

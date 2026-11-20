@@ -1308,6 +1308,16 @@ class OKXBroker:
             self._pos_cache = None
             self._bal_cache = None
         order['state'] = row.get('state', order.get('state'))
+        if order['state'] == 'canceled':
+            # OKX says WHY: cancelSource 20 / 31 is a post-only order
+            # that would have crossed (at placement / just after).
+            source = str(row.get('cancelSource') or '')
+            text = row.get('cancelSourceReason') or (
+                'post-only would have crossed the book'
+                if source in ('20', '31') else '')
+            order['cancel_source'] = source
+            order['cancel_reason'] = (f'{text} (OKX cancelSource {source})'
+                                      if source else text) or None
         return order
 
     def _sync_open_orders(self):
@@ -1359,6 +1369,8 @@ class OKXBroker:
                     'server_offset_sec': offset,
                     'still_open': order.get('state') in ('live',
                                                          'partially_filled'),
+                    'cancel_source': order.get('cancel_source'),
+                    'cancel_reason': order.get('cancel_reason'),
                     'error': None}
         p = self.ledger['positions'].get(key)
         if p is not None:

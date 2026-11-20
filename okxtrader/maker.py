@@ -48,6 +48,16 @@ from .spread import executable_spread
 TAG = 'LADDER-MK'
 
 
+def fill_style(pair, config):
+    """This ladder's fill: its own setting, else the desk's FILL_STYLE.
+    'maker', 'quote' or 'taker'."""
+    style = (getattr(pair, 'fill_style', None)
+             or (config.get('FILL_STYLE') if config is not None else None)
+             or 'maker')
+    style = str(style).lower()
+    return style if style in ('maker', 'quote', 'taker') else 'maker'
+
+
 def _bps(a, b):
     return abs(a - b) / b * 1e4 if b else 0.0
 
@@ -86,6 +96,8 @@ class MakerLeg:
         self.prices = {}                     # ticket -> avg fill price
         self.position_tickets = []
         self.amends = 0
+        self.replaced = 0                    # post-only cancels re-placed
+        self.cancel_reason = None            # OKX's own words, last cancel
         self.error = None
 
     @property
@@ -123,7 +135,8 @@ class MakerLeg:
         return {'leg': self.leg.upper(), 'symbol': self.symbol,
                 'side': self.side, 'planned': self.planned,
                 'filled': self.filled, 'resting_at': self.price,
-                'amends': self.amends}
+                'amends': self.amends, 'replaced': self.replaced,
+                'cancel_reason': self.cancel_reason}
 
 
 class MakerJob:
@@ -146,6 +159,11 @@ class MakerJob:
         self.recovery = None                 # {leg, want, nudge, next_step}
         self.legs = {}
         self.reason = None
+        #: Nothing filled before the timeout on a click at a level: the
+        #: click goes back to working at that level (coordinator).
+        self.rearm = False
+        #: The level guard is holding a leg further out than the touch.
+        self.held = False
 
     def to_dict(self, now):
         return {'id': self.id, 'pair': self.pair_key,
@@ -154,6 +172,7 @@ class MakerJob:
                 'source': self.source,
                 'age_sec': round(now - self.started, 1),
                 'legs': [l.to_dict() for l in self.legs.values()],
+                'held_at_level': self.held,
                 'reason': self.reason}
 
 
@@ -182,9 +201,7 @@ class MakerFills:
         """Maker unless the desk or this pair says otherwise. The W3
         fill is the OKX default; `FILL_STYLE` = 'taker' restores Mirror's
         both-legs-at-market crossing."""
-        style = (getattr(pair, 'fill_style', None)
-                 or self.config.get('FILL_STYLE') or 'maker')
-        return str(style).lower() == 'maker'
+        return fill_style(pair, self.config) == 'maker'
 
     def busy(self, key):
         return key in self.jobs
@@ -235,24 +252,29 @@ class MakerFills:
                 sides[leg].value, plan[f'leg_{leg}_lots'],
                 plan[f'leg_{leg}_contract'])
 
-        # Leg A first, then B; B refused cancels A (W3's order).
-        for leg in ('a', 'b'):
-            ml = job.legs[leg]
-            ok = self._rest(pair, job, ml, md, offset=True)
-            if not ok:
-                reason = f'leg {leg.upper()} refused: {ml.error}'
-                if leg == 'b':
-                    self._cancel(pair, job.legs['a'])
-                    if job.legs['a'].filled > 0:
-                        # A filled before it could be pulled: that is a
-                        # leg on alone, and it goes through recovery.
-                        self.jobs[pair.key] = job
-                        job.reason = reason
-                        self._begin_recovery(pair, job, md, now)
-                        result = ExecutionResult(True, reason=reason)
-                        result.working = job.id
-                        return result
-                return ExecutionResult(False, refused=True, reason=reason)
+        # BOTH LEGS AT ONCE, as the original desk settled on (June 2026):
+        # placed one after the other, the 200-400 ms between them was
+        # enough for the second leg's book to move and OKX to cancel it
+        # as a post-only that would have crossed (cancelSource 31).
+        targets = self._held_targets(pair, job, md, ('a', 'b'))
+        placed = self._rest_both(pair, job, md, targets)
+        refused = [k for k in ('a', 'b') if not placed[k]]
+        if refused:
+            reason = '; '.join(f'leg {k.upper()} refused: '
+                               f'{job.legs[k].error}' for k in refused)
+            for k in ('a', 'b'):
+                if placed[k]:
+                    self._cancel(pair, job.legs[k])
+            if any(job.legs[k].filled > 0 for k in ('a', 'b')):
+                # A leg filled before it could be pulled: that is a leg
+                # on alone, and it goes through recovery.
+                self.jobs[pair.key] = job
+                job.reason = reason
+                self._begin_recovery(pair, job, md, now)
+                result = ExecutionResult(True, reason=reason)
+                result.working = job.id
+                return result
+            return ExecutionResult(False, refused=True, reason=reason)
         self.jobs[pair.key] = job
         logging.info('%s: maker fill %s %s %g - both legs resting (A %s @ %s, '
                      'B %s @ %s)', pair.key, job.id, side.value, spreads,
@@ -275,8 +297,85 @@ class MakerFills:
     def _touch(self, md, ml):
         return (md.get(f'leg_{ml.leg}_bid'), md.get(f'leg_{ml.leg}_ask'))
 
+    def _maker_target(self, ml, md):
+        """Where this leg's maker order belongs on its own book now."""
+        bid, ask = self._touch(md or {}, ml)
+        if not bid or not ask:
+            return None
+        return passive_price(ml.side, bid, ask,
+                             self._cfg('MAKER_OFFSET_BPS', 1.0),
+                             self._cfg('MAKER_SAFETY_BPS', 1.0))
+
+    def _held_targets(self, pair, job, md, keys):
+        """Each leg's maker price - and, for a click at a level, never
+        a pair of prices that would put the spread on worse than that
+        level. A SELL at -3 whose legs would now go on at -4.28 is held
+        where -3 is: the leg that is still to fill is priced further
+        out on its own book (more passive, so still post-only maker),
+        and if the market does not come back to it, nothing fills and
+        the click goes back to working."""
+        targets = {k: self._maker_target(job.legs[k], md) for k in keys}
+        if job.level is None or not self._hold_level():
+            return targets
+        beta = float(pair.hedge_ratio or 1.0)
+        if not beta:
+            return targets
+        a, b = job.legs['a'], job.legs['b']
+
+        def price_of(key, leg):
+            if self._done_filling(leg) or key not in targets:
+                return leg.avg_price if leg.filled > 0 else leg.price
+            return targets[key]
+        pa, pb = price_of('a', a), price_of('b', b)
+        if pa is None or pb is None:
+            return targets
+        spread = pb - beta * pa
+        level = float(job.level)
+        worse = (spread < level - 1e-12 if job.side is SpreadSide.SELL
+                 else spread > level + 1e-12)
+        if not worse:
+            return targets
+        gap = level - spread       # SELL: >0 (raise); BUY: <0 (lower)
+        if 'b' in targets and not self._done_filling(b):
+            # B is sold on a SELL (higher is more passive) and bought on
+            # a BUY (lower is more passive): either way, + gap.
+            targets['b'] = pb + gap
+        elif 'a' in targets and not self._done_filling(a):
+            # A is bought on a SELL (lower is more passive) and sold on
+            # a BUY (higher): either way, - gap / beta.
+            targets['a'] = pa - gap / beta
+        job.held = True
+        return targets
+
+    def _hold_level(self):
+        value = self.config.get('MAKER_HOLD_LEVEL', True)
+        if isinstance(value, str):
+            return value.strip().lower() not in ('0', 'false', 'off', 'no')
+        return bool(value)
+
+    def _rest_both(self, pair, job, md, targets):
+        """Place both legs' maker orders at the same instant."""
+        from concurrent.futures import ThreadPoolExecutor
+        keys = [k for k in ('a', 'b') if targets.get(k) is not None]
+        out = {'a': False, 'b': False}
+        for k in ('a', 'b'):
+            if targets.get(k) is None:
+                job.legs[k].error = f'no price on {job.legs[k].symbol}'
+        if not keys:
+            return out
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = {k: pool.submit(self._rest, pair, job, job.legs[k], md,
+                                      True, None, 0.0, targets[k])
+                       for k in keys}
+            for k, future in futures.items():
+                try:
+                    out[k] = future.result()
+                except Exception as e:
+                    job.legs[k].error = f'the order raised: {e}'
+        return out
+
     def _rest(self, pair, job, ml, md, offset=True, volume=None,
-              nudge_bps=0.0):
+              nudge_bps=0.0, price=None):
         runner = self._runner(ml)
         if runner is None:
             ml.error = f'no connection for {ml.symbol}'
@@ -285,19 +384,25 @@ class MakerFills:
         if not bid or not ask:
             ml.error = f'no price on {ml.symbol}'
             return False
-        if offset:
-            price = passive_price(ml.side, bid, ask,
-                                  self._cfg('MAKER_OFFSET_BPS', 1.0),
-                                  self._cfg('MAKER_SAFETY_BPS', 0.5))
-        else:
-            price = recovery_price(ml.side, bid, ask, nudge_bps)
+        if price is None:
+            if offset:
+                price = passive_price(ml.side, bid, ask,
+                                      self._cfg('MAKER_OFFSET_BPS', 1.0),
+                                      self._cfg('MAKER_SAFETY_BPS', 1.0))
+            else:
+                price = recovery_price(ml.side, bid, ask, nudge_bps)
         if ml.sent_price is None:
             ml.sent_price = ask if ml.side == 'BUY' else bid
         lots = ml.planned if volume is None else volume
         try:
+            # POST-ONLY for every maker order (the original desk's June
+            # 2026 rule: a plain limit at the touch races the book and
+            # is charged TAKER - which is what the first live ETH leg
+            # here was). The one exception is RECOVERY of a leg that is
+            # on alone: that order has to fill, so it is a plain limit.
             placed = runner.place_limit(ml.symbol, ml.side, lots, price,
                                         comment=f'{TAG}:{ml.leg.upper()}',
-                                        post_only=False)
+                                        post_only=bool(offset))
         except Exception as e:
             ml.error = f'the order raised: {e}'
             return False
@@ -326,6 +431,8 @@ class MakerFills:
             return True
         resting = ml.absorb(ml.live, state)
         if not resting:
+            if state.get('cancel_reason'):
+                ml.cancel_reason = state.get('cancel_reason')
             ml.live = None
         return resting
 
@@ -386,6 +493,29 @@ class MakerFills:
         if done_a and done_b:
             self._finish(pair, job)
             return
+        # A leg's POST-ONLY order cancelled by OKX (it would have
+        # crossed: cancelSource 20 / 31) is not a failure - the original
+        # desk re-priced and re-sent it, and so does this, until the
+        # timeout. Only an order that cannot be placed again is "gone".
+        if now < job.deadline and md and not md.get('guard_reason'):
+            for key, ml, resting, done in (('a', a, rest_a, done_a),
+                                           ('b', b, rest_b, done_b)):
+                if resting or done or ml.live is not None:
+                    continue
+                target = self._held_targets(pair, job, md, (key,)).get(key)
+                left = ml.planned - ml.filled
+                if target is None or left <= ml.planned * 1e-6:
+                    continue
+                if self._rest(pair, job, ml, md, True, left, 0.0, target):
+                    ml.replaced += 1
+                    logging.info('%s: maker fill %s - leg %s re-placed at %s'
+                                 ' (%s)', pair.key, job.id, key.upper(),
+                                 ml.price, ml.cancel_reason or
+                                 'OKX cancelled the post-only order')
+                    if key == 'a':
+                        rest_a = True
+                    else:
+                        rest_b = True
         # One leg's order gone without filling while the other rests:
         # cancel the other at once (W3's orphan guard).
         gone_a = not rest_a and not done_a
@@ -399,6 +529,11 @@ class MakerFills:
             self._cancel(pair, b)
             if a.filled <= 0 and b.filled <= 0:
                 job.reason = f'not filled: {why} — nothing went on'
+                # A click at a level that simply was not filled goes back
+                # to working at that level.
+                job.rearm = (now >= job.deadline and job.level is not None
+                             and job.source == 'trigger'
+                             and not getattr(job, 'cancelled', False))
                 self._fail(pair, job, refused=True)
                 return
             if self._done_filling(a) and self._done_filling(b):
@@ -409,15 +544,16 @@ class MakerFills:
             return
         if not md or md.get('guard_reason'):
             return                              # hold the peg on a bad print
-        for ml, resting in ((a, rest_a), (b, rest_b)):
-            if not resting or ml.live is None:
+        keys = tuple(k for k, ml, resting in (('a', a, rest_a),
+                                              ('b', b, rest_b))
+                     if resting and ml.live is not None)
+        targets = self._held_targets(pair, job, md, keys)
+        for key in keys:
+            ml, target = job.legs[key], targets.get(key)
+            if target is None:
                 continue
-            bid, ask = self._touch(md, ml)
-            if not bid or not ask:
-                continue
-            target = passive_price(ml.side, bid, ask,
-                                   self._cfg('MAKER_OFFSET_BPS', 1.0),
-                                   self._cfg('MAKER_SAFETY_BPS', 0.5))
+            # Against the price actually RESTING (the original desk's
+            # drift-aware amend), not last second's target.
             if _bps(target, ml.target or target) > \
                     self._cfg('MAKER_AMEND_BPS', 1.0):
                 self._amend(ml, target)
@@ -550,6 +686,7 @@ class MakerFills:
             return {'ok': False, 'reason': 'no maker fill working'}
         now = self.clock()
         job.deadline = now
+        job.cancelled = True              # the trader's: never re-armed
         job.next_peg = now
         if job.recovery is not None:
             job.recovery['until'] = now
@@ -665,7 +802,7 @@ class MakerCloses:
             leg['sent'] = ask if leg['close_side'] == 'BUY' else bid
             price = passive_price(leg['close_side'], bid, ask,
                                   self._cfg('MAKER_OFFSET_BPS', 1.0),
-                                  self._cfg('MAKER_SAFETY_BPS', 0.5))
+                                  self._cfg('MAKER_SAFETY_BPS', 1.0))
             for ticket in leg['tickets']:
                 volume = held.get(str(ticket))
                 if not volume:
@@ -673,7 +810,7 @@ class MakerCloses:
                 leg['found'] += volume
                 placed = runner.place_limit(
                     leg['symbol'], leg['close_side'], volume, price,
-                    comment=f'{TAG}C:{key.upper()}', post_only=False,
+                    comment=f'{TAG}C:{key.upper()}', post_only=True,
                     position_ticket=int(ticket))
                 if not placed or not placed.get('ok'):
                     self._pull(job)
@@ -792,7 +929,29 @@ class MakerCloses:
                 continue
             target = passive_price(leg['close_side'], bid, ask,
                                    self._cfg('MAKER_OFFSET_BPS', 1.0),
-                                   self._cfg('MAKER_SAFETY_BPS', 0.5))
+                                   self._cfg('MAKER_SAFETY_BPS', 1.0))
+            # A post-only closing order OKX cancelled (it would have
+            # crossed) is placed again for what it still had to close,
+            # against the same position ticket.
+            for ticket, order in list(leg['orders'].items()):
+                left = order['volume'] - order['filled']
+                if order['live'] or order.get('replaced') or \
+                        left <= max(1e-12, order['volume'] * 1e-6):
+                    continue
+                placed = self._runner(leg).place_limit(
+                    leg['symbol'], leg['close_side'], left, target,
+                    comment=f'{TAG}C:{key.upper()}', post_only=True,
+                    position_ticket=int(order['pos_ticket']))
+                if placed and placed.get('ok'):
+                    order['replaced'] = True
+                    leg['orders'][placed['ticket']] = {
+                        'pos_ticket': order['pos_ticket'], 'volume': left,
+                        'filled': 0.0, 'avg': None, 'live': True,
+                        'price': placed.get('price', target),
+                        'target': target, 'amends': 0}
+                    logging.info('%s: maker close %s - leg %s re-placed at '
+                                 '%s (OKX cancelled the post-only order)',
+                                 pair.key, job.id, key.upper(), target)
             for ticket, order in leg['orders'].items():
                 if not order['live'] or _bps(target, order['target']) <= \
                         self._cfg('MAKER_AMEND_BPS', 1.0):

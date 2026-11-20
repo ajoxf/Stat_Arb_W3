@@ -100,7 +100,9 @@ def test_both_legs_rest_passive_and_book_when_both_fill(desk):
     started = desk.maker.start(desk.pair, SpreadSide.BUY, desk.md(), 1)
     assert started.ok and started.working
     live = _live(desk.sim)
-    assert len(live) == 2 and {o['ordType'] for o in live} == {'limit'}
+    # POST-ONLY, the original desk's June 2026 rule: a plain limit at
+    # the touch races the book and is charged taker.
+    assert len(live) == 2 and {o['ordType'] for o in live} == {'post_only'}
     for o in live:                                  # passive: it makes
         bid, ask = desk.sim._touch(o['instId'])
         assert (float(o['px']) < ask) if o['side'] == 'buy' \
@@ -151,14 +153,95 @@ def test_not_filled_in_30s_is_a_clean_refusal(desk):
     assert _live(desk.sim) == [] and desk.sim.positions == {}
 
 
-def test_one_leg_cancelled_at_okx_pulls_the_other(desk):
+def test_a_post_only_leg_okx_cancelled_is_placed_again(desk):
+    """OKX cancels a post-only order that would have crossed
+    (cancelSource 20 / 31). The original desk re-priced and re-sent it;
+    so does this - the other leg is NOT pulled and nothing fails."""
+    desk.maker.start(desk.pair, SpreadSide.BUY, desk.md(), 1)
+    job = desk.maker.jobs[desk.pair.key]
+    first = job.legs['b'].live
+    ord_id = desk.broker.ledger['orders'][str(first)]['ord_id']
+    desk.sim.orders[ord_id]['state'] = 'canceled'
+    desk.sim.orders[ord_id]['cancelSource'] = '31'
+    desk.tick()
+    b = job.legs['b']
+    assert b.live is not None and b.live != first and b.replaced == 1
+    assert 'cancelSource 31' in (b.cancel_reason or '')
+    assert len(_live(desk.sim)) == 2 and not desk.done
+    assert {o['ordType'] for o in _live(desk.sim)} == {'post_only'}
+
+
+def test_CONTROL_a_leg_that_cannot_be_placed_again_pulls_the_other(desk):
     desk.maker.start(desk.pair, SpreadSide.BUY, desk.md(), 1)
     job = desk.maker.jobs[desk.pair.key]
     ord_id = desk.broker.ledger['orders'][str(job.legs['b'].live)]['ord_id']
     desk.sim.orders[ord_id]['state'] = 'canceled'
+    desk.maker._rest = lambda *a, **k: False       # OKX refuses it now
     desk.tick()
     assert _live(desk.sim) == []
     assert desk.done and not desk.done[0].ok
+
+
+def test_a_click_at_a_level_never_rests_worse_than_it(desk):
+    """A SELL clicked at a level the market has already fallen through
+    rests its legs where the spread IS that level - further out, still
+    post-only - instead of chasing the market down."""
+    md = desk.md()
+    level = md['short_spread'] + 5.0          # above the market: not there
+    desk.maker.start(desk.pair, SpreadSide.SELL, md, 1, level=level,
+                     source='trigger')
+    job = desk.maker.jobs[desk.pair.key]
+    a, b = job.legs['a'], job.legs['b']
+    implied = b.price - desk.pair.hedge_ratio * a.price
+    assert implied == pytest.approx(level, abs=0.02)
+    assert job.held is True
+    # Re-pegs keep holding it.
+    for _ in range(3):
+        desk.tick()
+    implied = b.target - desk.pair.hedge_ratio * a.target
+    assert implied >= level - 0.02
+
+
+def test_CONTROL_a_level_already_better_rests_at_the_touch(desk):
+    md = desk.md()
+    level = md['short_spread'] - 5.0          # far below: already better
+    desk.maker.start(desk.pair, SpreadSide.SELL, md, 1, level=level,
+                     source='trigger')
+    job = desk.maker.jobs[desk.pair.key]
+    assert job.held is False
+
+
+def test_a_held_click_not_filled_in_time_is_rearmed(desk):
+    md = desk.md()
+    level = md['short_spread'] + 5.0
+    desk.maker.start(desk.pair, SpreadSide.SELL, md, 1, level=level,
+                     source='trigger')
+    job = desk.maker.jobs[desk.pair.key]
+    for _ in range(31):
+        desk.tick()
+    assert desk.done and not desk.done[0].ok
+    assert job.rearm is True and _live(desk.sim) == []
+
+
+def test_CONTROL_a_fill_the_trader_cancelled_is_not_rearmed(desk):
+    md = desk.md()
+    desk.maker.start(desk.pair, SpreadSide.SELL, md, 1,
+                     level=md['short_spread'] + 5.0, source='trigger')
+    job = desk.maker.jobs[desk.pair.key]
+    desk.maker.cancel(desk.pair.key)
+    desk.tick()
+    assert job.rearm is False
+
+
+def test_recovery_of_a_lone_leg_is_a_plain_limit(desk):
+    """The one maker order that is NOT post-only: a leg on alone has to
+    be matched, so its recovery order may fill as taker."""
+    desk.maker.start(desk.pair, SpreadSide.BUY, desk.md(), 1)
+    desk.fill('a')
+    for _ in range(31):
+        desk.tick()
+    live = _live(desk.sim)
+    assert len(live) == 1 and live[0]['ordType'] == 'limit'
 
 
 def test_a_leg_on_alone_is_recovered_as_maker(desk):
@@ -284,7 +367,9 @@ def test_a_maker_close_rests_by_ticket_and_settles(desk, closes):
     started = closes.start(desk.pair, position, desk.md(), 'closed by trader')
     assert started['ok'] and started['working']
     live = _live(desk.sim)
-    assert len(live) == 2 and {o['ordType'] for o in live} == {'limit'}
+    # POST-ONLY, the original desk's June 2026 rule: a plain limit at
+    # the touch races the book and is charged taker.
+    assert len(live) == 2 and {o['ordType'] for o in live} == {'post_only'}
     _fill_close(desk, closes, position)
     desk.clock.t += 1
     closes.step(desk.pair, desk.md())

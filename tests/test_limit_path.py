@@ -59,7 +59,7 @@ def test_the_pending_price_is_the_one_that_makes_the_clicked_spread(
         engine, pair, legs):
     coordinator = engine
     md = coordinator.market[pair.key]
-    level = level_of(coordinator, pair)
+    level = level_of(coordinator, pair, offset_ticks=5)   # SELL: above the market (OKX post-only rests, never crosses)
 
     coordinator.click(pair.key, SpreadSide.SELL, level)
     coordinator.poll_once()
@@ -76,17 +76,19 @@ def test_the_peg_chases_the_other_leg_not_its_own(engine, pair, legs):
     """The 13.96-second incident: the peg was anchored on its own leg's
     book, so it chased the market away from itself and never filled."""
     coordinator = engine
-    level = level_of(coordinator, pair)
+    level = level_of(coordinator, pair, offset_ticks=5)   # SELL: above the market (OKX post-only rests, never crosses)
     coordinator.click(pair.key, SpreadSide.SELL, level)
     coordinator.poll_once()
     first = legs['acct_b'].pending_orders()[0]['price']
 
-    # Leg A falls 4.00. Leg B has not moved at all.
-    legs['acct_a'].broker.quote('XAUUSD_', 4288.00, 4288.20)
+    # Leg A rises 4.00. Leg B has not moved at all. (Rises: with the
+    # SELL resting above the market, a FALL in A would bring the level
+    # to B's own bid, and OKX's post-only would join the touch instead.)
+    legs['acct_a'].broker.quote('XAUUSD_', 4296.00, 4296.20)
     coordinator.poll_once()
 
     moved = legs['acct_b'].pending_orders()[0]['price']
-    assert moved == pytest.approx(first - 4.0)
+    assert moved == pytest.approx(first + 4.0)
     md = coordinator.market[pair.key]
     assert implied_spread(pair, md, SpreadSide.SELL, 'b',
                           moved) == pytest.approx(level)
@@ -99,7 +101,8 @@ def test_a_move_inside_the_dead_band_does_not_touch_the_order(engine, pair,
     guarantees you are never at the front of a queue, which defeats the
     entire point of quoting."""
     coordinator = engine
-    coordinator.click(pair.key, SpreadSide.SELL, level_of(coordinator, pair))
+    coordinator.click(pair.key, SpreadSide.SELL,
+                      level_of(coordinator, pair, offset_ticks=5))
     coordinator.poll_once()
     modifies = [e for e in legs['acct_b'].broker.sent if e['action'] == 'modify']
 
@@ -491,3 +494,19 @@ def test_automations_target_still_stands_down_for_a_click(engine, pair, legs):
     coordinator.poll_once()
     assert sorted(o.level for o in closes(coordinator, pair)) == \
         sorted([mine, other])
+
+
+def test_OKX_a_sell_at_a_level_already_passed_rests_at_its_own_touch(
+        engine, pair, legs):
+    """OKX rests the quote POST-ONLY. A SELL at a level the market is
+    already through would price leg B under its own bid - a post-only
+    OKX cancels the instant it lands. It joins B's own ask instead:
+    still maker, and a spread at least as good as the level."""
+    coordinator = engine
+    md = coordinator.market[pair.key]
+    level = level_of(coordinator, pair)              # below: passed
+    coordinator.click(pair.key, SpreadSide.SELL, level)
+    coordinator.poll_once()
+    resting = legs['acct_b'].pending_orders()[0]['price']
+    assert resting == pytest.approx(md['leg_b_ask'])
+    assert implied_spread(pair, md, SpreadSide.SELL, 'b', resting) >= level

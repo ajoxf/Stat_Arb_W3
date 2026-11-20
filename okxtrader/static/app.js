@@ -2177,6 +2177,7 @@
     ['.ls-contract-a', 'contract_size_a', 'blank-number'],
     ['.ls-contract-b', 'contract_size_b', 'blank-number'],
     ['.ls-quoting', 'quoting_leg', 'live'],
+    ['.ls-fill', 'fill_style', 'live'],
     // What the window reads: None, Fair spread or Algo. ONE control
     // for one decision. Fair spread is the saved `algo_window`; Algo is
     // a switch on the running engine, never saved, off after a restart.
@@ -2467,7 +2468,7 @@
             var vip = (live.fee_commission || {})[entry[3]];
             seed = undefined;
             input.placeholder = vip === undefined || vip === null
-              ? 'OKX fees' : Number(vip).toFixed(4) + ' OKX';
+              ? 'OKX fees' : Number(vip).toFixed(4);
             input.title = 'Blank: the commission per lot per side at your ' +
               'OKX VIP fees' + (vip === undefined || vip === null ? ''
                 : ' (' + Number(vip).toFixed(4) + ' USDT)') +

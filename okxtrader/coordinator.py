@@ -33,6 +33,7 @@ from .book import Book
 from .chart import SpreadTape, chart_path
 from .database import Store
 from .executor import PairExecutor, mark_position, slippage
+from . import maker as maker_module
 from .maker import MakerCloses, MakerFills
 from .models import (ALGO_SOURCE, MAGIC_NUMBER, MANUAL, LegFill, OrderType,
                      SpreadPosition, SpreadSide)
@@ -1233,6 +1234,19 @@ class Coordinator:
             if result.naked:
                 logging.critical('%s: maker fill left a leg ON: %s',
                                  job.pair_key, result.naked)
+            if getattr(job, 'rearm', False) and not result.naked:
+                # A click at a level that was not filled in time: it goes
+                # back to WORKING at that level, as if just clicked. The
+                # legs were held to the level, so the market moved away
+                # rather than the order chasing it.
+                answer = self.click(job.pair_key, job.side.value, job.level,
+                                    job.spreads)
+                logging.info('%s: %s %g at %s not filled as maker in time '
+                             '- working again at the level (%s)',
+                             job.pair_key, job.side.value, job.spreads,
+                             job.level, (answer or {}).get('reason')
+                             or ('ok' if (answer or {}).get('ok')
+                                 else 'refused'))
 
     def algo_exit(self, pair, position_id, reason):
         """A LIVE Algo exit: close one position, both legs, by TICKET."""
@@ -4083,8 +4097,8 @@ class Coordinator:
                 # resting at OKX, how far each has filled.
                 'maker_fills': (self.maker.snapshot(key) +
                                 self.maker_closes.snapshot(key)),
-                'fill_style': 'maker' if self.maker.enabled(pair)
-                else 'taker',
+                'fill_style': maker_module.fill_style(pair, self.config),
+                'fill_style_own': getattr(pair, 'fill_style', None),
                 # The OKX account's own VIP fees on each leg, in bps,
                 # and the commission per lot they price.
                 'fee_bps': getattr(pair, 'fee_bps', None),
@@ -4134,7 +4148,7 @@ class Coordinator:
                     1 for quote in self.quoter.snapshot(key)
                     if quote.get('held')
                     for _ in quote.get('orders') or ()),
-                'working_orders': 'TRIGGER' if self.quoter.triggers()
+                'working_orders': 'TRIGGER' if self.quoter.triggers(pair)
                                   else 'QUOTE',
                 'positions': positions,
                 'net_position': net, 'avg_entry': avg_entry,
