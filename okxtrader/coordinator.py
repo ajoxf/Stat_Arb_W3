@@ -1768,6 +1768,12 @@ class Coordinator:
                     z_of[side] if z_of[side] is not None else 0.0, params,
                     broker_day=day, threshold=params['entry_z'])
                 row['algo_mode'] = mode
+                # The spread price behind that z - the same executable
+                # side the Algo read it off - blocked or not.
+                spread = md.get('short_spread' if side == 'SELL'
+                                else 'long_spread')
+                row['armed_spread'] = (None if spread is None
+                                       else round(float(spread), 6))
                 row.update(self._leg_identity(pair))
                 # The edge filter's reading as the signal is recorded.
                 # Overwritten by the one it is ENTERED or held back at,

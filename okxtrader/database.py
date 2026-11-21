@@ -419,6 +419,9 @@ class Store:
         ('signal_events', 'leg_b_account', 'TEXT'),
         ('signal_events', 'leg_b_broker', 'TEXT'),
         ('signal_events', 'edge_on', 'INTEGER'),
+        # The spread price the arming z was read off; NULL on a row
+        # written before it was kept.
+        ('signal_events', 'armed_spread', 'REAL'),
         ('positions', 'naked_ms', 'REAL'),
         # MANUAL or ALGO. NULL on a row written before it existed, which
         # reads back as MANUAL: nothing traded by itself then either.
@@ -941,7 +944,7 @@ class Store:
                       'leg_b_side', 'leg_b_entry', 'entry_margin',
                       'entry_atr', 'decided_by', 'leg_a_account',
                       'leg_a_broker', 'leg_b_account', 'leg_b_broker',
-                      'edge_on')
+                      'edge_on', 'armed_spread')
 
     def save_signal(self, row):
         """Write a signal, or update the one `row['id']` names.

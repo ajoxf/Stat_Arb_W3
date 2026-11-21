@@ -124,6 +124,11 @@ def new_signal(pair_key, basis, side, at, z, params, broker_day=None,
         'threshold': threshold,
         'state': ARMED, 'outcome': None,
         'armed_at': float(at), 'armed_z': round(float(z), 3),
+        #: The SPREAD PRICE the arming z was read off - this side's own
+        #: executable price (the bid side for H to L, the ask for L to
+        #: H) - kept whether or not the signal is ever entered. Not
+        #: `entry`, which is where an entry would have been taken.
+        'armed_spread': None,
         'entered_at': None, 'entered_z': None,
         'entry': None, 'break_even': None, 'tp': None, 'sl': None,
         'units': None, 'quantity': None,
@@ -306,6 +311,9 @@ def from_replay(trade, pair_key, params, broker_day=None, units=None):
                      threshold=params.get('entry_z'))
     row['source'] = REPLAY
     row['decided_by'] = DECIDED_BY
+    # A replayed row's z is its entry's, so the spread behind it is the
+    # entry's too.
+    row['armed_spread'] = trade.get('entry')
     edge = trade.get('edge') or {}
     row['edge_ratio'] = edge.get('ratio')
     row['edge_required'] = edge.get('required')

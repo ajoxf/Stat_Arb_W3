@@ -6122,6 +6122,7 @@ def test_the_signal_journal_names_the_accounts_the_edge_and_hides_the_unconfirme
           signals: [
             {pair_key: 'A|B', side: 'SELL', source: 'LIVE', state: 'CLOSED',
              outcome: 'BLOCKED', armed_at: 1762500000, armed_z: 2.55,
+             armed_spread: -33.9484,
              leg_a_account: 'CFI', leg_a_broker: 'CFI Financial Group',
              leg_b_account: 'FxPro', leg_b_broker: 'FxPro Financial',
              edge_ratio: 0.42, edge_required: 1.5, edge_on: true,
@@ -6138,6 +6139,12 @@ def test_the_signal_journal_names_the_accounts_the_edge_and_hides_the_unconfirme
     assert 'A: CFI · CFI Financial Group' in text
     assert 'B: FxPro · FxPro Financial' in text
     assert '0.42× / 1.50×' in text
+    # The spread price that z was read off, blocked as it was - in its
+    # own column, beside the z.
+    heads = page.locator('.monitor .analysis table', has_text='Spread at z') \
+        .locator('th').all_text_contents()
+    assert heads.index('Spread at z') == heads.index('z in → out') + 1
+    assert '-33.9484' in text
     # The unconfirmed stretch is counted, not listed...
     assert '-7.73' not in text
     assert '1 stretch armed and let go without confirming' in text

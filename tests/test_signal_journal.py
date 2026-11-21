@@ -128,6 +128,23 @@ def test_with_the_algo_ON_the_edge_filter_still_refuses(config, pair, legs,
     assert all(r['edge_ratio'] < r['edge_required'] for r in rows)
 
 
+def test_a_signal_keeps_the_spread_price_its_z_was_read_off(
+        config, pair, legs, tmp_path):
+    """The z in alone does not say where the spread was. Each row keeps
+    the spread price the arming z was read off - the side's own
+    executable price, the bid for H to L - BLOCKED or not, and it is not
+    `entry`, which is where an entry would have been taken."""
+    desk = Desk(config, pair, legs, tmp_path, edge_on=True,
+                edge_multiple=1000.0, **REENTRY)
+    desk.push(HOME, ARM)
+    md = desk.co.market[pair.key]
+    desk.push(WINDOW, HOME)
+    [row] = desk.rows()
+    assert row['outcome'] == 'BLOCKED' and row['entry'] is None
+    assert row['armed_spread'] == pytest.approx(md['short_spread'],
+                                                abs=1e-6)
+
+
 def test_CONTROL_with_the_edge_filter_off_the_same_stretch_enters(
         config, pair, legs, tmp_path):
     desk = Desk(config, pair, legs, tmp_path, edge_on=False, **REENTRY)

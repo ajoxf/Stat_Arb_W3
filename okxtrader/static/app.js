@@ -6515,7 +6515,7 @@
     // same columns, in the same order, with the three levels as
     // columns and a running total down the right. A signal that was
     // refused carries no money and must not move that total.
-    var SIGNAL_COLS = 18;
+    var SIGNAL_COLS = 19;
     // Which account, at which broker, each leg was on when the row was
     // recorded. A replayed row has none: it never saw a terminal.
     function legsOf(r) {
@@ -6558,7 +6558,12 @@
       'the move back to the mean is worth against its costs, and what ' +
       'the filter requires. (off) when the filter is switched off on ' +
       'that ladder">Edge</th>' +
-      '<th>z in → out</th><th>Spread in → out</th>' +
+      '<th>z in → out</th>' +
+      '<th title="The spread price the z in was read off - this ' +
+      'side\u2019s own executable price, bid for H to L, ask for L to H ' +
+      '- recorded whether or not the signal was entered. Not Spread in, ' +
+      'which is where an entry was taken">Spread at z</th>' +
+      '<th>Spread in → out</th>' +
       '<th title="After every cost. The level the other two are ' +
       'measured from">Break-even</th>' +
       '<th title="The take-profit this signal would have been given">' +
@@ -6593,6 +6598,8 @@
         edgeOf(r) +
         '<td>' + fmt(r.armed_z, 2) + ' → ' + fmt(r.closed_z, 2) +
         '</td>' +
+        '<td>' + (r.armed_spread === null || r.armed_spread === undefined
+                  ? DASH : fmt(r.armed_spread, 4)) + '</td>' +
         '<td>' + fmt(r.entry, 4) + ' → ' + fmt(r.exit_spread, 4) +
         '</td>' +
         anLevel(r.break_even, false) +
