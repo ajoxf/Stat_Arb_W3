@@ -582,7 +582,13 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
         raw = cfg.load_raw(config_path)
         names = {key: (pair or {}).get('name') or key
                  for key, pair in (raw.get('pairs') or {}).items()}
-        body = analysis.report(positions, events, shadows, excursions, now)
+        try:
+            capital = max(0.0, float((raw.get('settings') or {}).get(
+                'CAPITAL_MANAGED') or 0.0))
+        except (TypeError, ValueError):
+            capital = 0.0
+        body = analysis.report(positions, events, shadows, excursions, now,
+                               capital=capital)
         try:
             zone_days = float(request.args.get('zone_days', 1))
         except ValueError:

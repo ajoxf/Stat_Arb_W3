@@ -367,6 +367,11 @@ DEFAULT_SETTINGS = {
     #: break-even alone. Nothing is ever SENT to the broker from it: it
     #: is a price on the screen, and no leg carries a broker-side stop.
     'TP_TARGET_PCT_OF_MARGIN': 2.0,
+    #: The CAPITAL the trader manages on this desk, in the account's
+    #: money. Set on the Analysis tab. Each trade's return and the
+    #: capital it used are read against it there; 0 = not set, and
+    #: those columns are a dash. Nothing is sized or sent from it.
+    'CAPITAL_MANAGED': 0.0,
     #: How often the margin for one spread is re-priced from the
     #: terminals. It moves with the price, but slowly.
     'MARGIN_TTL_SEC': 60.0,

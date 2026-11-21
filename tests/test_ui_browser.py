@@ -6858,3 +6858,56 @@ def test_a_chart_on_an_out_of_date_history_says_so_and_why(page):
         raise AssertionError('still: ' + size.text_content())
     assert page.errors == []
     page.locator('.window.chartwin .close').click()
+
+
+def test_the_analysis_page_reads_trades_against_the_capital_managed(page):
+    """A box for the capital the trader manages, saved as the
+    CAPITAL_MANAGED setting; return on capital and capital used in the
+    summary, and per trade the capital used, the exposure and the return
+    on capital beside the return on margin."""
+    page.errors.clear()
+    page.evaluate("""() => {
+        const s = window.MT5Trader.state;
+        s.open = ['monitor:'];
+        s.monitorTab = 'analysis';
+        delete s.capitalManaged;
+        const leg = {side: 'BUY', entry: 1.0};
+        s.analysis = {ok: true, names: {'A|B': 'ETH vs BTC'},
+          summary: {count: 1, closed: 1, net_pnl: 70, wins: 1, losses: 0,
+                    win_rate: 1, return_on_margin: 40, margin_trades: 1,
+                    capital: 3500, return_on_capital: 2,
+                    capital_used_avg: 5, capital_used_max: 5},
+          drawdown: {}, calibration: {}, shadow: {}, excursion: [],
+          signals: [], signal_tally: {},
+          journal: [{pair_key: 'A|B', side: 'BUY', source: 'ALGO',
+                     quantity: 3, closed_at: Date.now() / 1000, pnl: 70,
+                     cum_pnl: 70, leg_a: leg, leg_b: leg, exit: {},
+                     margin: 175, notional: 3500, pct_margin: 40,
+                     pct_notional: 2, pct_capital: 2,
+                     pct_capital_used: 5, exposure: 1}]};
+        s.analysisAt = Date.now();
+        window.MT5Trader.render();
+    }""")
+    page.wait_for_selector('.monitor .an-capital', timeout=WAIT)
+    assert page.locator('.monitor .an-capital').input_value() == '3500'
+    tiles = page.text_content('.monitor .an-tiles')
+    assert 'Return on capital' in tiles and '+2.00%' in tiles
+    assert 'Capital used' in tiles and '5.0%' in tiles
+    table = page.locator('.monitor table.an-table', has_text='% on capital')
+    heads = table.locator('th').all_text_contents()
+    for word in ('Capital used', 'Exposure', '% on capital'):
+        assert word in heads, word
+    row = table.locator('tbody tr').first.text_content()
+    assert '5.0%' in row and '1.00x' in row and '+2.00%' in row
+    # Typing a capital saves it as the setting.
+    box = page.locator('.monitor .an-capital')
+    box.fill('5000')
+    box.press('Enter')
+    box.evaluate('b => b.blur()')
+    for _ in range(50):
+        saved = json.load(open(page.paths['config'], encoding='utf-8'))
+        if (saved.get('settings') or {}).get('CAPITAL_MANAGED') == 5000:
+            break
+        time.sleep(0.1)
+    assert saved['settings']['CAPITAL_MANAGED'] == 5000
+    assert page.errors == []

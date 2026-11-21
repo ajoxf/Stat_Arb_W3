@@ -311,7 +311,25 @@ def returns(row, pnl):
                              else round(pnl / notional * 100.0, 6))}
 
 
-def summary(positions):
+def on_capital(pnl, margin, notional, capital):
+    """One trade against the CAPITAL the trader manages: its net as a
+    share of it (return on capital), the margin it tied up as a share of
+    it (capital used), and its two legs' face value over it (exposure,
+    x). Each None while the capital is not set or its base was not
+    measured."""
+    capital = float(capital or 0.0)
+    if capital <= 0:
+        return {'pct_capital': None, 'pct_capital_used': None,
+                'exposure': None}
+    return {'pct_capital': (None if pnl is None
+                            else round(pnl / capital * 100.0, 4)),
+            'pct_capital_used': (None if not margin
+                                 else round(margin / capital * 100.0, 2)),
+            'exposure': (None if not notional
+                         else round(notional / capital, 3))}
+
+
+def summary(positions, capital=0.0):
     """Trades opened in the window, the closed ones' net and win rate."""
     rows = list(positions or ())
     closed = [r for r in rows if r.get('closed_at') is not None
@@ -323,7 +341,21 @@ def summary(positions):
     based = [(r, returns(r, _pnl(r))['margin']) for r in closed]
     based = [(r, m) for r, m in based if m]
     used = sum(m for _r, m in based)
-    return {'count': len(rows), 'closed': len(closed),
+    # ON CAPITAL: the window's net over the capital managed, and how
+    # much of it the trades tied up - on average and at most, each trade
+    # by its own margin.
+    capital = float(capital or 0.0)
+    shares = ([m / capital * 100.0 for _r, m in based] if capital > 0
+              else [])
+    net = sum(_pnl(r) for r in closed) if closed else None
+    return {'capital': capital or None,
+            'return_on_capital': (round(net / capital * 100.0, 4)
+                                  if capital > 0 and net is not None
+                                  else None),
+            'capital_used_avg': (round(sum(shares) / len(shares), 2)
+                                 if shares else None),
+            'capital_used_max': round(max(shares), 2) if shares else None,
+            'count': len(rows), 'closed': len(closed),
             'open': sum(1 for r in rows if r.get('closed_at') is None),
             'net_pnl': (round(sum(_pnl(r) for r in closed), 2)
                         if closed else None),
@@ -539,7 +571,7 @@ def calibration(positions):
                                        else round(hold, 1))}
 
 
-def journal(positions, entry_z=None, exit_z=None):
+def journal(positions, entry_z=None, exit_z=None, capital=0.0):
     """Every closed round trip, newest first, with a running total in
     the order they closed. `entry_z` / `exit_z` map position id to the
     Algo's z at that end (manual trades have none)."""
@@ -568,6 +600,7 @@ def journal(positions, entry_z=None, exit_z=None):
                          'symbol': fill.get('symbol')}
         opened = row.get('opened_at')
         gross = _gross(row)
+        based = returns(row, pnl)
         out.append({
             'position_id': row.get('position_id'),
             'pair_key': row.get('pair_key'), 'side': row.get('side'),
@@ -589,7 +622,8 @@ def journal(positions, entry_z=None, exit_z=None):
             # hit from a stop that was in the wrong place.
             'exit': exit_columns(row),
             'pnl': None if pnl is None else round(pnl, 2),
-            **returns(row, pnl),
+            **based,
+            **on_capital(pnl, based['margin'], based['notional'], capital),
             # The spread's move times k, before commission; the fees
             # are what lies between that and the net. Either is None
             # when a side of it was not measured.
@@ -629,18 +663,20 @@ def algo_z(events):
     return entry, exit_
 
 
-def report(positions, events=(), shadows=(), excursions=None, now=0.0):
-    """Everything the tab shows, from what is recorded."""
+def report(positions, events=(), shadows=(), excursions=None, now=0.0,
+           capital=0.0):
+    """Everything the tab shows, from what is recorded. `capital`: what
+    the trader manages (CAPITAL_MANAGED), 0 when not set."""
     positions = list(positions or ())
     entry_z, exit_z = algo_z(events)
-    return {'summary': summary(positions),
+    return {'summary': summary(positions, capital),
             'drawdown': drawdown(positions),
             'excursion': excursion_rows(positions),
             'calibration': calibration(positions),
             'shadow': shadow_summary(shadows),
             'z_excursions': {key: excursions_view(data, now)
                              for key, data in (excursions or {}).items()},
-            'journal': journal(positions, entry_z, exit_z)}
+            'journal': journal(positions, entry_z, exit_z, capital)}
 
 
 #: The windows the volume is counted over: the broker's own TODAY, and

@@ -104,3 +104,7 @@
   margin: 0; }
 .usd-row .usd-qty { flex: 0 1 auto; min-width: 0; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap; font-size: 10px; }
+
+/* The capital managed, on the Analysis bar: the bar's own small type. */
+.monitor .an-bar input.an-capital { font: 11px var(--font); width: 90px;
+  margin-left: 2px; }

@@ -5031,6 +5031,9 @@
           state.analysisPair = e.target.value;
           loadAnalysis(true);
         }
+        if (e.target.classList.contains('an-capital')) {
+          saveCapital(e.target.value);
+        }
         if (e.target.classList.contains('an-zone-days')) {
           state.zoneDays = Number(e.target.value);
           state.zoneDate = '';          // a range and a day are exclusive
@@ -6148,6 +6151,27 @@
     }).catch(function (error) { done(escapeHtml(error.message), 'down'); });
   }
 
+  function anCapital() {
+    /* The capital managed, as the last analysis read it - or as just
+     * typed, until the next one reads it back. 0 / null: not set. */
+    if (state.capitalManaged !== undefined) { return state.capitalManaged; }
+    var s = (state.analysis || {}).summary || {};
+    return s.capital || null;
+  }
+
+  function saveCapital(value) {
+    var number = value === '' ? 0 : Number(value);
+    if (!isFinite(number) || number < 0) { return; }
+    state.capitalManaged = number || null;
+    fetch('/api/settings', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({fields: {CAPITAL_MANAGED: number}})
+    }).then(function (r) { return r.json(); }).then(function () {
+      delete state.capitalManaged;
+      loadAnalysis(true);
+    }).catch(function () { loadAnalysis(true); });
+  }
+
   function anTile(label, value, cls, title) {
     return '<div class="an-tile"' + (title ? ' title="' + escapeHtml(title) +
       '"' : '') + '><div class="an-val ' + (cls || '') + '">' + value +
@@ -6744,7 +6768,17 @@
         return '<option value="' + escapeHtml(key) + '"' +
           (state.analysisPair === key ? ' selected' : '') + '>' +
           escapeHtml(pairs[key].name || key) + '</option>';
-      }).join('') + '</select></div>';
+      }).join('') + '</select>' +
+      // THE CAPITAL the trader manages: every trade's return and the
+      // capital it used are read against it below. Saved as the
+      // CAPITAL_MANAGED setting; blank or 0 = not set.
+      ' \u00b7 <label title="The capital you manage on this desk. Each ' +
+      'trade\u2019s return on capital and the capital it used are read ' +
+      'against it; nothing is sized or sent from it.">Capital managed $' +
+      '<input class="an-capital" type="number" min="0" step="100" ' +
+      'placeholder="not set" value="' +
+      (anCapital() ? escapeHtml(String(anCapital())) : '') +
+      '"></label></div>';
     if (a === null) {
       return html + '<p class="hint">reading the record\u2026</p></div>';
     }
@@ -6790,6 +6824,19 @@
              'net P&L \u00f7 the margin both legs used, over the ' +
              (s.margin_trades || 0) + ' closed trade(s) whose margin was ' +
              'priced') +
+      anTile('Return on capital', s.return_on_capital === null ||
+               s.return_on_capital === undefined ? DASH
+               : pctSigned(s.return_on_capital, 2),
+             anSign(s.return_on_capital),
+             s.capital ? 'net P&L \u00f7 the ' + money(s.capital) +
+               ' capital managed' : 'set the capital you manage above') +
+      anTile('Capital used', s.capital_used_avg === null ||
+               s.capital_used_avg === undefined ? DASH
+               : fmt(s.capital_used_avg, 1) + '%', '',
+             s.capital ? 'the margin a trade tied up \u00f7 the capital ' +
+               'managed: ' + fmt(s.capital_used_avg, 1) + '% on average, ' +
+               fmt(s.capital_used_max, 1) + '% at most'
+               : 'set the capital you manage above') +
       '</div>';
 
     // 1b. NOTIONAL TRADED: lots x contract size x price, on the broker's
@@ -6918,10 +6965,16 @@
       '<th title="net P&amp;L \u00f7 the margin BOTH legs tied up at entry - ' +
       'the base the TP % and SL % are set on">% on margin</th>' +
       '<th title="net P&amp;L \u00f7 both legs\u2019 face value at entry">' +
-      '% of notional</th><th>Running</th>' +
+      '% of notional</th>' +
+      '<th title="The margin BOTH legs tied up at entry \u00f7 the capital ' +
+      'managed (set above). Hover a cell for the money">Capital used</th>' +
+      '<th title="Both legs\u2019 face value at entry \u00f7 the capital ' +
+      'managed: 1.0x is a position as big as the capital">Exposure</th>' +
+      '<th title="net P&amp;L \u00f7 the capital managed">% on capital</th>' +
+      '<th>Running</th>' +
       '</tr></thead><tbody>';
     if (!trips.length) {
-      html += '<tr><td colspan="17" class="hint">no closed trade in this ' +
+      html += '<tr><td colspan="22" class="hint">no closed trade in this ' +
         'window</td></tr>';
     }
     trips.forEach(function (t) {
@@ -6946,6 +6999,15 @@
         '</td><td class="' + anSign(t.pnl) + '">' + money(t.pnl) +
         '</td>' + pctCell(t.pct_margin, 2, t.margin_estimated) +
         pctCell(t.pct_notional, 3, false) +
+        '<td' + (t.margin ? ' title="' + escapeHtml(money(t.margin)) +
+          ' of margin"' : '') + '>' +
+        (t.pct_capital_used === null || t.pct_capital_used === undefined
+          ? DASH : fmt(t.pct_capital_used, 1) + '%') + '</td>' +
+        '<td' + (t.notional ? ' title="' + escapeHtml(money(t.notional)) +
+          ' of notional"' : '') + '>' +
+        (t.exposure === null || t.exposure === undefined ? DASH
+          : fmt(t.exposure, 2) + 'x') + '</td>' +
+        pctCell(t.pct_capital, 2, false) +
         '<td class="' + anSign(t.cum_pnl) + '">' + money(t.cum_pnl) +
         '</td></tr>';
     });
