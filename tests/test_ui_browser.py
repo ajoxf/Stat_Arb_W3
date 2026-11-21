@@ -6918,3 +6918,28 @@ def test_the_analysis_page_reads_trades_against_the_capital_managed(page):
         time.sleep(0.1)
     assert saved['settings']['CAPITAL_MANAGED'] == 5000
     assert page.errors == []
+
+
+def test_the_price_tag_sits_beside_the_newest_candle_not_on_it(page):
+    """The 'now' tag at the right-hand end covered the newest candle and
+    its wick. It sits in a margin of its own now, on both charts, past
+    the last candle."""
+    key = 'XAUUSD_|GC1226'
+    write_chart_history(page, key, 15)
+    page.errors.clear()
+    page.locator('.ladder[data-pair="%s"] .chart-btn' % key).click()
+    page.wait_for_selector('.window.chartwin .cw-spread .cw-now-tag',
+                           timeout=WAIT)
+    page.locator('.window.chartwin .cw-tfs button[data-tf="15"]').click()
+    for plot in ('.cw-z', '.cw-spread'):
+        edges = page.evaluate("""(sel) => {
+            const box = document.querySelector('.window.chartwin ' + sel);
+            const candles = box.querySelectorAll('.cw-candle rect');
+            const last = candles[candles.length - 1].getBoundingClientRect();
+            const tag = box.querySelector('.cw-now-tag')
+                .getBoundingClientRect();
+            return [last.right, tag.left];
+        }""", plot)
+        assert edges[1] >= edges[0], (plot, edges)
+    assert page.errors == []
+    page.locator('.window.chartwin .close').click()

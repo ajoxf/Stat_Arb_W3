@@ -1305,6 +1305,10 @@
     return candles;
   }
 
+  //: The right margin a chart with a price tag keeps for it: room for
+  //: "-1234.56" in the tag's bold 11 px.
+  var CHART_TAG_ROOM = 62;
+
   function svgCandles(box, candles, opts) {
     /* One candlestick plot at the box's own pixel size, so the labels
      * are crisp. Candles sit on the CLOCK: a stretch the broker sent
@@ -1320,7 +1324,11 @@
     // small chart, rather than a full-size one cropped by its frame.
     var w = Math.max(box.clientWidth, 120);
     var h = Math.max(box.clientHeight, 50);
-    var left = 52, right = 8, top = 8, bottom = 20;
+    // With a price tag, the right margin is the TAG's: it sits beside
+    // the newest candle, never on it. The same width on the z and the
+    // spread chart, so the two keep the same candle slots.
+    var left = 52, right = opts.nowTag ? CHART_TAG_ROOM : 8, top = 8,
+        bottom = 20;
     var lines = opts.lines || [], curves = opts.curves || [];
     var n = candles.length;
     var ys = [];
@@ -1441,14 +1449,17 @@
       var yl = Y(lastC);
       var tag = lastC.toFixed(Math.max(digits, opts.nowDigits || 0));
       var tw = tag.length * 6.6 + 8;
+      // In the right margin, just past the plot: the newest candle and
+      // its wick stay in view (the tag used to sit on top of them).
+      var tx = w - right + 2;
       svg += '<line x1="' + left + '" x2="' + (w - right) + '" y1="' +
         yl.toFixed(1) + '" y2="' + yl.toFixed(1) + '" stroke="#212529" ' +
         'stroke-width="1" stroke-dasharray="1 3" opacity=".6"/>' +
-        '<rect x="' + (w - right - tw).toFixed(1) + '" y="' +
+        '<rect class="cw-now-tag" x="' + tx.toFixed(1) + '" y="' +
         (yl - 8).toFixed(1) + '" width="' + tw.toFixed(1) +
         '" height="16" rx="2" fill="#212529"/>' +
-        '<text x="' + (w - right - 4).toFixed(1) + '" y="' +
-        (yl + 4).toFixed(1) + '" text-anchor="end" font-size="11" ' +
+        '<text x="' + (tx + 4).toFixed(1) + '" y="' +
+        (yl + 4).toFixed(1) + '" text-anchor="start" font-size="11" ' +
         'font-weight="700" fill="#fff">' + tag + '</text>';
     }
     // The time along the bottom: five labels evenly across the clock,
