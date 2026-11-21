@@ -5980,11 +5980,13 @@ def test_the_signal_journal_reads_like_the_trade_journal(page):
     assert page.errors == []
 
 
-def write_chart_history(page, key, tf, count=150):
-    """What the engine writes when the chart asks for MT5's candles."""
+def write_chart_history(page, key, tf, count=150, age_sec=0.0):
+    """What the engine writes when the chart asks for MT5's candles.
+    `age_sec`: how long ago it was read - its candles end then."""
     from okxtrader import chart
     seconds = tf * 60
-    end = time.time() - time.time() % seconds
+    now = time.time() - age_sec
+    end = now - now % seconds
     candles, x = [], 59.1
     for i in range(count):
         t = end - seconds * (count - 1 - i)
@@ -6000,7 +6002,7 @@ def write_chart_history(page, key, tf, count=150):
     body[f'{key}#{tf}'] = {
         'ok': True, 'pair': key, 'timeframe_min': tf, 'length': 20,
         'entry_z': 2.5, 'stop_z': None, 'algo_timeframe_min': 15,
-        'anchor': 0.0, 'at': time.time(), 'candles': candles}
+        'anchor': 0.0, 'at': now, 'candles': candles}
     with open(path, 'w', encoding='utf-8') as f:
         json.dump(body, f)
 
@@ -6823,3 +6825,36 @@ def test_the_algo_window_says_the_pnl_as_a_share_of_margin(page):
         publisher.algo = 'NONE'
         publisher.algo_block = None
         publisher.publish()
+
+
+def test_a_chart_on_an_out_of_date_history_says_so_and_why(page):
+    """The 15m chart drew a history fifteen hours old, its candles
+    stopping mid-afternoon and the live ones alone at the right - and
+    said nothing. Out of date, the window now says how far OKX's candles
+    go and why the refresh failed."""
+    key = 'XAUUSD_|GC1226'
+    write_chart_history(page, key, 15, age_sec=15 * 3600)
+    page.errors.clear()
+    page.locator('.ladder[data-pair="%s"] .chart-btn' % key).click()
+    page.wait_for_selector('.window.chartwin .cw-spread svg', timeout=WAIT)
+    # 15m, whatever an earlier test left it on.
+    page.locator('.window.chartwin .cw-tfs button[data-tf="15"]').click()
+    size = page.locator('.window.chartwin .cw-size')
+    try:
+        page.wait_for_function(
+            "() => /history only to .+ - /.test(document.querySelector("
+            "'.window.chartwin .cw-size').textContent)", timeout=WAIT)
+    except Exception:
+        raise AssertionError(size.text_content())
+    assert 'cw-stale' in size.get_attribute('class')
+    # A fresh one clears it.
+    write_chart_history(page, key, 15)
+    page.locator('.window.chartwin .cw-tfs button[data-tf="15"]').click()
+    try:
+        page.wait_for_function(
+            "() => !document.querySelector('.window.chartwin .cw-size')"
+            ".classList.contains('cw-stale')", timeout=WAIT)
+    except Exception:
+        raise AssertionError('still: ' + size.text_content())
+    assert page.errors == []
+    page.locator('.window.chartwin .close').click()

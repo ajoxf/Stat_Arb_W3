@@ -979,6 +979,12 @@
   //: How old a history may be before the engine is asked again. The
   //: engine reuses its own for five minutes as well.
   var CHART_HISTORY_MS = 300000;
+  //: The longest a history request is waited for before it is asked
+  //: again: the engine's answer is polled for 30 s.
+  var CHART_BUSY_MS = 45000;
+  //: A history this old is out of date, and the window says so: the
+  //: candles stop there and only the live ones carry on.
+  var CHART_STALE_MS = 2 * CHART_HISTORY_MS;
 
   function chartOpen(key) {
     return state.open.indexOf(panelId('chart', key)) >= 0;
@@ -1135,7 +1141,11 @@
     var id = key + '#' + tf;
     var held = state.chartHistFetch[id] || {};
     var at = Date.now();
-    if (held.busy) { return; }
+    // Busy, unless for longer than any answer takes - a request that
+    // never came back must not hold the chart on an old history for
+    // good (it did, until the page was reloaded) - or the trader pressed
+    // the timeframe button, which always asks again.
+    if (held.busy && !now && at - held.at < CHART_BUSY_MS) { return; }
     if (!now && held.at && at - held.at < 15000) { return; }
     state.chartHistFetch[id] = {busy: true, at: at};
     function finish(body) {
@@ -1151,10 +1161,16 @@
     read().then(function (body) {
       var fresh = body && body.ok && body.at &&
         Date.now() - body.at * 1000 < CHART_HISTORY_MS;
-      if (fresh) { return finish(body); }
+      if (fresh) {
+        delete state.chartHistNote[id];
+        return finish(body);
+      }
       if (body && body.ok) { state.chartHist[id] = body; }
-      // Asked already, a moment ago: wait for that answer.
-      if (held.asked && at - held.asked < 20000) { return finish(null); }
+      // Asked already, a moment ago: wait for that answer - unless the
+      // trader pressed the timeframe button, which asks again now.
+      if (!now && held.asked && at - held.asked < 20000) {
+        return finish(null);
+      }
       held.asked = at;
       return fetch('/api/command', {
         method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -1173,14 +1189,33 @@
             if (result && result.pending && ++tries < 120) {
               return window.setTimeout(poll, 250);
             }
+            if (result && result.pending) {
+              state.chartHistNote[id] = 'the engine did not answer in ' +
+                '30 s - it may be busy; asking again shortly';
+              return finish(null);
+            }
             var data = (result && result.data) || {};
             if (!result || result.ok === false || data.ok === false) {
               state.chartHistNote[id] = (result && result.error) ||
                 data.reason || 'no answer from the engine';
               return finish(null);
             }
-            delete state.chartHistNote[id];
-            read().then(finish).catch(function () { finish(null); });
+            read().then(function (body) {
+              // The engine says it wrote a history at `data.at`; the
+              // file must now hold that one, not an older one.
+              if (body && body.ok && data.at && body.at &&
+                  body.at + 1 < data.at) {
+                state.chartHistNote[id] = 'the engine read the candles ' +
+                  'at ' + chartClock(data.at, true) + ' but the file ' +
+                  'still holds ' + chartClock(body.at, true);
+              } else {
+                delete state.chartHistNote[id];
+              }
+              finish(body);
+            }).catch(function () { finish(null); });
+          }).catch(function () {
+            state.chartHistNote[id] = 'no answer from the web screen';
+            finish(null);
           });
         })();
       });
@@ -1609,7 +1644,10 @@
     var sBox = node.querySelector('.cw-spread');
     // Only when the data or the room it is drawn in has changed.
     var view = chartView(key);
+    var stale = !!(hist && hist.ok && hist.at &&
+                   Date.now() - hist.at * 1000 > CHART_STALE_MS);
     var stamp = [tf, view.shown, view.back, hist ? hist.at : '',
+                 stale, state.chartHistNote[id] || '',
                  live.at || '',
                  (live.candles || []).length, zBox.clientWidth,
                  zBox.clientHeight, sBox.clientWidth,
@@ -1647,9 +1685,22 @@
     view.back = Math.max(0, Math.min(view.back, all.length - view.shown));
     var end = all.length - view.back;
     var shown = all.slice(Math.max(0, end - view.shown), end);
-    node.querySelector('.cw-size').textContent = label + ' \u00b7 ' +
+    var size = node.querySelector('.cw-size');
+    size.textContent = label + ' \u00b7 ' +
       shown.length + ' shown' + (view.back ? ' \u00b7 ' + view.back +
       ' back from now' : '');
+    // An out-of-date history, said in the window: OKX's candles stop at
+    // `hist.at` and only the live ones carry on, so the gap between is
+    // empty - and why the refresh failed, where the engine said.
+    size.classList.toggle('cw-stale', stale);
+    size.title = '';
+    if (stale) {
+      var why = state.chartHistNote[id];
+      size.textContent += ' \u00b7 \u26a0 OKX history only to ' +
+        chartClock(hist.at, true) + (why ? ' - ' + why
+                                         : ' - refreshing');
+      size.title = size.textContent;
+    }
     // z of each candle against ITS OWN band: where it stood when it
     // was drawn, not against today's. Null where there is no band yet,
     // so the two charts keep the same slots.

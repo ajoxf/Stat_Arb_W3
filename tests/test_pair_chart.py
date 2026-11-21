@@ -261,3 +261,46 @@ def test_the_route_serves_a_written_history_and_says_when_there_is_none(
     assert body['ok'] and len(body['candles']) == 1
     assert client.get('/api/chart_history/A|B?tf=240').get_json() == \
         {'ok': False, 'missing': True}
+
+
+def test_a_candle_opens_at_its_start_when_the_bars_carry_opens():
+    """OKX's bars carry an OPEN. A 15-minute candle from three 5-minute
+    bars used to open at the first one's CLOSE - five minutes late, at
+    the bottom of a drop that happened inside it - and to miss every
+    open from its high and low. Both legs' opens are the same instant,
+    so the spread at each bar's start is a real price."""
+    a = [{'time': 300 * i, 'open': 100.0, 'close': 100.0} for i in range(3)]
+    b = [{'time': 0, 'open': 104.0, 'close': 92.0},
+         {'time': 300, 'open': 92.0, 'close': 101.0},
+         {'time': 600, 'open': 101.0, 'close': 103.0}]
+    [candle] = bands.spread_ohlc(a, b, 1.0, 300, 900, 0, 0)
+    assert candle['o'] == pytest.approx(4.0)        # not -8, the first close
+    assert candle['h'] == pytest.approx(4.0)
+    assert candle['l'] == pytest.approx(-8.0)
+    assert candle['c'] == pytest.approx(3.0)
+
+
+def test_a_history_that_could_not_be_written_is_not_kept_or_called_done(
+        config, pair, legs, tmp_path, monkeypatch, caplog):
+    """The screen reads the history from a file. When the write failed
+    the engine still held the candles and answered from them for five
+    minutes, 'done', while the screen drew the OLD file: a chart frozen
+    hours back with nothing said. Now it says why, logs it, and the next
+    ask reads OKX again."""
+    from okxtrader import atomicfile
+    from okxtrader.coordinator import Coordinator
+    legs['acct_a'].broker.bars[pair.symbol_a] = [
+        {'time': 900 * i, 'close': 4300.0 + i} for i in range(200)]
+    legs['acct_b'].broker.bars[pair.symbol_b] = [
+        {'time': 900 * i, 'close': 4360.0 + i} for i in range(200)]
+    coordinator = Coordinator(config, legs,
+                              status_path=str(tmp_path / 'status.json'))
+    monkeypatch.setattr(atomicfile, 'replace', lambda tmp, path: False)
+    answer = coordinator.chart_history(pair.key, 15)
+    assert answer['ok'] is False
+    assert 'could not be written' in answer['reason']
+    assert 'no fresh history' in caplog.text
+    assert not coordinator._chart_history                # not kept
+    assert not [p for p in tmp_path.iterdir() if p.name.endswith('.tmp')]
+    monkeypatch.undo()
+    assert coordinator.chart_history(pair.key, 15)['ok'] is True

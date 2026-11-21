@@ -210,16 +210,42 @@ def spread_ohlc(bars_a, bars_b, beta, sub_sec, candle_sec, offset_a,
     """
     fine = spread_bars(bars_a, bars_b, beta, sub_sec, offset_a, offset_b,
                        anchor=anchor)
+    # Where both legs' bars carry an OPEN (OKX's do), the spread at the
+    # START of each finer bar is a real price too - both opens are the
+    # same instant. Without it a 15-minute candle built from three
+    # 5-minute bars opened at the first one's CLOSE, five minutes late,
+    # and its wicks missed every open.
+    opens = {}
+    if offset_a is not None and offset_b is not None:
+        beta_f = float(beta or 1.0)
+
+        def open_by_bucket(bars, offset):
+            out = {}
+            for bar in bars or ():
+                if bar.get('open') is None or bar.get('time') is None:
+                    continue
+                utc = float(bar['time']) - float(offset)
+                out[bucket_of(utc, sub_sec, anchor)] = float(bar['open'])
+            return out
+        open_a = open_by_bucket(bars_a, offset_a)
+        open_b = open_by_bucket(bars_b, offset_b)
+        opens = {k: open_b[k] - beta_f * open_a[k]
+                 for k in set(open_a) & set(open_b)}
     candles = []
     for bucket, close in fine:
         start = bucket_of(bucket, candle_sec, anchor)
+        opened = opens.get(bucket)
         if candles and candles[-1]['t'] == start:
             candle = candles[-1]
-            candle['h'] = max(candle['h'], close)
-            candle['l'] = min(candle['l'], close)
+            for price in (opened, close):
+                if price is not None:
+                    candle['h'] = max(candle['h'], price)
+                    candle['l'] = min(candle['l'], price)
             candle['c'] = close
         else:
-            candles.append({'t': start, 'o': close, 'h': close, 'l': close,
+            first = close if opened is None else opened
+            candles.append({'t': start, 'o': first,
+                            'h': max(first, close), 'l': min(first, close),
                             'c': close})
     return candles
 

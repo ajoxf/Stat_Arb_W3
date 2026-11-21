@@ -209,3 +209,43 @@ def test_a_click_and_a_poll_do_not_read_the_book_at_the_same_time(bridge,
     with coordinator.lock:
         # Re-entrant, so the coordinator's own nested calls still work.
         assert coordinator.click(pair.key, 'BUY', 58.4)['ok']
+
+
+def test_two_threads_draining_never_run_one_command_twice(bridge, pair,
+                                                          legs, tmp_path):
+    """The engine drains clicks on its command thread AND in the poll
+    loop. Nothing stopped both seeing a new command at once and both
+    running it - one click, two orders - or both writing results through
+    ONE tmp file, which on Windows lost the answer the screen waited for."""
+    import threading
+    import time
+    coordinator, runner, log = bridge
+    runner.prime()
+    for i in range(30):
+        log.submit('set_pair', {'pair': pair.key,
+                                'fields': {'rows': 20 + i % 3}})
+    ran = []
+    real = runner.execute
+
+    def counted(command):
+        ran.append(command['id'])
+        return real(command)
+    runner.execute = counted
+
+    class Slow(set):
+        # Widens the moment between 'not seen yet' and 'mine now', where
+        # the old code let a second thread in.
+        def __contains__(self, item):
+            found = set.__contains__(self, item)
+            time.sleep(0.002)
+            return found
+    runner.seen = Slow(runner.seen)
+    threads = [threading.Thread(target=runner.drain) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(ran) == 30 and len(set(ran)) == 30   # each exactly once
+    assert not [p for p in tmp_path.iterdir() if p.name.endswith('.tmp')]
+    import json
+    assert len(json.load(open(tmp_path / 'results.json'))) == 30

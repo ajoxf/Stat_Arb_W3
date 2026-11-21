@@ -320,3 +320,22 @@ def test_an_inverse_contract_is_refused_and_says_why(sim, tmp_path):
     assert not report['found']
     assert 'coin-margined (inverse)' in report['error']
     assert 'BTC-USD_UM-261225' in report['error']   # what to use instead
+
+
+def test_candles_through_okxs_rate_limit_are_asked_again(broker, sim):
+    """OKX allows about 20 history-candle requests per 2 s. A 15m chart
+    is two dozen pages; a refusal for the rate (50011) cut a leg's
+    history short. It is now waited out and asked again."""
+    real = broker.client.get
+    refused = []
+
+    def limited(path, params=None, private=False):
+        if path.endswith('history-candles') and len(refused) < 2:
+            refused.append(path)
+            raise OKXError('OKX 50011: Too Many Requests', code='50011')
+        return real(path, params, private)
+    broker.client.get = limited
+    bars = broker.rates('BTC-USDT-SWAP', 5, 600)
+    assert len(refused) == 2
+    assert len(bars) == 600
+    assert all('open' in b for b in bars)

@@ -20,6 +20,7 @@ the process that was running when it was written, and never again.
 import json
 import logging
 import os
+import threading
 import time
 import uuid
 
@@ -85,6 +86,13 @@ class CommandRunner:
         self.seen = set()
         self.primed = False
         self.results = {}
+        #: Two threads drain: the engine's command thread, and the poll
+        #: loop (so a click still runs while the command thread is busy
+        #: with a slow reading such as a chart's history). A command is
+        #: CLAIMED under this lock, so the two can never both run it, and
+        #: results are written one writer at a time.
+        self._claim = threading.Lock()
+        self._publishing = threading.Lock()
 
     def prime(self):
         """Everything already written happened in a previous life."""
@@ -105,9 +113,10 @@ class CommandRunner:
                                'would replay the whole command history')
         done = []
         for command in self.log.read_all():
-            if command['id'] in self.seen:
-                continue
-            self.seen.add(command['id'])
+            with self._claim:
+                if command['id'] in self.seen:
+                    continue
+                self.seen.add(command['id'])
             result = self.execute(command)
             self.results[command['id']] = result
             done.append(result)
@@ -135,12 +144,22 @@ class CommandRunner:
     def publish(self):
         """Results, through a tmp file and `os.replace` like everything
         else the web process reads while we write it."""
-        tmp = self.results_path + '.tmp'
-        with open(tmp, 'w', encoding='utf-8') as f:
-            # Bounded: this is a UI convenience, not the audit trail.
-            recent = dict(list(self.results.items())[-200:])
-            json.dump(recent, f, default=str)
-        atomicfile.replace(tmp, self.results_path)
+        # One writer at a time, through its OWN tmp file: two threads
+        # sharing one tmp name on Windows lost an answer (the second
+        # rename found nothing, or the open was refused), and the screen
+        # waited for a result that was never on disk.
+        with self._publishing:
+            tmp = (f'{self.results_path}.{os.getpid()}.'
+                   f'{threading.get_ident()}.tmp')
+            with open(tmp, 'w', encoding='utf-8') as f:
+                # Bounded: this is a UI convenience, not the audit trail.
+                recent = dict(list(self.results.items())[-200:])
+                json.dump(recent, f, default=str)
+            if not atomicfile.replace(tmp, self.results_path):
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
 
     # -- the commands themselves --------------------------------------------
 

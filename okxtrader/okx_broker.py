@@ -604,7 +604,7 @@ class OKXBroker:
                                            wanted - len(out)))}
                 if after:
                     params['after'] = after
-                page = self.client.get(path, params)
+                page = self._candle_page(path, params)
                 if not page:
                     break
                 out.extend(page)
@@ -617,10 +617,47 @@ class OKXBroker:
                 return None
         if not out:
             return None
-        bars = [{'time': int(int(r[0]) / 1000), 'close': float(r[4]),
-                 'spread': 0, 'point': point} for r in out[:wanted]]
+        bars = [{'time': int(int(r[0]) / 1000), 'open': float(r[1]),
+                 'close': float(r[4]), 'spread': 0, 'point': point}
+                for r in out[:wanted]]
         bars.sort(key=lambda b: b['time'])
         return bars
+
+    #: OKX allows about 20 history-candle requests per 2 s from one IP.
+    #: A 15m chart is two dozen pages; sent back to back from a PC close
+    #: to OKX they ran into that limit and a leg's history came back
+    #: short or not at all. Spaced, and a refusal for the rate waited
+    #: out and asked again.
+    HISTORY_GAP_SEC = 0.12
+    RATE_LIMIT_WAIT_SEC = 1.0
+    RATE_LIMIT_TRIES = 3
+    _history_lock = threading.Lock()
+    _history_last = 0.0
+
+    def _candle_page(self, path, params):
+        """One page of candles, paced and retried through OKX's rate
+        limit (50011). Against the simulator (a transport, no network)
+        there is no limit and no wait."""
+        real = getattr(self.client, 'transport', None) is None
+        for attempt in range(self.RATE_LIMIT_TRIES):
+            if real:
+                with OKXBroker._history_lock:
+                    wait = (OKXBroker._history_last + self.HISTORY_GAP_SEC
+                            - time.monotonic())
+                    if wait > 0:
+                        time.sleep(wait)
+                    OKXBroker._history_last = time.monotonic()
+            try:
+                return self.client.get(path, params)
+            except OKXError as exc:
+                limited = str(getattr(exc, 'code', '') or '') == '50011' \
+                    or '50011' in str(exc)
+                if not limited or attempt + 1 >= self.RATE_LIMIT_TRIES:
+                    raise
+                logging.info('%s: OKX rate limit on candles - waiting %.1f s',
+                             params.get('instId'), self.RATE_LIMIT_WAIT_SEC)
+                if real:
+                    time.sleep(self.RATE_LIMIT_WAIT_SEC)
 
     def session_stats(self, symbol):
         """OKX's rolling 24 h figures: crypto has no session, and these

@@ -63,6 +63,11 @@
   align-items: center; column-gap: 6px; }
 .window.chartwin .cw-note { flex: 0 0 auto; white-space: nowrap;
   overflow: hidden; text-overflow: ellipsis; }
+/* An out-of-date history: said in red beside the timeframe, cut with
+ * "..." in a narrow window (all of it on hover). */
+.window.chartwin .cw-size.cw-stale { color: #dc3545; font-weight: 600;
+  min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; }
 
 /* THE TASKBAR, one line high whatever is open: every button on one
  * line, all the same height and centred. A long window name is cut

@@ -2282,6 +2282,16 @@ class Coordinator:
     CHART_HISTORY_SEC = 300.0
 
     def chart_history(self, pair_key, timeframe_min=15):
+        """`_read_chart_history`, with every refusal written to the log: the
+        screen keeps drawing the last history it has, so a refresh that
+        fails is otherwise seen only as a chart that stops moving."""
+        answer = self._read_chart_history(pair_key, timeframe_min)
+        if not answer.get('ok'):
+            logging.warning('chart %s %sm: no fresh history - %s', pair_key,
+                            timeframe_min, answer.get('reason'))
+        return answer
+
+    def _read_chart_history(self, pair_key, timeframe_min=15):
         """One ladder's spread as CANDLES of `timeframe_min` (15, 60 or
         240), from MT5's own bars for both legs - full the moment the
         engine starts, and days long. Reads only; sends nothing.
@@ -2369,7 +2379,21 @@ class Coordinator:
                 json.dump({f'{key}#{tf}': body
                            for (key, tf), (_, body) in list(cache.items())},
                           f)
-            atomicfile.replace(tmp, target)
+            written = atomicfile.replace(tmp, target)
+        if not written:
+            # Not kept either: a history held here but not on disk was
+            # answered from this cache for five minutes while the screen
+            # read the old file - a chart frozen hours back, saying
+            # nothing.
+            cache.pop((pair_key, timeframe_min), None)
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            return {'ok': False,
+                    'reason': 'the candles were read from OKX but '
+                              'chart_history.json could not be written '
+                              '(held open by another program?)'}
         return self._history_summary(answer)
 
     @staticmethod
