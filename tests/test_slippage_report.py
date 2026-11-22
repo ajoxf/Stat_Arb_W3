@@ -289,3 +289,45 @@ def test_the_report_carries_the_fills():
     body = slippage.report([position(leg_a=_leg('SELL', 1.0, 1.0),
                                      leg_b=_leg('BUY', 2.0, 2.0))])
     assert body['fills']['summary']['measured'] == 2
+
+
+def test_a_24_7_desk_reads_the_last_24_hours_not_a_session():
+    """The MT5 desk's 16:55 cutoff put a trade at 16:03 in 'yesterday':
+    the tab was empty ten minutes after it closed. Round the clock, the
+    window is the last 24 hours, rolling."""
+    window = slippage.rolling_window(100000.0)
+    assert window['from'] == pytest.approx(100000.0 - 86400.0)
+    assert window['to'] == 100000.0
+    assert window['label'] == 'the last 24 hours'
+    assert 'all trades' in window['note']
+
+
+def test_the_slippage_page_on_a_24_7_desk_shows_the_last_day(tmp_path):
+    """Through the web app: a position opened 30 minutes ago is on the
+    tab whatever the hour, on the default 24/7 desk."""
+    import json
+    import time as _time
+    from okxtrader.database import Store
+    from okxtrader.webapp import create_app
+    config = tmp_path / 'config.json'
+    config.write_text(json.dumps({'accounts': {}, 'pairs': {},
+                                  'settings': {'MARKET_HOURS': '24/7'}}))
+    status = tmp_path / 'status.json'
+    status.write_text(json.dumps({'at': _time.time(), 'engine': 'up'}))
+    db_path = tmp_path / 'okxtrader.db'
+    store = Store(str(db_path))
+    now = _time.time()
+    from okxtrader.models import SpreadPosition
+    leg = {'side': 'BUY', 'volume': 1.0, 'price': 1.0, 'contract_size': 1.0,
+           'symbol': 'X', 'account': 'a'}
+    store.save_position(SpreadPosition.from_dict(dict(
+        position(position_id='P1'), side='BUY', entry_spread=1.0,
+        leg_a=dict(leg, side='SELL'), leg_b=leg,
+        opened_at=now - 1800, closed_at=now - 600)))
+    app = create_app(config_path=str(config), status_path=str(status),
+                     command_path=str(tmp_path / 'commands.jsonl'),
+                     results_path=str(tmp_path / 'results.json'),
+                     db_path=str(db_path))
+    body = app.test_client().get('/api/slippage').get_json()
+    assert body['ok'] and body['window']['label'] == 'the last 24 hours'
+    assert body['counts']['positions'] == 1

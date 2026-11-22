@@ -490,10 +490,15 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
         settings.update(raw.get('settings') or {})
         snapshot = status()
         offset = ((snapshot.get('broker_clock') or {}).get('offset_sec'))
-        window = slippage.session_window(
-            time.time(), offset,
-            settings.get('OVERNIGHT_CLOSE_HOUR', 16),
-            settings.get('OVERNIGHT_CLOSE_MINUTE', 55))
+        if str(settings.get('MARKET_HOURS', '24/7')).upper() == '24/7':
+            # Round the clock: the last 24 hours, not a session cut at
+            # an MT5 desk's 16:55.
+            window = slippage.rolling_window(time.time())
+        else:
+            window = slippage.session_window(
+                time.time(), offset,
+                settings.get('OVERNIGHT_CLOSE_HOUR', 16),
+                settings.get('OVERNIGHT_CLOSE_MINUTE', 55))
         if request.args.get('session') == 'all':
             window = dict(window, **{
                 'from': None,

@@ -66,6 +66,22 @@ def session_window(now, offset_sec, close_hour=16, close_minute=55):
             'note': note, 'offset_sec': offset_sec}
 
 
+def rolling_window(now, hours=24.0):
+    """The last `hours`, for a desk that trades round the clock.
+
+    A 24/7 market has no session to cut: the MT5 desk's 16:55 cutoff
+    put a trade at 16:03 in 'yesterday' and showed an empty tab ten
+    minutes after it closed. The last day, rolling, is what a trader
+    opening this tab means by 'my recent fills'.
+    """
+    return {'from': now - hours * 3600.0, 'to': now, 'clock': 'rolling',
+            'cutoff': None, 'label': f'the last {hours:g} hours',
+            'note': ('rolling: this desk trades 24/7, so there is no '
+                     'session to cut - tick "all trades" for '
+                     'everything recorded'),
+            'offset_sec': None}
+
+
 def money(points, position):
     """`points` of spread, in dollars, for this position.
 

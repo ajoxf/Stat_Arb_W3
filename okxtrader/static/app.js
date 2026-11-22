@@ -6290,7 +6290,7 @@
     var report = state.slippage;
     var html = '<div class="journal-controls">' +
       '<label class="check"><input type="checkbox" class="all-sessions"' +
-      (state.slippageAll ? ' checked' : '') + '> every session</label>' +
+      (state.slippageAll ? ' checked' : '') + '> all trades</label>' +
       '<a class="btn" href="/api/slippage.csv' +
       (state.slippageAll ? '?session=all' : '') + '" download>Export CSV</a>' +
       '<span class="hint">Measured on the fills the broker actually gave ' +
@@ -6303,20 +6303,21 @@
 
     var window_ = report.window || {};
     var journal = report.journal;
-    html += '<div class="hint">Session <b>' + (window_.label || DASH) +
+    html += '<div class="hint">Showing <b>' + (window_.label || DASH) +
       '</b> \u00b7 ' + report.counts.positions + ' positions (' +
       report.counts.open + ' still open) \u00b7 ' + (journal
         ? journal.fills + ' of our fills at the broker over the same window'
         : 'the journal could not be counted') + '</div>';
     if (window_.note) {
-      html += '<div class="' + (window_.clock === 'broker' ? 'hint' : 'note') +
+      html += '<div class="' + (window_.clock !== 'machine' ? 'hint' : 'note') +
         '">' + window_.note + '</div>';
     }
 
     if (!report.counts.positions) {
       return html + '<p class="note">nothing was traded in this window. ' +
         'That is not a slippage of zero \u2014 there is nothing to measure ' +
-        'yet.</p>';
+        'yet.' + (state.slippageAll ? '' : ' Tick <b>all trades</b> for ' +
+        'earlier ones.') + '</p>';
     }
 
     var o = report.overall || {};
