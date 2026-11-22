@@ -1342,6 +1342,16 @@
     var hedge = legs.hedge_pct;
     var hedgeOff = hedge !== null && hedge !== undefined &&
       Math.abs(hedge - 100) > 10;
+    // The ladder's beta drift: B / A at the mids against beta.
+    var market = row.market || {};
+    var ma = mid(market.leg_a_bid, market.leg_a_ask);
+    var mb = mid(market.leg_b_bid, market.leg_b_ask);
+    var betaDrift = row.hedge_ratio && ma && mb
+      ? ((mb / ma) / row.hedge_ratio - 1) * 100 : null;
+    if (betaDrift !== null && !isFinite(betaDrift)) { betaDrift = null; }
+    function signedPct(x, d) {
+      return (x >= 0 ? '+' : '\u2212') + Math.abs(x).toFixed(d) + '%';
+    }
     // The TRADE first - what one Algo trade is worth and ties up - and
     // one Qty after it, labelled as such: 'Notional / Qty' beside a
     // size of 30 read as the trade's own value.
@@ -1352,10 +1362,18 @@
          'the leverage OKX holds on each leg (cross). ' +
          (levCls ? 'The two legs differ: the lower one ties up more ' +
            'margin - set both in the OKX app.' : '')) +
-      kv('Hedge', hedge === null || hedge === undefined ? DASH
-         : fmt(hedge, 0) + '% of \u03b2', hedgeOff ? 'down' : 'up',
-         'leg A against what beta asks for one Qty of leg B: 100% is the ' +
-         'hedge. Far off it, the position is mostly ONE leg, not a spread') +
+      kv('Hedge drift', hedge === null || hedge === undefined ? DASH
+         : signedPct(hedge - 100, 1), hedgeOff ? 'down' : 'up',
+         'how far the LOTS are from the hedge beta asks for: leg A ' +
+         'against beta x leg B, for one Qty (' + (hedge === null ||
+         hedge === undefined ? DASH : fmt(hedge, 1) + '% of \u03b2') +
+         '). 0% is the exact hedge; red past \u00b110%, where the ' +
+         'position is mostly ONE leg, not a spread') +
+      kv('\u03b2 drift', betaDrift === null ? DASH : signedPct(betaDrift, 1),
+         betaDrift !== null && Math.abs(betaDrift) >= 5 ? 'down' : '',
+         'how far the legs\u2019 PRICE ratio is now from beta - the same ' +
+         'figure as under the ladder. Past 5% the spread starts to follow ' +
+         'one coin\u2019s own price: fix beta in Pairs > Edit') +
       kv('Trade size', notional === null ? DASH
          : money(notional * qty) + qtyWords, '',
          'one Algo trade: both legs\u2019 value at the mid now - leg A ' +

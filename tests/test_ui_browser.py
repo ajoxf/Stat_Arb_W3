@@ -7013,8 +7013,9 @@ def test_the_algo_window_shows_margin_and_leverage(page):
         size = page.locator('.window.algowin .aw-filters .aw-kv',
                             has_text='Size')
         assert '$20,378' in size.first.text_content()
-        assert '12% of' in stats                       # the hedge, flagged
-        hedge = page.locator('.window.algowin .aw-kv', has_text='Hedge')
+        assert '\u221288.3%' in stats                  # the hedge drift, flagged
+        assert '\u03b2 drift' in stats                  # the price ratio's
+        hedge = page.locator('.window.algowin .aw-kv', has_text='Hedge drift')
         assert hedge.locator('b.down').count() == 1
         lev = page.locator('.window.algowin .aw-kv', has_text='Leverage')
         assert lev.locator('b.down').count() == 1
