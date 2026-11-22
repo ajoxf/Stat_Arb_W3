@@ -7159,3 +7159,27 @@ def test_the_trading_monitor_can_be_maximized_and_restored(page):
     assert page.errors == []
     page.evaluate("""() => { const s = window.MT5Trader.state;
         s.open = []; window.MT5Trader.render(); }""")
+
+
+def test_the_trade_journal_is_the_first_table_on_the_analysis_tab(page):
+    """The table the Analysis tab is opened for comes first: the trade
+    journal, under 'What actually happened' and above the summary."""
+    page.errors.clear()
+    page.evaluate("""() => { const s = window.MT5Trader.state;
+        s.open = ['monitor:']; s.monitorTab = 'analysis';
+        s.analysis = {ok: true, names: {}, summary: {count: 1, closed: 1},
+          drawdown: {}, calibration: {}, shadow: {}, excursion: [],
+          signals: [], signal_tally: {}, journal: []};
+        s.analysisAt = Date.now(); window.MT5Trader.render(); }""")
+    page.wait_for_selector('.monitor .analysis table', timeout=WAIT)
+    first = page.locator('.monitor .analysis table').first
+    assert 'Running' in first.text_content()          # the journal's own
+    order = page.evaluate("""() => Array.from(document.querySelectorAll(
+        '.monitor .analysis h4')).map(h => h.textContent)""")
+    journal = next(i for i, h in enumerate(order)
+                   if h.startswith('Trade journal'))
+    summary = order.index('Summary')
+    assert journal < summary
+    assert page.errors == []
+    page.evaluate("""() => { const s = window.MT5Trader.state;
+        s.open = []; window.MT5Trader.render(); }""")

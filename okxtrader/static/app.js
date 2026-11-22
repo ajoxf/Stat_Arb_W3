@@ -7284,6 +7284,84 @@
         'down.</p>';
     }
 
+    // THE TRADE JOURNAL FIRST: every closed trade, the table this tab
+    // is opened for, ahead of the summaries built from it.
+    // 7. The journal.
+    //
+    // THE LEVELS ARE COLUMNS, not a sentence under the row. They were
+    // written as prose first - 'stop 71.40 = break-even 71.20 + 0.20
+    // . 2% of margin . closed 71.46, 0.06 past it' - and that reads
+    // fine for one trade and not at all for forty: a journal is a
+    // table, and a number worth printing is worth lining up down the
+    // page where it can be compared with the one above it.
+    var trips = a.journal || [];
+    var total = trips.length ? trips[0].cum_pnl : null;
+    html += '<h4>Trade journal <small>— ' + trips.length +
+      ' closed, running total ' + money(total) + '</small></h4>' +
+      '<table class="an-table"><thead><tr><th>Closed</th><th class="l">Pair</th>' +
+      '<th class="l">Side</th><th class="l">Who</th><th>Size</th><th>z in → out</th>' +
+      '<th>Spread in → out</th>' +
+      '<th title="After every cost. The level the other two are ' +
+      'measured from">Break-even</th>' +
+      '<th title="The take-profit this trade was given, and the ' +
+      'setting that put it there">Target</th>' +
+      '<th title="The stop this trade was given, and the setting that ' +
+      'put it there">Stop</th>' +
+      '<th title="How far past the level it was measured against the ' +
+      'close actually went">vs level</th>' +
+      '<th>Leg A in</th><th>Leg B in</th>' +
+      '<th>Held</th><th class="l">Exit</th><th>Net P&amp;L</th>' +
+      '<th title="net P&amp;L \u00f7 the margin BOTH legs tied up at entry - ' +
+      'the base the TP % and SL % are set on">% on margin</th>' +
+      '<th title="net P&amp;L \u00f7 both legs\u2019 face value at entry">' +
+      '% of notional</th>' +
+      '<th title="The margin BOTH legs tied up at entry \u00f7 the capital ' +
+      'managed (set above). Hover a cell for the money">Capital used</th>' +
+      '<th title="Both legs\u2019 face value at entry \u00f7 the capital ' +
+      'managed: 1.0x is a position as big as the capital">Exposure</th>' +
+      '<th title="net P&amp;L \u00f7 the capital managed">% on capital</th>' +
+      '<th>Running</th>' +
+      '</tr></thead><tbody>';
+    if (!trips.length) {
+      html += '<tr><td colspan="22" class="hint">no closed trade in this ' +
+        'window</td></tr>';
+    }
+    trips.forEach(function (t) {
+      var x = t.exit || {};
+      html += '<tr><td>' + anClock(t.closed_at) + '</td><td class="l">' +
+        name(t.pair_key) + '</td><td class="l">' + anSide(t.side) +
+        '</td><td class="l">' +
+        (t.source === 'ALGO' ? '<b>Algo</b>' : 'Manual') + '</td><td>' +
+        qty(t.quantity) + '</td><td>' + fmt(t.entry_z, 2) + ' → ' +
+        fmt(t.exit_z, 2) + '</td><td>' + fmt(t.entry_spread, 4) + ' → ' +
+        fmt(t.exit_spread, 4) + '</td>' +
+        anLevel(x.break_even, false, x.note) +
+        anLevel(x.tp, x.on_level === 'tp', x.note, x.sized_by,
+                x.level_money) +
+        anLevel(x.sl, x.on_level === 'sl', x.note, x.sized_by,
+                x.level_money) +
+        '<td>' + anGap(x) + '</td>' +
+        '<td>' + (t.leg_a.side || '') + ' ' + fmt(t.leg_a.entry, 3) +
+        '</td><td>' + (t.leg_b.side || '') + ' ' + fmt(t.leg_b.entry, 3) +
+        '</td><td>' + anHeld(t.held_sec) + '</td><td class="l">' +
+        escapeHtml(t.exit_reason || DASH) +
+        '</td><td class="' + anSign(t.pnl) + '">' + money(t.pnl) +
+        '</td>' + pctCell(t.pct_margin, 2, t.margin_estimated) +
+        pctCell(t.pct_notional, 3, false) +
+        '<td' + (t.margin ? ' title="' + escapeHtml(money(t.margin)) +
+          ' of margin"' : '') + '>' +
+        (t.pct_capital_used === null || t.pct_capital_used === undefined
+          ? DASH : fmt(t.pct_capital_used, 1) + '%') + '</td>' +
+        '<td' + (t.notional ? ' title="' + escapeHtml(money(t.notional)) +
+          ' of notional"' : '') + '>' +
+        (t.exposure === null || t.exposure === undefined ? DASH
+          : fmt(t.exposure, 2) + 'x') + '</td>' +
+        pctCell(t.pct_capital, 2, false) +
+        '<td class="' + anSign(t.cum_pnl) + '">' + money(t.cum_pnl) +
+        '</td></tr>';
+    });
+    html += '</tbody></table>';
+
     // 1. The summary.
     html += '<h4>Summary</h4><div class="an-tiles">' +
       anTile('Trades', s.count || 0) +
@@ -7412,81 +7490,6 @@
       html += '</tbody></table>';
     }
 
-    // 7. The journal.
-    //
-    // THE LEVELS ARE COLUMNS, not a sentence under the row. They were
-    // written as prose first - 'stop 71.40 = break-even 71.20 + 0.20
-    // . 2% of margin . closed 71.46, 0.06 past it' - and that reads
-    // fine for one trade and not at all for forty: a journal is a
-    // table, and a number worth printing is worth lining up down the
-    // page where it can be compared with the one above it.
-    var trips = a.journal || [];
-    var total = trips.length ? trips[0].cum_pnl : null;
-    html += '<h4>Trade journal <small>— ' + trips.length +
-      ' closed, running total ' + money(total) + '</small></h4>' +
-      '<table class="an-table"><thead><tr><th>Closed</th><th class="l">Pair</th>' +
-      '<th class="l">Side</th><th class="l">Who</th><th>Size</th><th>z in → out</th>' +
-      '<th>Spread in → out</th>' +
-      '<th title="After every cost. The level the other two are ' +
-      'measured from">Break-even</th>' +
-      '<th title="The take-profit this trade was given, and the ' +
-      'setting that put it there">Target</th>' +
-      '<th title="The stop this trade was given, and the setting that ' +
-      'put it there">Stop</th>' +
-      '<th title="How far past the level it was measured against the ' +
-      'close actually went">vs level</th>' +
-      '<th>Leg A in</th><th>Leg B in</th>' +
-      '<th>Held</th><th class="l">Exit</th><th>Net P&amp;L</th>' +
-      '<th title="net P&amp;L \u00f7 the margin BOTH legs tied up at entry - ' +
-      'the base the TP % and SL % are set on">% on margin</th>' +
-      '<th title="net P&amp;L \u00f7 both legs\u2019 face value at entry">' +
-      '% of notional</th>' +
-      '<th title="The margin BOTH legs tied up at entry \u00f7 the capital ' +
-      'managed (set above). Hover a cell for the money">Capital used</th>' +
-      '<th title="Both legs\u2019 face value at entry \u00f7 the capital ' +
-      'managed: 1.0x is a position as big as the capital">Exposure</th>' +
-      '<th title="net P&amp;L \u00f7 the capital managed">% on capital</th>' +
-      '<th>Running</th>' +
-      '</tr></thead><tbody>';
-    if (!trips.length) {
-      html += '<tr><td colspan="22" class="hint">no closed trade in this ' +
-        'window</td></tr>';
-    }
-    trips.forEach(function (t) {
-      var x = t.exit || {};
-      html += '<tr><td>' + anClock(t.closed_at) + '</td><td class="l">' +
-        name(t.pair_key) + '</td><td class="l">' + anSide(t.side) +
-        '</td><td class="l">' +
-        (t.source === 'ALGO' ? '<b>Algo</b>' : 'Manual') + '</td><td>' +
-        qty(t.quantity) + '</td><td>' + fmt(t.entry_z, 2) + ' → ' +
-        fmt(t.exit_z, 2) + '</td><td>' + fmt(t.entry_spread, 4) + ' → ' +
-        fmt(t.exit_spread, 4) + '</td>' +
-        anLevel(x.break_even, false, x.note) +
-        anLevel(x.tp, x.on_level === 'tp', x.note, x.sized_by,
-                x.level_money) +
-        anLevel(x.sl, x.on_level === 'sl', x.note, x.sized_by,
-                x.level_money) +
-        '<td>' + anGap(x) + '</td>' +
-        '<td>' + (t.leg_a.side || '') + ' ' + fmt(t.leg_a.entry, 3) +
-        '</td><td>' + (t.leg_b.side || '') + ' ' + fmt(t.leg_b.entry, 3) +
-        '</td><td>' + anHeld(t.held_sec) + '</td><td class="l">' +
-        escapeHtml(t.exit_reason || DASH) +
-        '</td><td class="' + anSign(t.pnl) + '">' + money(t.pnl) +
-        '</td>' + pctCell(t.pct_margin, 2, t.margin_estimated) +
-        pctCell(t.pct_notional, 3, false) +
-        '<td' + (t.margin ? ' title="' + escapeHtml(money(t.margin)) +
-          ' of margin"' : '') + '>' +
-        (t.pct_capital_used === null || t.pct_capital_used === undefined
-          ? DASH : fmt(t.pct_capital_used, 1) + '%') + '</td>' +
-        '<td' + (t.notional ? ' title="' + escapeHtml(money(t.notional)) +
-          ' of notional"' : '') + '>' +
-        (t.exposure === null || t.exposure === undefined ? DASH
-          : fmt(t.exposure, 2) + 'x') + '</td>' +
-        pctCell(t.pct_capital, 2, false) +
-        '<td class="' + anSign(t.cum_pnl) + '">' + money(t.cum_pnl) +
-        '</td></tr>';
-    });
-    html += '</tbody></table>';
 
     // The ALGO half: nothing below this line happened. It is
     // what these settings WOULD have done, which is a different
