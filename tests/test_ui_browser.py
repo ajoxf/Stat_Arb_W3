@@ -6986,7 +6986,9 @@ def test_the_algo_window_shows_margin_and_leverage(page):
     open_ladder(page)
     publisher = page.paths['publisher']
     publisher.algo = 'ALGO'
-    publisher.algo_block = _algo_block()
+    block = _algo_block()
+    block['filters'] = dict(block['filters'], qty=30)
+    publisher.algo_block = block
     was = dict(publisher.pair_extra)
     publisher.pair_extra.update({
         'leverage_a': 10, 'leverage_b': 1,
@@ -7001,6 +7003,16 @@ def test_the_algo_window_shows_margin_and_leverage(page):
         assert 'Margin & leverage' in stats
         assert 'A 10x' in stats and 'B 1x' in stats
         assert '$679.25' in stats                      # notional per Qty
+        # The TRADE first, labelled: 30 x $679.25, and its margin.
+        trade = page.locator('.window.algowin .aw-kv', has_text='Trade size')
+        assert '$20,377.50' in trade.text_content()
+        assert '30.00 Qty' in trade.text_content()
+        assert page.locator('.window.algowin .aw-kv',
+                            has_text='Per 1 Qty').count() == 1
+        # The Algo's size, in money as well: 30 x $679.25.
+        size = page.locator('.window.algowin .aw-filters .aw-kv',
+                            has_text='Size')
+        assert '$20,378' in size.first.text_content()
         assert '12% of' in stats                       # the hedge, flagged
         hedge = page.locator('.window.algowin .aw-kv', has_text='Hedge')
         assert hedge.locator('b.down').count() == 1

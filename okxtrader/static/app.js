@@ -1309,6 +1309,17 @@
   //: "-1234.56" in the tag's bold 11 px.
   var CHART_TAG_ROOM = 62;
 
+  function sizeDollars(row, qty) {
+    /* ' · $3,563': a size in spreads as money, both legs together at
+     * the mid now. Nothing when a leg's price or size is not known. */
+    var legs = (row || {}).leg_notional || {};
+    if (legs.a === null || legs.a === undefined || legs.b === null ||
+        legs.b === undefined || !qty) { return ''; }
+    var total = (legs.a + legs.b) * qty;
+    return ' <small>\u00b7 $' + Math.round(total).toLocaleString('en-US') +
+      '</small>';
+  }
+
   function algoMarginHtml(row, qty) {
     /* MARGIN & LEVERAGE, in the Algo window: OKX's leverage on each leg,
      * what one Qty and one Algo trade tie up and are worth, that margin
@@ -1331,29 +1342,38 @@
     var hedge = legs.hedge_pct;
     var hedgeOff = hedge !== null && hedge !== undefined &&
       Math.abs(hedge - 100) > 10;
+    // The TRADE first - what one Algo trade is worth and ties up - and
+    // one Qty after it, labelled as such: 'Notional / Qty' beside a
+    // size of 30 read as the trade's own value.
+    var qtyWords = ' <small>(' + fmt(qty, 2) + ' Qty)</small>';
     return '<div class="aw-head">Margin &amp; leverage</div>' +
       '<div class="aw-grid">' +
       kv('Leverage', 'A ' + lev(la) + ' \u00b7 B ' + lev(lb), levCls,
          'the leverage OKX holds on each leg (cross). ' +
          (levCls ? 'The two legs differ: the lower one ties up more ' +
            'margin - set both in the OKX app.' : '')) +
-      kv('Margin / Qty', perQty ? money(perQty) : DASH, '',
-         'what one spread ties up at OKX, both legs' +
-         (exit.margin_source ? ' (' + exit.margin_source + ')' : '')) +
-      kv('Notional / Qty', notional === null ? DASH : money(notional), '',
-         'leg A ' + money(legs.a) + ' + leg B ' + money(legs.b)) +
-      kv('Algo trade', trade === null ? DASH
-         : money(trade) + ' <small>(' + fmt(qty, 2) + ' Qty)</small>', '',
-         'the margin one Algo trade ties up; position ' +
-         (notional === null ? DASH : money(notional * qty))) +
-      kv('Of equity', share === null ? DASH : fmt(share, 1) + '%',
-         share !== null && share > 50 ? 'down' : '',
-         'one Algo trade\u2019s margin against the account\u2019s equity' +
-         (equity ? ' (' + money(equity) + ')' : '')) +
       kv('Hedge', hedge === null || hedge === undefined ? DASH
          : fmt(hedge, 0) + '% of \u03b2', hedgeOff ? 'down' : 'up',
          'leg A against what beta asks for one Qty of leg B: 100% is the ' +
          'hedge. Far off it, the position is mostly ONE leg, not a spread') +
+      kv('Trade size', notional === null ? DASH
+         : money(notional * qty) + qtyWords, '',
+         'one Algo trade: both legs\u2019 value at the mid now - leg A ' +
+         money(legs.a === null || legs.a === undefined ? null : legs.a * qty) +
+         ', leg B ' +
+         money(legs.b === null || legs.b === undefined ? null : legs.b * qty)) +
+      kv('Trade margin', trade === null ? DASH : money(trade), '',
+         'what one Algo trade ties up at OKX, both legs' +
+         (exit.margin_source ? ' (' + exit.margin_source + ')' : '')) +
+      kv('Of equity', share === null ? DASH : fmt(share, 1) + '%',
+         share !== null && share > 50 ? 'down' : '',
+         'one Algo trade\u2019s margin against the account\u2019s equity' +
+         (equity ? ' (' + money(equity) + ')' : '')) +
+      kv('Per 1 Qty', (notional === null ? DASH : money(notional)) +
+         ' <small>\u00b7 margin ' + (perQty ? money(perQty) : DASH) +
+         '</small>', '',
+         'ONE spread (one Qty): leg A ' + money(legs.a) + ' + leg B ' +
+         money(legs.b) + ', and the margin it ties up') +
       '</div>';
   }
 
@@ -3971,7 +3991,9 @@
           : Math.floor(first.age_sec / 60) + 'm ' +
             Math.floor(first.age_sec % 60) + 's' +
             (first.combined ? ' <small>(oldest)</small>' : '')) +
-        kv('Size', fmt(first.quantity, 2) + ' spread(s)') +
+        kv('Size', fmt(first.quantity, 2) + ' spread(s)' +
+           sizeDollars(row, first.quantity), '',
+           'both legs\u2019 value at the mid now, for this size') +
         '</div>' +
         kv('Levels', 'BE ' + fmt(first.break_even, digits) + ' · TP ' +
            (first.tp === null || first.tp === undefined ? DASH
@@ -4084,7 +4106,9 @@
           ? '/' + params.max_trades_day : '') + ' trades · ' +
           (day.losses_row || 0) + ' in a row · ' + moneyOr(day.pnl),
          '', 'the day\u2019s limits stop entries, never exits', true) +
-      kv('Size', fmt(filters.qty || params.algo_qty || 1, 2) + ' spread(s)') +
+      kv('Size', fmt(filters.qty || params.algo_qty || 1, 2) + ' spread(s)' +
+         sizeDollars(row, filters.qty || params.algo_qty || 1), '',
+         'one Algo trade: both legs\u2019 value at the mid now') +
       '</div><div class="aw-blocked"><div class="aw-head2">Last signal blocked'
       + '</div>' + (last
         ? '<div><b>' + escapeHtml(sideWords(last.side)) + '</b>' +
