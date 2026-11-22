@@ -90,6 +90,17 @@ def btc_dominance_text(reading):
     return text
 
 
+def mean_words(block):
+    """'-17.583  (σ 4.26)': the Algo's band middle and its sigma, or a
+    dash before the band has its candles."""
+    mean = (block or {}).get('mean')
+    if mean is None:
+        return '—'
+    sigma = (block or {}).get('sigma')
+    return plain(mean, 3, True) + (f'  (σ {plain(sigma, 2)})'
+                                   if sigma is not None else '')
+
+
 def next_funding(now):
     """(hh:mm UTC, minutes until) of the next OKX funding."""
     t = time.gmtime(now)
@@ -298,12 +309,21 @@ def side_words(side):
     return {'SELL': 'H to L', 'BUY': 'L to H'}.get(side, side or '?')
 
 
+#: The widest a label column is padded to; a longer label pushes only
+#: its own line's value along.
+LABEL_WIDTH_MAX = 14
+
+
 def table(rows):
-    """Rows of (label, value) the way Stat_Arb_W3 writes them: a bold
-    label, two spaces, the value in code type - which Telegram draws
-    larger and clearer than a monospace block, each number in its own
-    box. `None` is a blank line between groups. Values are raw text,
+    """Rows of (label, value): the label in bold code type, PADDED to the
+    widest label in this table, then the value in code type. Code type
+    is monospace, so every value starts in the same column - and it is
+    the larger type Telegram draws inline, not a monospace block's smaller
+    one. `None` is a blank line between groups. Values are raw text,
     escaped here once."""
+    labels = [str(row[0]).strip() for row in rows if row is not None]
+    width = min(max((len(label) for label in labels), default=0),
+                LABEL_WIDTH_MAX)
     lines = []
     for row in rows:
         if row is None:
@@ -311,8 +331,8 @@ def table(rows):
             continue
         label, value = row
         text = '—' if value is None or value == '' else str(value)
-        lines.append(f'<b>{esc(str(label).strip())}</b>  '
-                     f'<code>{esc(text)}</code>')
+        lines.append(f'<b><code>{esc(str(label).strip().ljust(width))}'
+                     f'</code></b> <code>{esc(text)}</code>')
     return '\n'.join(lines)
 
 
@@ -1198,6 +1218,9 @@ class Bot:
                           'LIVE': 'Live'}[mode]),
                 ('Position', net_words(row)),
                 ('Z-score', plain(block.get('z_mid'), 4, True)),
+                # The band's middle the z is measured from (the Algo's
+                # EMA), and its sigma: where the spread reverts TO.
+                ('Mean', mean_words(block)),
                 ('Regime', (regime_now.get('state') or '—').lower()
                  .replace('_', ' ') if regime_now.get('state') else '—')]
         candles = filters_now.get('half_life_candles')
@@ -2260,6 +2283,9 @@ class AlertWatch:
                 None,
                 ('Position', net_words(row)),
                 ('Z-score', plain(block.get('z_mid'), 4, True)),
+                # The band's middle the z is measured from (the Algo's
+                # EMA), and its sigma: where the spread reverts TO.
+                ('Mean', mean_words(block)),
                 ('Regime', (regime.get('state') or '—').lower()
                  .replace('_', ' ') if regime.get('state') else '—'),
                 # What this desk adds.

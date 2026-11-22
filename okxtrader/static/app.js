@@ -475,6 +475,11 @@
   //: How much of a window must stay on the desktop, in pixels.
   var KEEP_VISIBLE_PX = 90;
   var layout = readLayout();
+  //: Whether this browser came with a layout of its own. Decided at
+  //: load: the first redraw writes entries of its own, and reading
+  //: 'is the layout empty?' after it made a fresh browser ignore the
+  //: desk's saved layout whenever the redraw beat the answer.
+  var layoutWasLocal = Object.keys(layout).length > 0;
   var topZ = 10;
   //: Windows stack inside this band; the modal, the menu and the toasts
   //: live above it in ladder.css. topZ climbed with every click and
@@ -563,11 +568,16 @@
   function loadLayoutFromDesk() {
     /* This browser has no layout of its own (a new browser, a cleared
      * cache): take the desk's. */
-    if (Object.keys(layout).length) { return; }
+    if (layoutWasLocal) { return; }
     fetch('/api/layout').then(function (r) { return r.json(); })
       .then(function (body) {
-        if (!body || !body.layout || Object.keys(layout).length) { return; }
-        layout = body.layout;
+        if (!body || !body.layout || !Object.keys(body.layout).length) {
+          return;
+        }
+        // The desk's places win over the defaults the first redraws
+        // gave; anything only those redraws know is kept.
+        layout = Object.assign({}, layout, body.layout);
+        layoutWasLocal = true;
         try {
           window.localStorage.setItem(LAYOUT_KEY, JSON.stringify(layout));
         } catch (e) { /* ignore */ }
