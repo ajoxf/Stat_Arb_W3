@@ -444,6 +444,8 @@
         : node.classList.contains('settings') ? panelId('settings')
           : node.classList.contains('chartwin')
             ? panelId('chart', node.dataset.pair)
+          : node.classList.contains('calcwin')
+            ? panelId('calc', node.dataset.pair)
           : node.classList.contains('fairwin')
             ? panelId('fair', node.dataset.pair)
             : node.classList.contains('algowin')
@@ -715,7 +717,8 @@
       if (node.dataset.tidied) { return; }
       if (FLOATING_BY_DEFAULT.indexOf(id) >= 0) { floatByDefault(node, id); }
       else if (node.classList.contains('fairwin') ||
-               node.classList.contains('algowin')) {
+               node.classList.contains('algowin') ||
+               node.classList.contains('calcwin')) {
         fairFloatByDefault(node, id);
       }
       else if (node.classList.contains('chartwin')) {
@@ -1308,6 +1311,284 @@
   //: The right margin a chart with a price tag keeps for it: room for
   //: "-1234.56" in the tag's bold 11 px.
   var CHART_TAG_ROOM = 62;
+
+  // -- the position calculator -------------------------------------------
+
+  //: OKX's lowest-tier maintenance margin on USDT perpetuals (0.4%):
+  //: where cross margin starts liquidating, for the estimate below.
+  var CALC_MMR = 0.004;
+  //: OKX's standard (Lv1) USDT-perpetual fees in bp, for when the
+  //: account's own have not been read.
+  var CALC_STANDARD_FEES = {maker: {a: 2.0, b: 2.0},
+                            taker: {a: 5.0, b: 5.0}};
+
+  function calcPosition(inp, ctx) {
+    /* Capital at risk for one spread trade. Pure arithmetic, so it can
+     * be checked with a calculator:
+     *   one Qty = perA + perB of position (each leg's lots x contract x
+     *     mid), and `point` dollars per point of spread (leg B's units);
+     *   margin = each leg over its own leverage;
+     *   fees = both legs, in AND out, at the chosen rate;
+     *   loss at the stop and profit at the target are the spread's move
+     *     times the dollars per point, fees on top.
+     * Returns null for anything that cannot be worked out. */
+    var out = {error: null};
+    var perA = ctx.perA, perB = ctx.perB, point = ctx.point;
+    var levA = inp.levA || ctx.levA, levB = inp.levB || ctx.levB;
+    if (!perA || !perB || !point) {
+      out.error = 'this ladder has no live price or lots yet';
+      return out;
+    }
+    if (!levA || !levB) {
+      out.error = 'OKX\u2019s leverage on ' + (!levA && !levB ? 'both legs'
+        : (!levA ? 'leg A' : 'leg B')) + ' is not known yet - type it ' +
+        'in Leverage A / B';
+      return out;
+    }
+    var perQty = perA + perB;
+    var marginPerQty = perA / levA + perB / levB;
+    var feeKind = inp.fees === 'taker' ? 'taker' : 'maker';
+    var feeRate = (ctx.fees || {})[feeKind];
+    // The account's own rates not read yet: OKX's standard USDT-perp
+    // rates, and said - never a silent zero.
+    out.feesStandard = !feeRate;
+    feeRate = feeRate || CALC_STANDARD_FEES[feeKind];
+    var feesPerQty = 2 * (perA * feeRate.a + perB * feeRate.b) / 1e4;
+    var size = Number(inp.size) || 0;
+    var qty = inp.sizeBy === 'MARGIN' ? size / marginPerQty
+      : inp.sizeBy === 'NOTIONAL' ? size / perQty : size;
+    out.qty = qty;
+    out.notionalA = perA * qty;
+    out.notionalB = perB * qty;
+    out.notional = perQty * qty;
+    out.marginA = perA / levA * qty;
+    out.marginB = perB / levB * qty;
+    out.margin = marginPerQty * qty;
+    out.levA = levA;
+    out.levB = levB;
+    out.point = point * qty;
+    out.fees = feesPerQty * qty;
+    out.breakEvenPts = out.point ? out.fees / out.point : null;
+    var capital = inp.capital || ctx.equity || null;
+    out.capital = capital;
+    out.marginPct = capital ? out.margin / capital * 100 : null;
+    var sign = inp.side === 'SELL' ? -1 : 1;
+    var entry = (inp.entry === null || inp.entry === undefined ||
+                 inp.entry === '' || isNaN(inp.entry))
+      ? (inp.side === 'SELL' ? ctx.bid : ctx.ask) : Number(inp.entry);
+    out.entry = entry;
+    function level(x) {
+      return x === null || x === undefined || x === '' || isNaN(x)
+        ? null : Number(x);
+    }
+    var sl = level(inp.sl), tp = level(inp.tp);
+    if (sl !== null && entry !== null && entry !== undefined) {
+      var dist = sign * (entry - sl);
+      out.stopPts = dist;
+      if (dist <= 0) {
+        out.stopError = 'the stop is on the wrong side of the entry';
+      } else {
+        out.lossGross = dist * out.point;
+        out.loss = out.lossGross + out.fees;
+        out.lossPct = capital ? out.loss / capital * 100 : null;
+        out.lossOfMargin = out.margin ? out.loss / out.margin * 100 : null;
+        // The size that loses exactly the risk % at this stop, fees in.
+        var risk = capital && inp.riskPct ? capital * inp.riskPct / 100
+          : null;
+        var lossPerQty = dist * point + feesPerQty;
+        out.riskMoney = risk;
+        out.riskQty = risk ? risk / lossPerQty : null;
+        out.riskNotional = out.riskQty === null ? null
+          : out.riskQty * perQty;
+        out.riskMargin = out.riskQty === null ? null
+          : out.riskQty * marginPerQty;
+      }
+    }
+    if (tp !== null && entry !== null && entry !== undefined) {
+      var gain = sign * (tp - entry);
+      out.targetPts = gain;
+      if (gain <= 0) {
+        out.targetError = 'the target is on the wrong side of the entry';
+      } else {
+        out.profit = gain * out.point - out.fees;
+        out.profitPct = capital ? out.profit / capital * 100 : null;
+      }
+    }
+    if (out.loss && out.profit !== undefined) {
+      out.rr = out.profit / out.loss;
+    }
+    // Cross margin: the account goes to liquidation when its equity
+    // falls to the maintenance margin. With nothing else open, that is
+    // this many points against the trade.
+    if (capital && out.point) {
+      var room = capital - CALC_MMR * out.notional;
+      out.liqPts = room > 0 ? room / out.point : 0;
+      out.liqLevel = entry === null || entry === undefined ? null
+        : entry - sign * out.liqPts;
+      // A spread is leg B less beta x leg A: a move bigger than leg B's
+      // own price needs a coin below zero. Out of reach, said so.
+      out.liqOutOfReach = !!(ctx.priceB && out.liqPts >= ctx.priceB);
+    }
+    if (inp.stressPct) {
+      out.stressLoss = out.notionalB * inp.stressPct / 100;
+      out.stressPct = capital ? out.stressLoss / capital * 100 : null;
+    }
+    return out;
+  }
+
+  function calcNode(key) {
+    var existing = document.querySelector(
+      '.calcwin[data-pair="' + cssEscape(key) + '"]');
+    if (existing) { return existing; }
+    var node = el('calc-template').content.firstElementChild.cloneNode(true);
+    node.dataset.pair = key;
+    node.querySelector('.close').addEventListener('click', function () {
+      closePanel(panelId('calc', key));
+    });
+    // Every input recomputes at once; the figures are redrawn on every
+    // snapshot as well, so they follow the live price.
+    node.querySelector('.pc-form').addEventListener('input', function () {
+      renderCalcWindow(key, (state.snapshot.pairs || {})[key] || {});
+    });
+    node.querySelector('.pc-form').addEventListener('change', function () {
+      renderCalcWindow(key, (state.snapshot.pairs || {})[key] || {});
+    });
+    // A first size: the ladder's own Qty.
+    var row = (state.snapshot.pairs || {})[key] || {};
+    node.querySelector('.pc-size').value = row.default_quantity || 1;
+    el('desktop').appendChild(node);
+    return node;
+  }
+
+  function renderCalcWindow(key, row) {
+    var node = calcNode(key);
+    node.querySelector('.pc-pair').textContent =
+      (row.name || key) + ' · Calc';
+    function val(cls) { return node.querySelector(cls).value; }
+    function num(cls) {
+      var v = val(cls);
+      return v === '' ? null : Number(v);
+    }
+    var sizeBy = val('.pc-size-by');
+    node.querySelector('.pc-size-label').textContent = sizeBy === 'MARGIN'
+      ? 'Total margin $' : sizeBy === 'NOTIONAL' ? 'Position $' : 'Qty';
+    var market = row.market || {};
+    var legs = row.leg_notional || {};
+    var midB = mid(market.leg_b_bid, market.leg_b_ask);
+    var fees = row.fee_bps || {};
+    function rate(kind) {
+      var a = (fees.a || {})[kind], b = (fees.b || {})[kind];
+      return a === undefined || b === undefined ? null : {a: a, b: b};
+    }
+    var accounts = (state.snapshot || {}).accounts || {};
+    var ctx = {perA: legs.a, perB: legs.b,
+               point: legs.b && midB ? legs.b / midB : null,
+               priceB: midB,
+               levA: row.leverage_a, levB: row.leverage_b,
+               fees: {maker: rate('maker'), taker: rate('taker')},
+               bid: market.short_spread, ask: market.long_spread,
+               equity: (accounts[row.account_a] || {}).equity};
+    // What blank means, said in the boxes themselves.
+    node.querySelector('.pc-lev-a').placeholder =
+      row.leverage_a ? fmt(row.leverage_a, 0) + 'x' : 'OKX';
+    node.querySelector('.pc-lev-b').placeholder =
+      row.leverage_b ? fmt(row.leverage_b, 0) + 'x' : 'OKX';
+    node.querySelector('.pc-capital').placeholder =
+      ctx.equity ? Math.round(ctx.equity) : 'equity';
+    var side = val('.pc-side');
+    var now = side === 'SELL' ? ctx.bid : ctx.ask;
+    node.querySelector('.pc-entry').placeholder =
+      now === null || now === undefined ? 'now' : 'now ' + fmt(now, 2);
+    var r = calcPosition({
+      side: side, sizeBy: sizeBy, size: num('.pc-size'),
+      entry: num('.pc-entry'), sl: num('.pc-sl'), tp: num('.pc-tp'),
+      levA: num('.pc-lev-a'), levB: num('.pc-lev-b'),
+      fees: val('.pc-fees'), capital: num('.pc-capital'),
+      riskPct: num('.pc-risk'), stressPct: num('.pc-stress')}, ctx);
+    var out = node.querySelector('.pc-out');
+    if (r.error) {
+      out.innerHTML = '<div class="hint">' + escapeHtml(r.error) + '</div>';
+      return;
+    }
+    function k(label, value, cls, title, wide) {
+      return '<div class="pc-kv' + (wide ? ' wide' : '') + '"' +
+        (title ? ' title="' + escapeHtml(title) + '"' : '') + '><span>' +
+        label + '</span><b' + (cls ? ' class="' + cls + '"' : '') + '>' +
+        value + '</b></div>';
+    }
+    function pct(x, d) {
+      return x === null || x === undefined || !isFinite(x) ? DASH
+        : fmt(x, d === undefined ? 1 : d) + '%';
+    }
+    function pts(x) {
+      return x === null || x === undefined || !isFinite(x) ? DASH
+        : fmt(x, 2) + ' pts';
+    }
+    var html = '<div class="pc-head">Position</div><div class="pc-grid">' +
+      k('Qty', fmt(r.qty, 2)) +
+      k('Position', money(r.notional), '',
+        'leg A ' + money(r.notionalA) + ' + leg B ' + money(r.notionalB)) +
+      k('Margin', money(r.margin), '',
+        'leg A ' + money(r.marginA) + ' at ' + fmt(r.levA, 0) +
+        'x + leg B ' + money(r.marginB) + ' at ' + fmt(r.levB, 0) + 'x') +
+      k('Of capital', pct(r.marginPct), r.marginPct > 50 ? 'down' : '',
+        'margin against ' + money(r.capital)) +
+      k('$ per point', money(r.point)) +
+      k('Fees round trip', money(r.fees) +
+        (r.feesStandard ? ' <small>std</small>' : ''), '',
+        'both legs, in and out, ' + val('.pc-fees') +
+        (r.feesStandard ? ' - OKX’s standard rate (maker 2 / taker ' +
+          '5 bp): this account’s own has not been read' : '')) +
+      k('Break-even', pts(r.breakEvenPts), '',
+        'how far the spread must move to pay the fees') +
+      k('Entry', r.entry === null || r.entry === undefined ? DASH
+        : fmt(r.entry, 2)) +
+      '</div><div class="pc-head">At the stop and the target</div>' +
+      '<div class="pc-grid">';
+    if (r.stopError) {
+      html += k('Stop', r.stopError, 'down', '', true);
+    } else {
+      html += k('Stop distance', pts(r.stopPts)) +
+        k('Loss at stop', r.loss === undefined ? DASH : money(-r.loss),
+          r.loss === undefined ? '' : 'down', 'the move times $ per point, ' +
+          'plus fees') +
+        k('Of capital', pct(r.lossPct, 2), r.lossPct > 5 ? 'down' : '') +
+        k('Of margin', pct(r.lossOfMargin));
+    }
+    if (r.targetError) {
+      html += k('Target', r.targetError, 'down', '', true);
+    } else {
+      html += k('Target distance', pts(r.targetPts)) +
+        k('Profit at target', r.profit === undefined ? DASH
+          : money(r.profit), r.profit > 0 ? 'up' : '',
+          'the move times $ per point, less fees') +
+        k('Of capital', pct(r.profitPct, 2)) +
+        k('Reward : risk', r.rr === undefined ? DASH
+          : fmt(r.rr, 2) + ' : 1', r.rr >= 1 ? 'up' : (r.rr ? 'down' : ''));
+    }
+    html += '</div><div class="pc-head">Sizing and limits</div>' +
+      '<div class="pc-grid">' +
+      k('Size for ' + pct(num('.pc-risk'), 1) + ' risk',
+        r.riskQty === null || r.riskQty === undefined ? DASH
+          : fmt(r.riskQty, 2) + ' Qty', '',
+        'the size whose loss at this stop, fees in, is ' +
+        money(r.riskMoney) + ' - position ' + money(r.riskNotional) +
+        ', margin ' + money(r.riskMargin), true) +
+      k('Liquidation, est.', r.liqPts === undefined ? DASH
+        : r.liqOutOfReach ? 'out of reach at this size'
+        : pts(r.liqPts) + ' · at ' + fmt(r.liqLevel, 2),
+        r.liqOutOfReach ? 'up' : 'down',
+        'cross margin: how far against the trade the account’s ' +
+        'equity reaches OKX’s maintenance margin (0.4%), with nothing ' +
+        'else open. An estimate - other positions and funding move it',
+        true) +
+      k('Stress: leg B ' + pct(num('.pc-stress'), 0) + ' vs A',
+        r.stressLoss === undefined ? DASH : money(-r.stressLoss) +
+          ' · ' + pct(r.stressPct, 0) + ' of capital', 'down',
+        'what the hedge loses if leg B moves this far against leg A', true) +
+      '</div>';
+    out.innerHTML = html;
+  }
 
   function sizeDollars(row, qty) {
     /* ' · $3,563': a size in spreads as money, both legs together at
@@ -1921,6 +2202,12 @@
     node.querySelector('.chart-btn').addEventListener('click', function (e) {
       e.stopPropagation();
       toggleChart(key);
+    });
+    node.querySelector('.calc-btn').addEventListener('click', function (e) {
+      e.stopPropagation();
+      var id = panelId('calc', key);
+      if (state.open.indexOf(id) >= 0) { closePanel(id); }
+      else { openPanel(id); }
     });
     wireAlgoSwitch(node, key);
     node.querySelector('.order-type').addEventListener('change', function (e) {
@@ -7851,6 +8138,11 @@
       if (ladderBox) {
         ladderBox.classList.toggle('on', !!wanted[chartId]);
       }
+      var calcId = panelId('calc', key);
+      if (wanted[calcId]) { renderCalcWindow(key, snapshot.pairs[key]); }
+      var calcButton = document.querySelector(
+        '.ladder[data-pair="' + cssEscape(key) + '"] .calc-btn');
+      if (calcButton) { calcButton.classList.toggle('on', !!wanted[calcId]); }
       var algoId = panelId('algo', key);
       if (snapshot.pairs[key].algo_on) {
         if (state.open.indexOf(algoId) < 0 && !state.closed[algoId]) {
@@ -8024,6 +8316,7 @@
         : parts[0] === 'algo' ? pairName + ' · Algo'
           : parts[0] === 'fair' ? pairName + ' · Fair'
           : parts[0] === 'chart' ? pairName + ' · Chart'
+          : parts[0] === 'calc' ? pairName + ' · Calc'
             : parts[0] === 'grid' ? 'Market Grid'
               : parts[0] === 'settings' ? 'Exchanges' : 'Positions';
       var badge = '';
@@ -8425,6 +8718,7 @@
     fmt: fmt, money: money, DASH: DASH,
     tidyWindows: tidyWindows, sound: sound,
     showFairWindow: showFairWindow, setAlgo: setAlgo,
+    calcPosition: calcPosition,
     toastOutcome: toastOutcome
   };
 })();

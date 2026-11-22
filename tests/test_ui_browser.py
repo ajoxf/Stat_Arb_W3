@@ -7034,3 +7034,88 @@ def test_the_algo_window_shows_margin_and_leverage(page):
         publisher.algo = 'NONE'
         publisher.algo_block = None
         publisher.publish()
+
+
+def test_the_position_calculator_works_out_capital_at_risk(page):
+    """A calculator per ladder: size, stop and target in, capital at
+    risk out - at OKX's leverage and fees, from the ladder's own prices,
+    beta and lots. The arithmetic checked on the ETH vs BTC ladder's
+    numbers: one Qty $61.05 + $59.80, $0.035 a point, 20x both, maker
+    2 bp. A calculation only."""
+    ctx = {'perA': 61.05, 'perB': 59.80, 'point': 0.035, 'levA': 20,
+           'levB': 20, 'fees': {'maker': {'a': 2.0, 'b': 2.0},
+                                'taker': {'a': 5.0, 'b': 5.0}},
+           'bid': -19.33, 'ask': -19.32, 'equity': 2701.0}
+    r = page.evaluate("""([inp, ctx]) =>
+        window.MT5Trader.calcPosition(inp, ctx)""", [
+        {'side': 'BUY', 'sizeBy': 'QTY', 'size': 30, 'entry': -44,
+         'sl': -105, 'tp': -36, 'fees': 'maker', 'riskPct': 1,
+         'stressPct': 80}, ctx])
+    assert r['notional'] == pytest.approx(3625.5)
+    assert r['margin'] == pytest.approx(181.275)
+    assert r['point'] == pytest.approx(1.05)
+    assert r['fees'] == pytest.approx(2 * 120.85 * 2 / 1e4 * 30)   # $1.45
+    assert r['stopPts'] == pytest.approx(61)
+    assert r['loss'] == pytest.approx(61 * 1.05 + r['fees'])        # ~$65.5
+    assert r['profit'] == pytest.approx(8 * 1.05 - r['fees'])       # ~$6.95
+    assert r['lossPct'] == pytest.approx(r['loss'] / 2701 * 100)
+    # 1% of $2,701 at this stop: $27.01 over (61 x 0.035 + fees per Qty).
+    per_qty_loss = 61 * 0.035 + r['fees'] / 30
+    assert r['riskQty'] == pytest.approx(27.01 / per_qty_loss)
+    assert r['stressLoss'] == pytest.approx(0.8 * 59.80 * 30)
+    assert r['feesStandard'] is False
+    # Liquidation more points away than ETH's whole price: out of reach.
+    ctx_b = dict(ctx, priceB=1708.5)
+    r = page.evaluate("([inp, ctx]) => window.MT5Trader.calcPosition(inp, ctx)",
+                      [{'side': 'BUY', 'sizeBy': 'QTY', 'size': 30,
+                        'entry': -44, 'capital': 2701}, ctx_b])
+    assert r['liqOutOfReach'] is True
+    # The account's fees not read: OKX's standard, never a silent 0.
+    r = page.evaluate("([inp, ctx]) => window.MT5Trader.calcPosition(inp, ctx)",
+                      [{'side': 'BUY', 'sizeBy': 'QTY', 'size': 30,
+                        'fees': 'maker'}, dict(ctx, fees={})])
+    assert r['feesStandard'] is True and r['fees'] > 1.4
+    # Sized by total margin: $180 at $6.0425 a Qty.
+    r = page.evaluate("""([inp, ctx]) =>
+        window.MT5Trader.calcPosition(inp, ctx)""", [
+        {'side': 'SELL', 'sizeBy': 'MARGIN', 'size': 180, 'sl': -10,
+         'tp': -30, 'fees': 'taker'}, ctx])
+    assert r['qty'] == pytest.approx(180 / 6.0425)
+    assert r['entry'] == -19.33                    # a short: the bid now
+    assert r['stopPts'] == pytest.approx(9.33)
+    # A stop on the wrong side is said, not priced.
+    r = page.evaluate("""([inp, ctx]) =>
+        window.MT5Trader.calcPosition(inp, ctx)""", [
+        {'side': 'BUY', 'sizeBy': 'QTY', 'size': 1, 'entry': -44,
+         'sl': -30}, ctx])
+    assert 'wrong side' in r['stopError']
+    # The window, from the ladder's Calc button, and closed again.
+    open_ladder(page)
+    publisher = page.paths['publisher']
+    was = dict(publisher.pair_extra)
+    publisher.pair_extra.update({
+        'leverage_a': 20, 'leverage_b': 20,
+        'leg_notional': {'a': 61.05, 'b': 59.80, 'hedge_pct': 100.6},
+        'fee_bps': {'a': {'maker': 2.0, 'taker': 5.0},
+                    'b': {'maker': 2.0, 'taker': 5.0}}})
+    try:
+        publisher.publish()
+        page.errors.clear()
+        page.locator('.ladder .calc-btn').first.click()
+        page.wait_for_selector('.window.calcwin .pc-out .pc-kv',
+                               timeout=WAIT)
+        win = page.locator('.window.calcwin')
+        win.locator('.pc-sl').fill('50')
+        win.locator('.pc-sl').press('Tab')
+        text = win.text_content()
+        for word in ('Position', 'Margin', '$ per point', 'Fees round trip',
+                     'Loss at stop', 'Liquidation, est.', 'Stress'):
+            assert word in text, word
+        assert 'nothing here sends an order' in text
+        win.locator('.close').click()
+        assert page.locator('.window.calcwin').count() == 0
+        assert page.errors == []
+    finally:
+        publisher.pair_extra.clear()
+        publisher.pair_extra.update(was)
+        publisher.publish()

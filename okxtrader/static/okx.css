@@ -108,3 +108,40 @@
 /* The capital managed, on the Analysis bar: the bar's own small type. */
 .monitor .an-bar input.an-capital { font: 11px var(--font); width: 90px;
   margin-left: 2px; }
+
+/* THE POSITION CALCULATOR: the ladder's Calc button, styled as its
+ * Chart button, and the window - inputs in two columns above, the
+ * figures they come to below. */
+.window.ladder .calc-btn { font: 700 10px var(--font); padding: 0 6px;
+  margin-left: 4px; border: 1px solid rgba(0, 0, 0, .25); border-radius: 2px;
+  background: var(--chrome); cursor: pointer; white-space: nowrap;
+  flex-shrink: 0; }
+.window.ladder .calc-btn.on { background: #0d6efd; color: #fff;
+  border-color: #0d6efd; }
+.window.calcwin { width: 420px; }
+.window.calcwin .pc-body { padding: 6px 8px; overflow: auto;
+  font-size: 11px; }
+.window.calcwin .pc-form { display: grid; grid-template-columns: 1fr 1fr;
+  gap: 4px 10px; }
+.window.calcwin .pc-form label { display: flex; align-items: center;
+  justify-content: space-between; gap: 6px; min-width: 0; }
+.window.calcwin .pc-form label > span:first-child { color: var(--frame-muted);
+  white-space: nowrap; }
+.window.calcwin .pc-form input, .window.calcwin .pc-form select {
+  font: 11px var(--font); width: 92px; min-width: 0; }
+.window.calcwin .pc-pair-inputs { display: inline-flex; gap: 2px; }
+.window.calcwin .pc-pair-inputs input { width: 44px; }
+.window.calcwin .pc-out { margin-top: 8px; }
+.window.calcwin .pc-head { font-weight: 700; text-transform: uppercase;
+  font-size: 10px; color: var(--frame-muted); margin: 6px 0 2px;
+  border-bottom: 1px solid rgba(0, 0, 0, .12); }
+.window.calcwin .pc-grid { display: grid; grid-template-columns: 1fr 1fr;
+  gap: 1px 10px; }
+.window.calcwin .pc-kv { display: flex; justify-content: space-between;
+  gap: 6px; }
+.window.calcwin .pc-kv > span { color: var(--frame-muted); white-space: nowrap; }
+.window.calcwin .pc-kv > b { font: 700 11px var(--mono); text-align: right; }
+.window.calcwin .pc-kv > b.up { color: #2e9e4f; }
+.window.calcwin .pc-kv > b.down { color: #c0392b; }
+.window.calcwin .pc-kv.wide { grid-column: 1 / -1; }
+.window.calcwin .pc-note { margin-top: 6px; font-size: 10px; }

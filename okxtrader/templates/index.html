@@ -266,6 +266,57 @@
     </div>
   </section>
 </template>
+<!-- THE POSITION CALCULATOR, one per ladder: capital at risk for a
+     size, a stop and a target, at OKX's leverage and fees. Filled from
+     the ladder's live prices, beta and lots; every input can be typed
+     over. It works things out only - nothing here sends an order. -->
+<template id="calc-template">
+  <section class="window calcwin">
+    <div class="titlebar">
+      <span class="swatch"></span>
+      <span class="title pc-pair"></span>
+      <span class="winbtns"><button class="winbtn close" title="Close the calculator">&times;</button></span>
+    </div>
+    <div class="pc-body">
+      <div class="pc-form">
+        <label title="Long: buy the spread (L to H), it wins when the spread rises. Short: sell it (H to L), it wins when the spread falls.">
+          <span>Side</span>
+          <select class="pc-side"><option value="BUY">Long (L&#8594;H)</option><option value="SELL">Short (H&#8594;L)</option></select></label>
+        <label title="How the size is given: in Qty (the ladder&#8217;s lots per Qty), as the TOTAL margin both legs tie up, or as the total value of both legs.">
+          <span>Size by</span>
+          <select class="pc-size-by"><option value="QTY">Qty</option><option value="MARGIN">Total margin $</option><option value="NOTIONAL">Position $</option></select></label>
+        <label><span class="pc-size-label">Qty</span>
+          <input class="pc-size" type="number" min="0" step="any"></label>
+        <label title="The spread the trade is entered at. Blank: the price now - the ask for a long, the bid for a short.">
+          <span>Entry</span>
+          <input class="pc-entry" type="number" step="any" placeholder="now"></label>
+        <label title="The spread level the stop is at.">
+          <span>Stop loss</span>
+          <input class="pc-sl" type="number" step="any" placeholder="level"></label>
+        <label title="The spread level the target is at.">
+          <span>Take profit</span>
+          <input class="pc-tp" type="number" step="any" placeholder="level"></label>
+        <label title="Leverage on leg A and leg B. Blank: what OKX holds now.">
+          <span>Leverage A / B</span>
+          <span class="pc-pair-inputs"><input class="pc-lev-a" type="number" min="1" step="1" placeholder="OKX"><input class="pc-lev-b" type="number" min="1" step="1" placeholder="OKX"></span></label>
+        <label title="The fee rate both legs pay, in and out: maker (resting, post-only) or taker (crossing) - this account&#8217;s own OKX VIP rates.">
+          <span>Fees</span>
+          <select class="pc-fees"><option value="maker">Maker</option><option value="taker">Taker</option></select></label>
+        <label title="The capital the risk is measured against. Blank: the account&#8217;s equity now.">
+          <span>Capital $</span>
+          <input class="pc-capital" type="number" min="0" step="any" placeholder="equity"></label>
+        <label title="The most of the capital one trade may lose at its stop, after fees: the calculator gives the size that risks exactly this.">
+          <span>Risk per trade %</span>
+          <input class="pc-risk" type="number" min="0" step="0.1" value="1"></label>
+        <label title="A move of leg B against leg A, in %, for the stress line: what the hedge loses if the two coins come apart that far.">
+          <span>Stress move %</span>
+          <input class="pc-stress" type="number" min="0" step="1" value="80"></label>
+      </div>
+      <div class="pc-out"></div>
+      <div class="pc-note hint">A calculation only &mdash; nothing here sends an order. Prices, &beta;, lots, leverage and fees are this ladder&#8217;s, live; type over any of them.</div>
+    </div>
+  </section>
+</template>
 
 <!-- The Algo, one window per ladder while it is on: SIGNAL & POSITION,
      STATISTICS, FILTERS. Filled from the engine's Algo block on every
@@ -324,6 +375,7 @@
         </span>
       </span>
       <button type="button" class="chart-btn" title="Open or close this ladder&#8217;s chart: the Algo&#8217;s z with its entry and stop lines, and the spread">Chart</button>
+      <button type="button" class="calc-btn" title="Open or close this ladder&#8217;s position calculator: capital at risk for a size, a stop and a target, at OKX&#8217;s leverage and fees">Calc</button>
       <span class="winbtns"><button class="winbtn ladder-cog" title="This ladder's own settings — mode, exit costs, carry, Algo">&#9881;</button><button class="winbtn close" title="Close this ladder">&times;</button></span>
     </div>
     <div class="quotestrip">
