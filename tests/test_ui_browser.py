@@ -7127,3 +7127,35 @@ def test_the_position_calculator_works_out_capital_at_risk(page):
         publisher.pair_extra.clear()
         publisher.pair_extra.update(was)
         publisher.publish()
+
+
+def test_the_trading_monitor_can_be_maximized_and_restored(page):
+    """The Trading Monitor fills the desk from its own button, or a
+    double-click on its title bar, and the same again puts it back."""
+    page.errors.clear()
+    page.evaluate("""() => { const s = window.MT5Trader.state;
+        s.open = ['monitor:']; s.monitorTab = 'positions';
+        window.MT5Trader.render(); }""")
+    page.wait_for_selector('.window.monitor .winbtn.max', timeout=WAIT)
+    win = page.locator('.window.monitor')
+    before = win.bounding_box()
+    win.locator('.winbtn.max').click()
+    assert 'maximized' in win.get_attribute('class')
+    desk = page.locator('#desktop').bounding_box()
+    full = win.bounding_box()
+    assert full['width'] >= desk['width'] - 20
+    assert full['height'] >= desk['height'] - 20
+    # It stays maximized through the next redraw.
+    page.evaluate('() => window.MT5Trader.render()')
+    assert 'maximized' in win.get_attribute('class')
+    win.locator('.winbtn.max').click()
+    assert 'maximized' not in win.get_attribute('class')
+    assert win.bounding_box()['width'] == pytest.approx(before['width'], abs=2)
+    # A double-click on the title bar does the same.
+    win.locator('.titlebar .title').dblclick()
+    assert 'maximized' in win.get_attribute('class')
+    win.locator('.titlebar .title').dblclick()
+    assert 'maximized' not in win.get_attribute('class')
+    assert page.errors == []
+    page.evaluate("""() => { const s = window.MT5Trader.state;
+        s.open = []; window.MT5Trader.render(); }""")

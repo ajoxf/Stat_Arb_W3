@@ -796,6 +796,8 @@
     if (!bar) { return; }
     // The buttons and selects that live IN the title bar keep working.
     if (e.target.closest('button, select, input, a')) { return; }
+    // A maximized window stays put: restore it to move it.
+    if (node.classList.contains('maximized')) { return; }
 
     var box = node.getBoundingClientRect();
     var desktop = desktopOrigin();
@@ -8226,10 +8228,67 @@
         // come back to its own corner.
         ensureGrip(node);
         applyLayout(node);
+        applyMaximized(node);
       });
 
     renderTabs();
     revealPanel();
+  }
+
+  // -- maximize ------------------------------------------------------------
+  //
+  // The Trading Monitor, a Chart and the Calc can take the whole desk:
+  // the window's own button (or a double-click on its title bar) fills
+  // the space between the top bar and the taskbar, and the same again
+  // puts it back where it was. Per panel, kept across redraws.
+
+  //: The windows that can be maximized, by the class they carry.
+  var MAXIMIZABLE = ['monitor', 'chartwin', 'calcwin'];
+
+  function canMaximize(node) {
+    return MAXIMIZABLE.some(function (cls) {
+      return node.classList.contains(cls);
+    });
+  }
+
+  function applyMaximized(node) {
+    if (!canMaximize(node)) { return; }
+    var winbtns = node.querySelector('.titlebar .winbtns');
+    var button = winbtns && winbtns.querySelector('.winbtn.max');
+    if (winbtns && !button) {
+      button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'winbtn max';
+      winbtns.insertBefore(button, winbtns.firstChild);
+    }
+    var on = !!(state.maximized || {})[panelIdOf(node)];
+    if (on) {
+      // The desk's own box: below the top bar, above the taskbar.
+      var desk = el('desktop').getBoundingClientRect();
+      node.style.setProperty('--max-top', desk.top + 'px');
+      node.style.setProperty('--max-bottom',
+                             Math.max(0, window.innerHeight - desk.bottom) +
+                             'px');
+    }
+    node.classList.toggle('maximized', on);
+    if (button) {
+      button.innerHTML = on ? '&#10064;' : '&#9744;';
+      button.title = on ? 'Restore the window to its size and place'
+        : 'Maximize: fill the desk (double-click the title bar does too)';
+    }
+  }
+
+  function toggleMaximized(node) {
+    if (!node || !canMaximize(node)) { return; }
+    state.maximized = state.maximized || {};
+    var id = panelIdOf(node);
+    state.maximized[id] = !state.maximized[id];
+    applyMaximized(node);
+    // Charts draw at the size of their box: redraw at the new one.
+    if (node.classList.contains('chartwin')) {
+      node.dataset.drawn = '';
+      chartRedraw(node.dataset.pair);
+    }
   }
 
   function revealPanel() {
@@ -8737,6 +8796,20 @@
     // and go, and a listener per window is a listener per window to
     // forget.
     el('desktop').addEventListener('pointerdown', startDrag);
+    el('desktop').addEventListener('click', function (e) {
+      var button = e.target.closest('.winbtn.max');
+      if (button) { toggleMaximized(button.closest('.window')); }
+    });
+    el('desktop').addEventListener('dblclick', function (e) {
+      if (!e.target.closest('.titlebar') ||
+          e.target.closest('button, select, input, a')) { return; }
+      toggleMaximized(e.target.closest('.window'));
+    });
+    // The desk changes size with the browser: a maximized window follows.
+    window.addEventListener('resize', function () {
+      Array.prototype.forEach.call(
+        document.querySelectorAll('.window.maximized'), applyMaximized);
+    });
     el('tidy').addEventListener('click', tidyWindows);
     poll();
     window.setInterval(poll, REFRESH_MS);

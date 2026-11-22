@@ -154,3 +154,34 @@
 .slip-fills-head { margin: 2px 0 4px; font-size: 12px; }
 .slip-fills-head .down { color: #c0392b; }
 .slip-fills-head .up { color: #2e9e4f; }
+
+/* MAXIMIZED: the Trading Monitor, a Chart or the Calc filling the desk,
+ * between the top bar and the taskbar. Over the window's own size and
+ * place (kept, and back on restore). */
+.window.maximized {
+  position: fixed !important;
+  left: 4px !important; right: 4px !important;
+  top: var(--max-top, 40px) !important;
+  bottom: var(--max-bottom, 28px) !important;
+  width: auto !important; height: auto !important;
+  max-height: none !important;
+  z-index: 5000 !important;
+}
+.window.monitor.maximized > .pane { max-height: none; flex: 1 1 auto; }
+.window.chartwin.maximized .cw-body,
+.window.calcwin.maximized .pc-body { flex: 1 1 auto; min-height: 0; }
+.winbtn.max { margin-right: 2px; }
+
+/* The Analysis tables: room between columns, figures in one line and
+ * right-aligned, headers that wrap rather than squeeze the figures. */
+.monitor .an-table th { white-space: normal; vertical-align: bottom;
+  padding: 2px 6px; }
+.monitor .an-table td { padding: 2px 6px; white-space: nowrap; }
+.monitor .an-table td:not(.l) { text-align: right; }
+.monitor .an-table tbody tr:nth-child(even) td { background: rgba(0, 0, 0, .025); }
+/* Text columns (pair, exit, why) wrap; the figures never do. Held on
+ * one line, 'Algo: profit target (after costs)' pushed the last
+ * columns off a full-width screen. */
+.monitor .an-table td.l { white-space: normal; min-width: 70px;
+  max-width: 190px; }
+.monitor .an-table td.l .an-legs { white-space: nowrap; }
