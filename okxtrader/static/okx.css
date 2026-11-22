@@ -185,3 +185,7 @@
 .monitor .an-table td.l { white-space: normal; min-width: 70px;
   max-width: 190px; }
 .monitor .an-table td.l .an-legs { white-space: nowrap; }
+
+/* The desk scrolls DOWN as well as across: a window placed below the
+ * fold (a chart under a ladder) is reached by scrolling, never cut off. */
+#desktop { overflow-y: auto; }

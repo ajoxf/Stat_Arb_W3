@@ -7183,3 +7183,50 @@ def test_the_trade_journal_is_the_first_table_on_the_analysis_tab(page):
     assert page.errors == []
     page.evaluate("""() => { const s = window.MT5Trader.state;
         s.open = []; window.MT5Trader.render(); }""")
+
+
+def test_windows_snap_edge_to_edge_and_the_layout_is_kept_on_the_desk(page):
+    """A window dragged to within a few pixels of another's edge lands
+    exactly beside it. The layout - where each window is, and which
+    tools are open - is kept on the desk as well as in the browser: a
+    browser with none of its own (a cleared cache) gets the desk's back,
+    tools and all."""
+    open_ladder(page)
+    tidy(page)
+    page.errors.clear()
+    page.evaluate("() => window.MT5Trader.openPanel('monitor:')")
+    page.wait_for_selector('.window.monitor', timeout=WAIT)
+    settle(page, '.window.monitor')
+    ladder = page.locator('.window.ladder').first.bounding_box()
+    monitor = page.locator('.window.monitor').bounding_box()
+    # Aim 6 px short of the ladder's right edge (+ the 2 px gap): caught.
+    target_x = ladder['x'] + ladder['width'] + 2 + 6
+    drag(page, '.window.monitor', target_x - monitor['x'],
+         ladder['y'] + 40 - monitor['y'])
+    snapped = page.locator('.window.monitor').bounding_box()
+    assert snapped['x'] == pytest.approx(ladder['x'] + ladder['width'] + 2,
+                                         abs=1.5)
+    # Kept on the desk, a second after the change.
+    page.wait_for_timeout(1500)
+    saved = page.evaluate("""() => fetch('/api/layout').then(r => r.json())""")
+    if not saved['layout']:
+        probe = page.evaluate("""() => fetch('/api/layout', {method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({layout: {x: 1}})}).then(r => r.text())""")
+        raise AssertionError(probe)
+    assert 'monitor:' in saved['layout']
+    assert 'monitor:' in saved['layout'].get('_open', [])
+    # A browser with no layout of its own: the desk's comes back, the
+    # monitor open where it was.
+    page.evaluate("() => window.localStorage.clear()")
+    page.reload()
+    page.wait_for_selector('.window.monitor', timeout=WAIT)
+    settle(page, '.window.monitor')
+    back = page.locator('.window.monitor').bounding_box()
+    assert back['x'] == pytest.approx(snapped['x'], abs=2)
+    assert page.errors == []
+    # Leave the desk as found: the monitor closed, the desk tidy, and
+    # the desk's own copy saying so.
+    page.evaluate("() => window.MT5Trader.closePanel('monitor:')")
+    tidy(page)
+    page.wait_for_timeout(1500)

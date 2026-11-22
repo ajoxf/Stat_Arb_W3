@@ -423,6 +423,7 @@
     // sits off the right-hand edge, and "Positions opens into nothing"
     // is what that looks like from the outside.
     state.reveal = id;
+    writeLayout();
     render();
   }
 
@@ -431,6 +432,7 @@
     // Closing is a decision, and it is remembered: a ladder that came
     // back on the next poll would be a window that cannot be closed.
     state.closed[id] = true;
+    writeLayout();
     render();
   }
 
@@ -517,13 +519,77 @@
     }
   }
 
+  //: The windows whose being OPEN is part of the layout: the tools a
+  //: trader arranges (ladders open by themselves, the Algo window with
+  //: its Algo).
+  var SAVED_KINDS = ['chart', 'calc', 'monitor', 'grid'];
+
   function writeLayout() {
+    var tools = state.open.filter(function (id) {
+      return SAVED_KINDS.indexOf(id.split(':')[0]) >= 0;
+    });
+    if (tools.length) { layout._open = tools; } else { delete layout._open; }
     try {
       window.localStorage.setItem(LAYOUT_KEY, JSON.stringify(layout));
     } catch (e) {
       // A layout that cannot be saved is a layout that does not survive
       // a reload. Nothing else about the screen depends on it.
     }
+    saveLayoutToDesk();
+  }
+
+  // ...and on the desk itself, a second after the last change: it
+  // survives a cleared browser and follows the desk to another screen.
+  var layoutSaveTimer = null;
+  var layoutSaved = null;
+  function saveLayoutToDesk() {
+    // At most once a second, and only what changed: some windows write
+    // their layout on every redraw (three a second), which would keep a
+    // 'wait for a quiet second' from ever saving at all.
+    if (layoutSaveTimer) { return; }
+    layoutSaveTimer = window.setTimeout(function () {
+      var body = JSON.stringify({layout: layout});
+      if (body === layoutSaved) { layoutSaveTimer = null; return; }
+      layoutSaved = body;
+      layoutSaveTimer = null;
+      try {
+        fetch('/api/layout', {method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: body}).catch(function () {});
+      } catch (e) { /* a preference: never in the way */ }
+    }, 1000);
+  }
+
+  function loadLayoutFromDesk() {
+    /* This browser has no layout of its own (a new browser, a cleared
+     * cache): take the desk's. */
+    if (Object.keys(layout).length) { return; }
+    fetch('/api/layout').then(function (r) { return r.json(); })
+      .then(function (body) {
+        if (!body || !body.layout || Object.keys(layout).length) { return; }
+        layout = body.layout;
+        try {
+          window.localStorage.setItem(LAYOUT_KEY, JSON.stringify(layout));
+        } catch (e) { /* ignore */ }
+        state.layoutRestored = false;
+        render();
+      }).catch(function () {});
+  }
+
+  function restoreOpenTools(snapshot) {
+    /* Once, on the first snapshot: the tools that were open when the
+     * layout was last saved come back, where the ladder they belong to
+     * is still on the desk. */
+    if (state.layoutRestored) { return; }
+    state.layoutRestored = true;
+    (layout._open || []).forEach(function (id) {
+      var kind = id.split(':')[0], key = id.split(':').slice(1).join(':');
+      if (SAVED_KINDS.indexOf(kind) < 0) { return; }
+      if (key && !(snapshot.pairs || {})[key]) { return; }
+      if (state.open.indexOf(id) < 0 && !state.closed[id]) {
+        state.open.push(id);
+      }
+    });
   }
 
   function desktopBox() {
@@ -567,6 +633,71 @@
       // grabbed at all.
       top: Math.min(Math.max(top, 0), Math.max(bottomStop, 0))
     };
+  }
+
+  // -- snapping ------------------------------------------------------------
+  //
+  // A window dragged within SNAP_PX of another window's edge, or of the
+  // desk's, lands exactly on it: side by side, edge to edge, tops and
+  // bottoms in line - the tiled desk, without placing each by hand.
+
+  //: How close an edge must come to be caught, in pixels.
+  var SNAP_PX = 10;
+  //: The gap left between two windows snapped side by side.
+  var SNAP_GAP = 2;
+
+  function otherBoxes(node) {
+    /* Every other visible window, in the desk's own (scrolled) frame. */
+    var origin = desktopOrigin();
+    var out = [];
+    Array.prototype.forEach.call(document.querySelectorAll('#desktop > .window'),
+      function (other) {
+        if (other === node || other.classList.contains('maximized') ||
+            !other.offsetWidth) { return; }
+        var r = other.getBoundingClientRect();
+        out.push({left: r.left - origin.left, top: r.top - origin.top,
+                  right: r.right - origin.left, bottom: r.bottom - origin.top});
+      });
+    return out;
+  }
+
+  function nearest(value, candidates) {
+    var best = null;
+    candidates.forEach(function (c) {
+      var d = Math.abs(c - value);
+      if (d <= SNAP_PX && (best === null || d < Math.abs(best - value))) {
+        best = c;
+      }
+    });
+    return best === null ? value : best;
+  }
+
+  function snapTo(node, left, top) {
+    var w = node.offsetWidth, h = node.offsetHeight;
+    var xs = [0], ys = [0];
+    otherBoxes(node).forEach(function (b) {
+      // Beside it (either side), or edges in line with it.
+      xs.push(b.right + SNAP_GAP, b.left - w - SNAP_GAP, b.left,
+              b.right - w);
+      // Under or over it, or tops / bottoms in line.
+      ys.push(b.bottom + SNAP_GAP, b.top - h - SNAP_GAP, b.top,
+              b.bottom - h);
+    });
+    return {left: nearest(left, xs), top: nearest(top, ys)};
+  }
+
+  function snapEdges(node, width, height) {
+    /* Resizing: the right and bottom edges catch on the others'. */
+    var origin = desktopOrigin();
+    var r = node.getBoundingClientRect();
+    var left = r.left - origin.left, top = r.top - origin.top;
+    var rights = [], bottoms = [];
+    otherBoxes(node).forEach(function (b) {
+      rights.push(b.left - SNAP_GAP, b.right);
+      bottoms.push(b.top - SNAP_GAP, b.bottom);
+    });
+    return {w: nearest(left + width, rights) - left,
+            h: nearest(top + height, bottoms) - top};
   }
 
   function place(node, left, top) {
@@ -829,8 +960,9 @@
       // desktop under the window, and an origin captured at grab time
       // would then be stale by exactly that scroll.
       var frame = desktopOrigin();
-      var at = place(node, event.clientX - grabX - frame.left,
-                     event.clientY - grabY - frame.top);
+      var snapped = snapTo(node, event.clientX - grabX - frame.left,
+                           event.clientY - grabY - frame.top);
+      var at = place(node, snapped.left, snapped.top);
       layout[panelIdOf(node)].left = at.left;
       layout[panelIdOf(node)].top = at.top;
     }
@@ -864,8 +996,9 @@
     node.classList.add('dragging');
 
     function move(event) {
-      var to = size(node, box.width + (event.clientX - startX),
-                    box.height + (event.clientY - startY));
+      var edge = snapEdges(node, box.width + (event.clientX - startX),
+                           box.height + (event.clientY - startY));
+      var to = size(node, edge.w, edge.h);
       // Dragged by hand: the size is the trader's from here on, and
       // is restored exactly rather than recomputed.
       layout[id] = Object.assign({}, layout[id],
@@ -8583,6 +8716,7 @@
           }
         });
         if (first) { state.active = state.open[0]; }
+        restoreOpenTools(snapshot);
         // Redraw the PANELS only when the coordinator has actually
         // published something new. `at` is its own publish clock, so a
         // stalled or restarting engine — the state this screen is in
@@ -8800,6 +8934,7 @@
     // and go, and a listener per window is a listener per window to
     // forget.
     el('desktop').addEventListener('pointerdown', startDrag);
+    loadLayoutFromDesk();
     el('desktop').addEventListener('click', function (e) {
       var button = e.target.closest('.winbtn.max');
       if (button) { toggleMaximized(button.closest('.window')); }

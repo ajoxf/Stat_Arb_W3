@@ -23,6 +23,7 @@ import json
 import os
 import re
 import secrets
+import threading
 import time
 from datetime import date
 
@@ -341,6 +342,43 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
         if not body:
             return jsonify({'ok': False, 'missing': True})
         return jsonify(body)
+
+    # -- the screen's layout, kept on the desk -------------------------------
+    #
+    # Where each window sits, its size, and which tools (charts, the
+    # calculator, the monitor) are open. The browser keeps its own copy;
+    # this one survives a cleared cache and follows the desk to another
+    # browser. A preference, never state the engine reads.
+
+    def layout_path():
+        return os.path.join(os.path.dirname(os.path.abspath(config_path)),
+                            'screen_layout.json')
+
+    @app.get('/api/layout')
+    def api_layout():
+        return jsonify({'ok': True,
+                        'layout': read_json(layout_path(), None)})
+
+    @app.post('/api/layout')
+    def api_save_layout():
+        payload = request.get_json(silent=True) or {}
+        layout = payload.get('layout')
+        if not isinstance(layout, dict):
+            return jsonify({'ok': False, 'error': 'a layout is an object'}), 400
+        body = json.dumps(layout)
+        if len(body) > 200000:
+            return jsonify({'ok': False, 'error': 'layout too large'}), 400
+        path = layout_path()
+        tmp = f'{path}.{os.getpid()}.{threading.get_ident()}.tmp'
+        with open(tmp, 'w', encoding='utf-8') as f:
+            f.write(body)
+        if not atomicfile.replace(tmp, path):
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            return jsonify({'ok': False, 'error': 'could not be written'}), 503
+        return jsonify({'ok': True})
 
     @app.get('/api/config')
     def api_config():
