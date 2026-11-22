@@ -1323,8 +1323,7 @@
   function algoMarginHtml(row, qty) {
     /* MARGIN & LEVERAGE, in the Algo window: OKX's leverage on each leg,
      * what one Qty and one Algo trade tie up and are worth, that margin
-     * against the account's equity, and how far the legs' price ratio
-     * has drifted from beta. */
+     * against the account's equity. */
     var exit = row.exit || {};
     var legs = row.leg_notional || {};
     var perQty = exit.margin_per_spread;
@@ -1338,16 +1337,6 @@
     var accounts = (state.snapshot || {}).accounts || {};
     var equity = ((accounts[row.account_a] || {}).equity);
     var share = trade && equity ? trade / equity * 100 : null;
-    // The ladder's beta drift: B / A at the mids against beta.
-    var market = row.market || {};
-    var ma = mid(market.leg_a_bid, market.leg_a_ask);
-    var mb = mid(market.leg_b_bid, market.leg_b_ask);
-    var betaDrift = row.hedge_ratio && ma && mb
-      ? ((mb / ma) / row.hedge_ratio - 1) * 100 : null;
-    if (betaDrift !== null && !isFinite(betaDrift)) { betaDrift = null; }
-    function signedPct(x, d) {
-      return (x >= 0 ? '+' : '\u2212') + Math.abs(x).toFixed(d) + '%';
-    }
     // The TRADE first - what one Algo trade is worth and ties up - and
     // one Qty after it, labelled as such: 'Notional / Qty' beside a
     // size of 30 read as the trade's own value.
@@ -1358,11 +1347,6 @@
          'the leverage OKX holds on each leg (cross). ' +
          (levCls ? 'The two legs differ: the lower one ties up more ' +
            'margin - set both in the OKX app.' : '')) +
-      kv('\u03b2 drift', betaDrift === null ? DASH : signedPct(betaDrift, 1),
-         betaDrift !== null && Math.abs(betaDrift) >= 5 ? 'down' : '',
-         'how far the legs\u2019 PRICE ratio is now from beta - the same ' +
-         'figure as under the ladder. Past 5% the spread starts to follow ' +
-         'one coin\u2019s own price: fix beta in Pairs > Edit') +
       kv('Trade size', notional === null ? DASH
          : money(notional * qty) + qtyWords, '',
          'one Algo trade: both legs\u2019 value at the mid now - leg A ' +
