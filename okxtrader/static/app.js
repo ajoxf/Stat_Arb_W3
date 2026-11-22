@@ -1323,9 +1323,8 @@
   function algoMarginHtml(row, qty) {
     /* MARGIN & LEVERAGE, in the Algo window: OKX's leverage on each leg,
      * what one Qty and one Algo trade tie up and are worth, that margin
-     * against the account's equity, and whether the two legs are the
-     * hedge beta says - the SOL ladder went live at 1 lot : 1 lot, a
-     * twelfth of its hedge, and nothing on this window said so. */
+     * against the account's equity, and how far the legs' price ratio
+     * has drifted from beta. */
     var exit = row.exit || {};
     var legs = row.leg_notional || {};
     var perQty = exit.margin_per_spread;
@@ -1339,9 +1338,6 @@
     var accounts = (state.snapshot || {}).accounts || {};
     var equity = ((accounts[row.account_a] || {}).equity);
     var share = trade && equity ? trade / equity * 100 : null;
-    var hedge = legs.hedge_pct;
-    var hedgeOff = hedge !== null && hedge !== undefined &&
-      Math.abs(hedge - 100) > 10;
     // The ladder's beta drift: B / A at the mids against beta.
     var market = row.market || {};
     var ma = mid(market.leg_a_bid, market.leg_a_ask);
@@ -1362,13 +1358,6 @@
          'the leverage OKX holds on each leg (cross). ' +
          (levCls ? 'The two legs differ: the lower one ties up more ' +
            'margin - set both in the OKX app.' : '')) +
-      kv('Hedge drift', hedge === null || hedge === undefined ? DASH
-         : signedPct(hedge - 100, 1), hedgeOff ? 'down' : 'up',
-         'how far the LOTS are from the hedge beta asks for: leg A ' +
-         'against beta x leg B, for one Qty (' + (hedge === null ||
-         hedge === undefined ? DASH : fmt(hedge, 1) + '% of \u03b2') +
-         '). 0% is the exact hedge; red past \u00b110%, where the ' +
-         'position is mostly ONE leg, not a spread') +
       kv('\u03b2 drift', betaDrift === null ? DASH : signedPct(betaDrift, 1),
          betaDrift !== null && Math.abs(betaDrift) >= 5 ? 'down' : '',
          'how far the legs\u2019 PRICE ratio is now from beta - the same ' +
