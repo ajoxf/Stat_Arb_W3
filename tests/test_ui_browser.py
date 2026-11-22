@@ -154,6 +154,8 @@ class Publisher:
             payload['at'] = at
         for row in payload['pairs'].values():
             row.update(self.pair_extra)
+        if getattr(self, 'btc_dominance', None) is not None:
+            payload['btc_dominance'] = self.btc_dominance
         for name, extra in self.accounts_extra.items():
             if extra is None:
                 payload['accounts'].pop(name, None)
@@ -6943,3 +6945,35 @@ def test_the_price_tag_sits_beside_the_newest_candle_not_on_it(page):
         assert edges[1] >= edges[0], (plot, edges)
     assert page.errors == []
     page.locator('.window.chartwin .close').click()
+
+
+def test_the_algo_window_shows_btc_dominance(page):
+    """BTC.D - Bitcoin's share of the crypto market and its 24 h move -
+    in the Algo window's Statistics, as context. Marked old while the
+    source is not answering."""
+    open_ladder(page)
+    publisher = page.paths['publisher']
+    publisher.algo = 'ALGO'
+    publisher.algo_block = _algo_block()
+    publisher.btc_dominance = {'pct': 57.123, 'change_24h': 0.314,
+                               'age_sec': 120, 'source': 'CoinGecko',
+                               'error': None}
+    try:
+        publisher.publish()
+        page.wait_for_function(
+            "() => (document.querySelector('.window.algowin .aw-stats')"
+            " || {textContent: ''}).textContent.includes('BTC.D')",
+            timeout=WAIT)
+        stats = page.text_content('.window.algowin .aw-stats')
+        assert '57.12%' in stats and '+0.31' in stats
+        publisher.btc_dominance = dict(publisher.btc_dominance,
+                                       error='CoinGecko did not answer')
+        publisher.publish()
+        page.wait_for_function(
+            "() => document.querySelector('.window.algowin .aw-stats')"
+            ".textContent.includes('(old)')", timeout=WAIT)
+    finally:
+        publisher.btc_dominance = None
+        publisher.algo = 'NONE'
+        publisher.algo_block = None
+        publisher.publish()

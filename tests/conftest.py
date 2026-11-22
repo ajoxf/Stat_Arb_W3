@@ -635,6 +635,18 @@ def _fill_style():
 
 
 @pytest.fixture(autouse=True)
+def _no_coingecko(monkeypatch):
+    """BTC.D is read from CoinGecko on the trading PC. Never from a
+    test: a coordinator built here gets a stand-in that refuses, so no
+    test waits on - or depends on - the internet."""
+    from okxtrader import dominance
+
+    def offline(url, timeout=10.0):
+        raise ConnectionError('no network in tests')
+    monkeypatch.setattr(dominance, '_http_get', offline)
+
+
+@pytest.fixture(autouse=True)
 def _working_orders(request, monkeypatch):
     """Working orders are held and crossed at the level by default. The
     tests of the old one-leg quote - its fills, hedges, pulls and the

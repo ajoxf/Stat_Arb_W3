@@ -372,6 +372,10 @@ DEFAULT_SETTINGS = {
     #: capital it used are read against it there; 0 = not set, and
     #: those columns are a dash. Nothing is sized or sent from it.
     'CAPITAL_MANAGED': 0.0,
+    #: How often BTC.D (Bitcoin's share of the crypto market, from
+    #: CoinGecko) is read for the Algo panel and Telegram, in seconds.
+    #: 0 = not read at all. A reading only: nothing is decided from it.
+    'BTC_DOMINANCE_SEC': 300.0,
     #: How often the margin for one spread is re-priced from the
     #: terminals. It moves with the price, but slowly.
     'MARGIN_TTL_SEC': 60.0,

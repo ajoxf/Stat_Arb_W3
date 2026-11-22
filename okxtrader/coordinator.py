@@ -137,6 +137,13 @@ class Coordinator:
         self.status_path = status_path
         #: Each ladder's spread and the Algo's z, for the chart window.
         self.tape = SpreadTape()
+        #: BTC.D, Bitcoin's share of the crypto market: context on the
+        #: Algo panel and in Telegram, read on its own thread. Nothing
+        #: is decided from it.
+        from .dominance import Dominance
+        self.dominance = Dominance(
+            every_sec=self.config.get('BTC_DOMINANCE_SEC', 300.0),
+            clock=clock)
         self.chart_path = chart_path(status_path)
         self.clock = clock
         self.sleep = sleep
@@ -4288,8 +4295,22 @@ class Coordinator:
             'hedge_times_ms': list(self.quoter.hedge_times[-50:]),
             'click_to_on_ms': list(self.executor.timings[-50:]),
             'pairs': pairs,
+            'btc_dominance': self._btc_dominance(),
             'magic': MAGIC_NUMBER,
         }
+
+    def _btc_dominance(self):
+        """The last BTC.D reading, starting the next read when it is
+        due (on a thread of its own: this never waits for CoinGecko)."""
+        dominance = getattr(self, 'dominance', None)
+        if dominance is None:
+            return None
+        try:
+            dominance.refresh_if_due()
+            return dominance.snapshot()
+        except Exception as e:                       # a reading only
+            logging.info('BTC.D unavailable: %s', e)
+            return None
 
     def publish(self):
         """Write the snapshot through a tmp file and `os.replace`.

@@ -76,6 +76,20 @@ LIQUIDATION_ALERT_PCT = 10.0
 LIQUIDATION_REPEAT_SEC = 3600.0
 
 
+def btc_dominance_text(reading):
+    """BTC.D for the status: '57.12% (24h +0.31)', '(old)' while the
+    source is not answering; None when it is off or never read."""
+    if not reading or reading.get('pct') is None:
+        return None
+    text = f"{float(reading['pct']):.2f}%"
+    change = reading.get('change_24h')
+    if change is not None:
+        text += f' (24h {float(change):+.2f})'
+    if reading.get('error'):
+        text += ' (old)'
+    return text
+
+
 def next_funding(now):
     """(hh:mm UTC, minutes until) of the next OKX funding."""
     t = time.gmtime(now)
@@ -1137,6 +1151,9 @@ class Bot:
                          else f"cutoff {clock.get('cutoff')}"))
         at, minutes = next_funding(self.clock())
         rows.append(('Next funding', f'{at} UTC, in {duration(minutes * 60)}'))
+        dominance = btc_dominance_text(snapshot.get('btc_dominance'))
+        if dominance:
+            rows.append(('BTC.D', dominance))
         for name, info in sorted((snapshot.get('accounts') or {}).items()):
             if not info:
                 rows.append((name, 'NOT ANSWERING'))

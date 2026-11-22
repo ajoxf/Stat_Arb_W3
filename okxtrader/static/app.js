@@ -1309,6 +1309,32 @@
   //: "-1234.56" in the tag's bold 11 px.
   var CHART_TAG_ROOM = 62;
 
+  function btcDominanceKv() {
+    /* BTC.D: Bitcoin's share of the crypto market, from CoinGecko, and
+     * its move over 24 h in percentage points. Context for ETH vs BTC -
+     * nothing is decided from it. Hidden when it is switched off. */
+    var d = (state.snapshot || {}).btc_dominance;
+    if (!d) { return ''; }
+    var text = DASH, cls = '';
+    if (d.pct !== null && d.pct !== undefined) {
+      text = d.pct.toFixed(2) + '%';
+      if (d.change_24h !== null && d.change_24h !== undefined) {
+        text += ' <small>' + (d.change_24h >= 0 ? '\u25b2 +' : '\u25bc ') +
+          d.change_24h.toFixed(2) + '</small>';
+      }
+      // The last good reading, kept while the source does not answer.
+      if (d.error) { text += ' <small>(old)</small>'; }
+    }
+    var title = 'Bitcoin\u2019s share of the whole crypto market\u2019s ' +
+      'capitalisation (' + (d.source || 'CoinGecko') + '), and its move ' +
+      'over 24 h in percentage points. Rising: money moving into ' +
+      'Bitcoin. A reading only - the Algo decides nothing from it.' +
+      (d.age_sec !== null && d.age_sec !== undefined
+        ? ' Read ' + Math.round(d.age_sec / 60) + ' min ago.' : '') +
+      (d.error ? ' Last try: ' + d.error : '');
+    return kv('BTC.D', text, cls, title);
+  }
+
   function svgCandles(box, candles, opts) {
     /* One candlestick plot at the box's own pixel size, so the labels
      * are crisp. Candles sit on the CLOCK: a stretch the broker sent
@@ -3946,6 +3972,7 @@
          regime.efficiency_ratio === null || regime.efficiency_ratio === undefined
            ? '' : 'efficiency ' + regime.efficiency_ratio.toFixed(2) + ', ' +
              regime.crossings + ' mean crossings') +
+      btcDominanceKv() +
       kv('Candles', (block.timeframe_min || params.timeframe_min) + 'm \u00d7 ' +
          needed) +
       kv('Band', fmt(block.lower, digits) + ' \u2026 ' + fmt(block.upper, digits)) +
