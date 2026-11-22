@@ -1626,7 +1626,10 @@
     // The TRADE first - what one Algo trade is worth and ties up - and
     // one Qty after it, labelled as such: 'Notional / Qty' beside a
     // size of 30 read as the trade's own value.
-    var qtyWords = ' <small>(' + fmt(qty, 2) + ' Qty)</small>';
+    // ONE ROW PER LINE, the label left and the figures right on one
+    // line: two columns wrapped the longer figures ('$699.95 A $353.00 ·
+    // B $346.85') onto three lines under the wrong label.
+    var qtyWords = ' · ' + fmt(qty, 2) + ' Qty';
     // Sized by total margin: what it was given, and what it came to.
     var sizing = row.algo_sizing;
     function legMargin(leg) {
@@ -1635,38 +1638,38 @@
         : value * qty / lever;
     }
     return '<div class="aw-head">Margin &amp; leverage</div>' +
-      '<div class="aw-grid">' +
-      kv('Leverage', 'A ' + lev(la) + ' \u00b7 B ' + lev(lb), levCls,
+      '<div class="aw-grid aw-margin">' +
+      kv('Leverage', 'A ' + lev(la) + ' · B ' + lev(lb), levCls,
          'the leverage OKX holds on each leg (cross). ' +
          (levCls ? 'The two legs differ: the lower one ties up more ' +
-           'margin - set both in the OKX app.' : '')) +
-      kv('Trade size', notional === null ? DASH
-         : money(notional * qty) + qtyWords, '',
-         'one Algo trade: both legs\u2019 value at the mid now - leg A ' +
-         money(legs.a === null || legs.a === undefined ? null : legs.a * qty) +
-         ', leg B ' +
-         money(legs.b === null || legs.b === undefined ? null : legs.b * qty)) +
-      kv('Trade margin', trade === null ? DASH : money(trade) +
-         (legMargin('a') === null || legMargin('b') === null ? ''
-           : ' <small>A ' + money(legMargin('a')) + ' \u00b7 B ' +
-             money(legMargin('b')) + '</small>'), '',
-         'what one Algo trade ties up at OKX, both legs, and each leg\u2019s ' +
-         'share (its value over its leverage)' +
-         (exit.margin_source ? ' (' + exit.margin_source + ')' : '')) +
+           'margin - set both in the OKX app.' : ''), true) +
       (sizing ? kv('Sized by', 'Total margin ' + money(sizing.margin),
          sizing.note ? 'down' : '',
-         sizing.note ? sizing.note : 'the Algo\u2019s Qty is worked out ' +
+         sizing.note ? sizing.note : 'the Algo’s Qty is worked out ' +
            'from this total on every poll: ' + fmt(sizing.qty, 2) +
-           ' Qty now, rounded down') : '') +
+           ' Qty now, rounded down', true) : '') +
+      kv('Trade size', notional === null ? DASH
+         : money(notional * qty) + qtyWords, '',
+         'one Algo trade: both legs’ value at the mid now - leg A ' +
+         money(legs.a === null || legs.a === undefined ? null : legs.a * qty) +
+         ', leg B ' +
+         money(legs.b === null || legs.b === undefined ? null : legs.b * qty),
+         true) +
+      kv('Trade margin', trade === null ? DASH : money(trade) +
+         (legMargin('a') === null || legMargin('b') === null ? ''
+           : ' · A ' + money(legMargin('a')) + ' · B ' +
+             money(legMargin('b'))), '',
+         'what one Algo trade ties up at OKX, both legs, and each leg’s ' +
+         'share (its value over its leverage)' +
+         (exit.margin_source ? ' (' + exit.margin_source + ')' : ''), true) +
       kv('Of equity', share === null ? DASH : fmt(share, 1) + '%',
          share !== null && share > 50 ? 'down' : '',
-         'one Algo trade\u2019s margin against the account\u2019s equity' +
-         (equity ? ' (' + money(equity) + ')' : '')) +
+         'one Algo trade’s margin against the account’s equity' +
+         (equity ? ' (' + money(equity) + ')' : ''), true) +
       kv('Per 1 Qty', (notional === null ? DASH : money(notional)) +
-         ' <small>\u00b7 margin ' + (perQty ? money(perQty) : DASH) +
-         '</small>', '',
+         ' · margin ' + (perQty ? money(perQty) : DASH), '',
          'ONE spread (one Qty): leg A ' + money(legs.a) + ' + leg B ' +
-         money(legs.b) + ', and the margin it ties up') +
+         money(legs.b) + ', and the margin it ties up', true) +
       '</div>';
   }
 

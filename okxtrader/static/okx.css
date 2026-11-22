@@ -145,3 +145,7 @@
 .window.calcwin .pc-kv > b.down { color: #c0392b; }
 .window.calcwin .pc-kv.wide { grid-column: 1 / -1; }
 .window.calcwin .pc-note { margin-top: 6px; font-size: 10px; }
+
+/* The Algo window's Margin & leverage: one row per line, the figures
+ * on one line at the right. */
+.window.algowin .aw-margin .aw-kv > b { white-space: nowrap; }
