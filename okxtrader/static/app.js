@@ -4643,6 +4643,26 @@
     var trending = regime.state === 'TRENDING';
     var day = block.day || {};
     var last = block.last_blocked;
+    // The round trip's parts: the size, a point of spread in money at
+    // it, and OKX's own fee rate on each leg (maker under the W3 fill).
+    var algoQty = filters.qty || params.algo_qty || 1;
+    var legsNow = row.leg_notional || {};
+    var marketNow = row.market || {};
+    var midB = mid(marketNow.leg_b_bid, marketNow.leg_b_ask);
+    var pointMoney = legsNow.b && midB ? legsNow.b / midB * algoQty : null;
+    var tripPts = pointMoney && cost.total !== null && cost.total !== undefined
+      ? cost.total / pointMoney : null;
+    var feeKind = row.fill_style === 'taker' ? 'taker' : 'maker';
+    var feeRate = (function () {
+      var f = row.fee_bps || {};
+      var a = (f.a || {})[feeKind], b = (f.b || {})[feeKind];
+      return a === undefined || b === undefined ? null : {a: a, b: b};
+    })();
+    function legFee(leg) {
+      var value = legsNow[leg];
+      return !feeRate || value === null || value === undefined ? null
+        : value * algoQty * feeRate[leg] / 1e4 * 2;
+    }
     node.querySelector('.aw-filters').innerHTML =
       '<div class="aw-head">Filters</div><div class="aw-badges">' +
       '<div>' + onOff(edge.on, edge.ok, '\u2713', '\u2717',
@@ -4658,34 +4678,42 @@
       ((band[0] || band[1]) ? '<div>' + badge(
         Math.round(band[0] || 0) + '\u2013' + (band[1] ? Math.round(band[1]) : '\u221e'),
         'off') + '<small>HL min</small></div>' : '') +
-      '</div><div class="aw-grid">' +
+      '</div><div class="aw-grid aw-margin">' +
+      // ONE ROW PER LINE, as Margin & leverage: the size and what the
+      // trade costs, the round trip broken into its parts under it.
+      kv('Size', fmt(algoQty, 2) + ' spread(s)' +
+         sizeDollars(row, algoQty), '',
+         'one Algo trade: both legs’ value at the mid now', true) +
       kv('Capture / cost', (edge.ratio === null || edge.ratio === undefined
-          ? DASH : edge.ratio.toFixed(2) + '\u00d7') + ' / req ' +
-          (edge.required === undefined ? DASH : edge.required + '\u00d7'),
+          ? DASH : edge.ratio.toFixed(2) + '×') + ' / req ' +
+          (edge.required === undefined ? DASH : edge.required + '×'),
          edge.ok === true ? 'up' : (edge.ok === false ? 'down' : ''),
          'expected capture ' + moneyOr(edge.capture) +
-         ' (' + (params.edge_capture_frac || 0.5) + ' \u00d7 entry z \u00d7 '
-         + '\u03c3) against the round trip, at the entry z', true) +
-      // The round trip in its two parts, ON the line: the bid-ask is
-      // the 0.0128 the leg book shows, in money; the fees are OKX's for
-      // both legs, in and out. Small sums keep four decimals - $0.00 is
-      // not what a fill costs.
+         ' (' + (params.edge_capture_frac || 0.5) + ' × entry z × '
+         + 'σ) against the round trip, at the entry z', true) +
       kv('Round trip', moneyOr(cost.total) +
-         (cost.total === null || cost.total === undefined ? '' :
-          ' <small class="hint">fees ' + smallMoney(cost.commission) +
-          ' + bid-ask ' + smallMoney(cost.crossing) +
-          (cost.slippage ? ' + slip ' + smallMoney(cost.slippage) : '') +
-          '</small>'),
-         '',
-         'crossing ' + moneyOr(cost.crossing) + ' + commission ' +
-         moneyOr(cost.commission) + ' + slippage ' + moneyOr(cost.slippage)) +
+         (tripPts === null ? '' : ' · ' + fmt(tripPts, 2) + ' pts'),
+         '', 'what one Algo trade costs in and out: the fees below plus ' +
+         'the bid-ask it crosses' + (tripPts === null ? ''
+           : ', ' + fmt(tripPts, 2) + ' points of spread at ' +
+             money(pointMoney) + ' a point'), true) +
+      kv('  Fees', smallMoney(cost.commission) +
+         (feeRate ? ' · ' + fmt(feeRate.a, 1) + ' bp × 2 legs ' +
+           '× in + out' : ''), '',
+         'OKX’s ' + feeKind + ' fee on BOTH legs, on the way in AND ' +
+         'the way out' + (legFee('a') === null ? '' : ': leg A ' +
+           smallMoney(legFee('a')) + ' + leg B ' + smallMoney(legFee('b'))) +
+         '. It grows with the size; only a lower VIP rate makes it ' +
+         'smaller per dollar', true) +
+      kv('  Bid-ask', smallMoney(cost.crossing), '',
+         'crossing the spread’s own bid-ask once, at this size', true) +
+      (cost.slippage ? kv('  Slippage allowance',
+         smallMoney(cost.slippage), '', 'the allowance set on this ' +
+         'ladder, per spread x size: a buffer, not an OKX charge', true) : '') +
       kv('Today', (day.trades || 0) + (params.max_trades_day
           ? '/' + params.max_trades_day : '') + ' trades · ' +
           (day.losses_row || 0) + ' in a row · ' + moneyOr(day.pnl),
-         '', 'the day\u2019s limits stop entries, never exits', true) +
-      kv('Size', fmt(filters.qty || params.algo_qty || 1, 2) + ' spread(s)' +
-         sizeDollars(row, filters.qty || params.algo_qty || 1), '',
-         'one Algo trade: both legs\u2019 value at the mid now') +
+         '', 'the day’s limits stop entries, never exits', true) +
       '</div><div class="aw-blocked"><div class="aw-head2">Last signal blocked'
       + '</div>' + (last
         ? '<div><b>' + escapeHtml(sideWords(last.side)) + '</b>' +

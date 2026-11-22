@@ -7004,6 +7004,8 @@ def test_the_algo_window_shows_margin_and_leverage(page):
         'algo_sizing': {'by': 'MARGIN', 'margin': 180.0, 'per_qty': 6.04,
                         'qty': 29.8, 'note': None},
         'leverage_a': 10, 'leverage_b': 1,
+        'fee_bps': {'a': {'maker': 2.0, 'taker': 5.0},
+                    'b': {'maker': 2.0, 'taker': 5.0}},
         'leg_notional': {'a': 70.62, 'b': 608.63, 'hedge_pct': 11.7}})
     try:
         publisher.publish()
@@ -7034,6 +7036,11 @@ def test_the_algo_window_shows_margin_and_leverage(page):
         # The settings carry the choice.
         assert page.locator('.ls-az-size-by option[value="MARGIN"]').count()
         assert page.locator('.ls-az-margin').count()
+        # The round trip broken down, one row each, in the Filters.
+        filters = page.text_content('.window.algowin .aw-filters')
+        assert 'Round trip' in filters and 'pts' in filters
+        assert 'Fees' in filters and '2.0 bp \u00d7 2 legs \u00d7 in + out' in filters
+        assert 'Bid-ask' in filters
         # No hedge-of-beta or beta-drift row: they confused.
         assert 'Hedge' not in stats and '\u03b2 drift' not in stats
         lev = page.locator('.window.algowin .aw-kv', has_text='Leverage')
