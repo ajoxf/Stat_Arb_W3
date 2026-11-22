@@ -2593,20 +2593,23 @@
       if (state.armedUsd) { delete state.armedUsd[key]; }
       render();
     });
-    // DOLLARS TO QTY: what one Qty is worth now, both legs, at the mids.
+    // MARGIN TO QTY: the dollars are the TOTAL MARGIN the trade ties
+    // up, both legs together - what one Qty ties up now (live prices,
+    // OKX's leverage) into the amount, rounded DOWN so a click never
+    // ties up more than it was given.
     function sizeInDollars(dollars) {
       var row = state.snapshot.pairs[key] || {};
-      var per = qtyDollars(row);
+      var per = qtyMargin(row);
       var box = node.querySelector('.usd-qty');
       if (!per) {
-        toast('No live price to size in dollars yet.');
+        toast('The margin for one Qty is not known yet (no live price, or ' +
+              'OKX\u2019s leverage not read) - size in Qty for now.');
         return;
       }
-      var qty = Math.round(dollars / per * 100) / 100;
+      var qty = Math.floor(dollars / per * 100 + 1e-9) / 100;
       if (!(qty >= 0.01)) {
-        toast('$' + Number(dollars).toLocaleString() + ' is under one ' +
-              'order step here (1 Qty = $' + Math.round(per).toLocaleString() +
-              ').');
+        toast('$' + Number(dollars).toLocaleString() + ' of margin is under ' +
+              'one order step here (1 Qty ties up $' + per.toFixed(2) + ').');
         return;
       }
       setArmed(key, 'buy', qty);
@@ -2719,6 +2722,18 @@
       return '$' + (k >= 100 ? Math.round(k) : Math.round(k * 10) / 10) + 'K';
     }
     return '$' + Math.round(n);
+  }
+
+  function qtyMargin(row) {
+    /* What ONE Qty ties up at OKX, both legs: the engine's own priced
+     * figure, else each leg's value over its leverage. Null when
+     * neither is known. */
+    var priced = ((row || {}).exit || {}).margin_per_spread;
+    if (priced) { return priced; }
+    var legs = (row || {}).leg_notional || {};
+    var la = (row || {}).leverage_a, lb = (row || {}).leverage_b;
+    if (!la || !lb || !legs.a || !legs.b) { return null; }
+    return legs.a / la + legs.b / lb;
   }
 
   function qtyDollars(row) {
@@ -3873,21 +3888,22 @@
       var sized = (size === null || size === undefined) ? '' : ' ' + size;
       var button = node.querySelector(
         side === 'buy' ? '.buy-touch' : '.sell-touch');
-      // IN DOLLARS where the size was set in dollars (the dollar keypad,
-      // or a ladder sized in $ per Qty): "BUY $25K" - both legs
-      // together, said on hover - so a K is never read as lots.
-      var dollars = null;
-      var per = qtyDollars(row);
+      // SAID IN THE UNIT IT WAS SET IN: "BUY $500" when the size came
+      // from the margin keypad or box (the total margin, both legs
+      // together), "BUY 30" when it came from a Qty. The other figures
+      // on hover.
       var usdArmed = (state.armedUsd || {})[key];
-      if (size && per && (row.usd_per_qty || usdArmed)) {
-        dollars = size * per;
-      }
+      var margin = usdArmed || null;
+      var per = qtyDollars(row);
       button.textContent = (side === 'buy' ? 'BUY' : 'SELL') +
-        (dollars ? ' ' + kDollars(dollars) : sized);
+        (margin ? ' ' + kDollars(margin) : sized);
       button.title = (side === 'buy' ? 'Buy' : 'Sell') + ' the spread ' +
         (side === 'buy' ? 'at the offer (B)' : 'at the bid (S)') +
-        (dollars ? ' - ' + kDollars(dollars) + ' of BOTH legs together ' +
-          '(about ' + kDollars(dollars / 2) + ' each), Qty ' + size : '');
+        (size ? ' - Qty ' + size +
+          (margin ? ', ' + kDollars(margin) + ' of margin, both legs ' +
+            'together' : '') +
+          (per ? ', about ' + kDollars(size * per) + ' of position'
+            : '') : '');
     });
     Array.prototype.forEach.call(node.querySelectorAll('.keypad .qty'),
       function (button) {

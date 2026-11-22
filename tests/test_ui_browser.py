@@ -7303,3 +7303,53 @@ def test_tidy_tiles_the_desk_edge_to_edge(page):
         publisher.algo_block = None
         publisher.publish()
         tidy(page)
+
+
+def test_the_dollar_keypad_sizes_by_total_margin_and_the_buttons_say_it(
+        page):
+    """The ladder's $ keypad and box are the TOTAL MARGIN of the trade,
+    both legs together: Qty = margin / what one Qty ties up, rounded
+    down. The buttons say the size in the unit it was set in - '$500'
+    from the margin keypad, '5' from a Qty."""
+    open_ladder(page)
+    publisher = page.paths['publisher']
+    was = dict(publisher.pair_extra)
+    publisher.pair_extra.update({
+        'exit': {'margin_per_spread': 6.0},
+        'leg_notional': {'a': 61.0, 'b': 59.0}})
+    try:
+        publisher.publish()
+        page.wait_for_function(
+            "() => ((window.MT5Trader.state.snapshot.pairs['XAUUSD_|GC1226']"
+            " || {}).exit || {}).margin_per_spread === 6", timeout=WAIT)
+        page.errors.clear()
+        ladder = page.locator('.window.ladder').first
+        ladder.locator('.usd-keypad .usd[data-usd="500"]').click()
+        page.wait_for_function(
+            "() => document.querySelector('.window.ladder .buy-touch')"
+            ".textContent.includes('$500')", timeout=WAIT)
+        assert 'SELL $500' in ladder.locator('.sell-touch').text_content()
+        # $500 / $6.00 a Qty = 83.33, rounded down.
+        assert '83.33' in ladder.locator('.usd-qty').text_content()
+        assert 'Qty 83.33' in ladder.locator('.buy-touch').get_attribute(
+            'title')
+        # The box: type a margin, Enter.
+        box = ladder.locator('.usd-box')
+        box.fill('120')
+        box.press('Enter')
+        page.wait_for_function(
+            "() => document.querySelector('.window.ladder .buy-touch')"
+            ".textContent.includes('$120')", timeout=WAIT)
+        # A Qty from the keypad: the buttons say the Qty, not dollars.
+        ladder.locator('.keypad .qty[data-qty="5"]').click()
+        page.wait_for_function(
+            "() => /BUY 5$/.test(document.querySelector("
+            "'.window.ladder .buy-touch').textContent.trim())",
+            timeout=WAIT)
+        assert page.errors == []
+    finally:
+        publisher.pair_extra.clear()
+        publisher.pair_extra.update(was)
+        publisher.publish()
+        page.evaluate("""() => { const s = window.MT5Trader.state;
+            s.armed = {}; s.armedUsd = {}; window.MT5Trader.render(); }""")
