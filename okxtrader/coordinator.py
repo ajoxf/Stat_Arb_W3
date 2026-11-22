@@ -722,6 +722,7 @@ class Coordinator:
             md['feed_badge'] = _badge(md, stale, jumped)
             self._observe_session(key, md, pair)
             self._size_in_dollars(pair, md)
+            self._algo_size_from_margin(pair)
             self.market[key] = md
             body = self._work_algo(pair, md)
             self._track(pair, md, body)
@@ -886,6 +887,38 @@ class Coordinator:
                          'instrument' if source == 'OKX' else
                          "each leg's notional over its own account's "
                          "leverage — the terminals could not price it")}
+
+    def _algo_size_from_margin(self, pair):
+        """SIZE BY MARGIN: with the Algo sized by its TOTAL margin, set
+        its Qty from that on this poll - the margin both legs of one
+        spread tie up at OKX now (live prices, OKX's own leverage), into
+        the total, rounded down. Every reader of the Algo's Qty - the
+        entry, its costs, its stop and target - reads the one set here.
+        A trade already on keeps the size it was opened at."""
+        params = algo_module.clean_params(getattr(pair, 'algo_params', None))
+        sizing = getattr(self, '_algo_sizing', None)
+        if sizing is None:
+            sizing = self._algo_sizing = {}
+        if params['algo_size_by'] != 'MARGIN':
+            sizing.pop(pair.key, None)
+            return
+        total = params['algo_margin']
+        per = (self.margin_detail(pair) or {}).get('money')
+        qty = algo_module.qty_for_margin(total, per)
+        note = None
+        if not total:
+            note = 'set the total margin for one Algo trade'
+        elif not per:
+            note = 'the margin for one Qty is not priced yet'
+        elif qty is None:
+            note = (f'{total:,.2f} is less than the margin of the smallest '
+                    f'size (0.01 Qty = {per * 0.01:,.2f})')
+        if qty is not None:
+            if pair.algo_params is None:
+                pair.algo_params = {}
+            pair.algo_params['algo_qty'] = qty
+        sizing[pair.key] = {'by': 'MARGIN', 'margin': total,
+                            'per_qty': per, 'qty': qty, 'note': note}
 
     @staticmethod
     def _leg_notional(pair, md):
@@ -4232,6 +4265,10 @@ class Coordinator:
                 # Algo window's margin panel, and the plain check that
                 # the two legs are the hedge beta says they are.
                 'leg_notional': self._leg_notional(pair, md),
+                # The Algo sized by its total margin: what it was given,
+                # and the Qty that came to. None while sized by Qty.
+                'algo_sizing': (getattr(self, '_algo_sizing', None)
+                                or {}).get(key),
                 'quoting_leg': pair.quoting_leg,
                 # The leg that will ACTUALLY rest the pending — the
                 # setting when there is one, otherwise the wider book.

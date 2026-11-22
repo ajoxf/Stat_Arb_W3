@@ -197,6 +197,13 @@ DEFAULT_PARAMS = {
     #: Leg A lots / Leg B lots). Its own number, so a trader changing the
     #: keypad cannot resize the Algo by accident.
     'algo_qty': 1.0,
+    #: How ONE Algo trade is sized: QTY (the number above) or MARGIN -
+    #: the TOTAL margin the trade may tie up at OKX, both legs together,
+    #: split between the legs by beta. In MARGIN the desk works out the
+    #: Qty from it on every poll (live prices and OKX's leverage), and
+    #: everything that reads the Algo's Qty reads that one.
+    'algo_size_by': 'QTY',
+    'algo_margin': 0.0,
     # The day's limits. Any one of them stops ENTRIES for the rest of
     # the broker's day, and says which; exits always carry on. 0 = off.
     'max_trades_day': 10,
@@ -282,6 +289,25 @@ _INTS = ('timeframe_min', 'length', 'confirm_ticks', 'time_stop_candles',
 LEVEL_MODES = ('MARGIN', 'ATR')
 
 
+#: How one Algo trade is sized.
+SIZE_BY = ('QTY', 'MARGIN')
+
+
+def qty_for_margin(total_margin, margin_per_qty, step=0.01):
+    """The Qty whose margin, both legs together, is at most
+    `total_margin`: rounded DOWN to `step`, so a trade never ties up more
+    than it was given. None when either is unknown or the margin is too
+    small for one step."""
+    try:
+        total, per = float(total_margin), float(margin_per_qty)
+    except (TypeError, ValueError):
+        return None
+    if total <= 0 or per <= 0:
+        return None
+    steps = math.floor(total / per / step + 1e-9)
+    return round(steps * step, 6) if steps >= 1 else None
+
+
 #: The directions an entry may take, and the side each one is.
 DIRECTIONS = {'BOTH': ('SELL', 'BUY'), 'H_TO_L': ('SELL',),
               'L_TO_H': ('BUY',)}
@@ -303,6 +329,11 @@ def clean_params(raw):
             if key == 'direction':
                 chosen = str(value).strip().upper()
                 if chosen in DIRECTIONS:
+                    out[key] = chosen
+                continue
+            if key == 'algo_size_by':
+                chosen = str(value).strip().upper()
+                if chosen in SIZE_BY:
                     out[key] = chosen
                 continue
             if key in ('stop_mode', 'target_mode') or \
@@ -367,6 +398,10 @@ def check_params(raw):
             if str(value).strip().upper() not in DIRECTIONS:
                 problems.append(f'direction {value!r} — choose BOTH, '
                                 f'H_TO_L or L_TO_H')
+            continue
+        if key == 'algo_size_by':
+            if str(value).strip().upper() not in SIZE_BY:
+                problems.append(f'size by {value!r} — choose QTY or MARGIN')
             continue
         if key in ('stop_mode', 'target_mode') or \
                 _side_base(key) in ('stop_mode', 'target_mode'):

@@ -704,6 +704,15 @@
           <label class="lsf" title="One Algo trade, in spreads: 1 = this ladder&#8217;s Leg A lots / Leg B lots. Its own number — the keypad does not change it.">
             <span>Algo qty</span>
             <input class="ls-az-qty" type="number" min="0.01" step="0.01"></label>
+          <label class="lsf" title="How one Algo trade is sized. Qty: the Algo qty above. Total margin: the margin one trade may tie up at OKX, BOTH legs together - the desk splits it between the legs by beta and works out the Qty from live prices and OKX&#8217;s leverage, rounded down so it never ties up more.">
+            <span>Size Algo by</span>
+            <select class="ls-az-size-by">
+              <option value="QTY">Qty</option>
+              <option value="MARGIN">Total margin $</option>
+            </select></label>
+          <label class="lsf" title="With Size Algo by = Total margin: the margin ONE Algo trade may tie up at OKX, both legs together, in the account&#8217;s money. Example: 180 at 20x is about 3,600 of position.">
+            <span>Total margin $</span>
+            <input class="ls-az-margin" type="number" min="0" step="10"></label>
           <label class="lsf" title="Entries stop for the rest of the day after this many Algo trades. 0 = no limit.">
             <span>Max trades/day</span>
             <input class="ls-az-maxtrades" type="number" min="0" step="1"></label>

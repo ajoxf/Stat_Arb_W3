@@ -1334,6 +1334,11 @@
                     legs.b !== null && legs.b !== undefined)
       ? legs.a + legs.b : null;
     var trade = perQty ? perQty * qty : null;
+    if (trade === null && la && lb && legs.a !== null &&
+        legs.a !== undefined && legs.b !== null && legs.b !== undefined) {
+      // Not priced by OKX yet: each leg's value over its own leverage.
+      trade = (legs.a / la + legs.b / lb) * qty;
+    }
     var accounts = (state.snapshot || {}).accounts || {};
     var equity = ((accounts[row.account_a] || {}).equity);
     var share = trade && equity ? trade / equity * 100 : null;
@@ -1341,6 +1346,13 @@
     // one Qty after it, labelled as such: 'Notional / Qty' beside a
     // size of 30 read as the trade's own value.
     var qtyWords = ' <small>(' + fmt(qty, 2) + ' Qty)</small>';
+    // Sized by total margin: what it was given, and what it came to.
+    var sizing = row.algo_sizing;
+    function legMargin(leg) {
+      var value = legs[leg], lever = leg === 'a' ? la : lb;
+      return value === null || value === undefined || !lever ? null
+        : value * qty / lever;
+    }
     return '<div class="aw-head">Margin &amp; leverage</div>' +
       '<div class="aw-grid">' +
       kv('Leverage', 'A ' + lev(la) + ' \u00b7 B ' + lev(lb), levCls,
@@ -1353,9 +1365,18 @@
          money(legs.a === null || legs.a === undefined ? null : legs.a * qty) +
          ', leg B ' +
          money(legs.b === null || legs.b === undefined ? null : legs.b * qty)) +
-      kv('Trade margin', trade === null ? DASH : money(trade), '',
-         'what one Algo trade ties up at OKX, both legs' +
+      kv('Trade margin', trade === null ? DASH : money(trade) +
+         (legMargin('a') === null || legMargin('b') === null ? ''
+           : ' <small>A ' + money(legMargin('a')) + ' \u00b7 B ' +
+             money(legMargin('b')) + '</small>'), '',
+         'what one Algo trade ties up at OKX, both legs, and each leg\u2019s ' +
+         'share (its value over its leverage)' +
          (exit.margin_source ? ' (' + exit.margin_source + ')' : '')) +
+      (sizing ? kv('Sized by', 'Total margin ' + money(sizing.margin),
+         sizing.note ? 'down' : '',
+         sizing.note ? sizing.note : 'the Algo\u2019s Qty is worked out ' +
+           'from this total on every poll: ' + fmt(sizing.qty, 2) +
+           ' Qty now, rounded down') : '') +
       kv('Of equity', share === null ? DASH : fmt(share, 1) + '%',
          share !== null && share > 50 ? 'down' : '',
          'one Algo trade\u2019s margin against the account\u2019s equity' +
@@ -2459,6 +2480,8 @@
     ['.ls-az-atr-target', 'atr_target_mult', 'number'],
     ['.ls-az-progress', 'progress_bar', 'check'],
     ['.ls-az-qty', 'algo_qty', 'number'],
+    ['.ls-az-size-by', 'algo_size_by', 'text'],
+    ['.ls-az-margin', 'algo_margin', 'number'],
     ['.ls-az-maxtrades', 'max_trades_day', 'number'],
     ['.ls-az-loss', 'daily_loss_limit', 'number'],
     ['.ls-az-losses', 'max_losses_row', 'number'],

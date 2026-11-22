@@ -6991,6 +6991,8 @@ def test_the_algo_window_shows_margin_and_leverage(page):
     publisher.algo_block = block
     was = dict(publisher.pair_extra)
     publisher.pair_extra.update({
+        'algo_sizing': {'by': 'MARGIN', 'margin': 180.0, 'per_qty': 6.04,
+                        'qty': 29.8, 'note': None},
         'leverage_a': 10, 'leverage_b': 1,
         'leg_notional': {'a': 70.62, 'b': 608.63, 'hedge_pct': 11.7}})
     try:
@@ -7013,6 +7015,15 @@ def test_the_algo_window_shows_margin_and_leverage(page):
         size = page.locator('.window.algowin .aw-filters .aw-kv',
                             has_text='Size')
         assert '$20,378' in size.first.text_content()
+        # Sized by total margin: said, and each leg's share of it.
+        sized = page.locator('.window.algowin .aw-kv', has_text='Sized by')
+        assert 'Total margin $180.00' in sized.text_content()
+        margin = page.locator('.window.algowin .aw-kv',
+                              has_text='Trade margin').text_content()
+        assert 'A ' in margin and 'B ' in margin
+        # The settings carry the choice.
+        assert page.locator('.ls-az-size-by option[value="MARGIN"]').count()
+        assert page.locator('.ls-az-margin').count()
         # No hedge-of-beta or beta-drift row: they confused.
         assert 'Hedge' not in stats and '\u03b2 drift' not in stats
         lev = page.locator('.window.algowin .aw-kv', has_text='Leverage')
