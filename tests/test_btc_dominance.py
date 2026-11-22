@@ -106,3 +106,29 @@ def test_telegram_says_it_in_one_line():
                                'error': 'x'}) == '57.00% (24h -1.20) (old)'
     assert btc_dominance_text(None) is None
     assert btc_dominance_text({'pct': None, 'error': 'down'}) is None
+
+
+def test_each_legs_value_per_qty_and_the_hedge_it_makes():
+    """Margin & leverage in the Algo window: each leg's value for one
+    Qty, and how much of beta's hedge leg A is. The SOL ladder went live
+    at 1 SOL against 0.01 BTC with beta 851.7 - a twelfth of the hedge."""
+    from types import SimpleNamespace
+    sol = SimpleNamespace(clip_lots_a=1.0, clip_lots_b=1.0,
+                          hedge_ratio=851.7122,
+                          meta_a={'contract_size': 1.0},
+                          meta_b={'contract_size': 0.01})
+    md = {'leg_a_mid': 70.615, 'leg_b_mid': 60862.55}
+    out = Coordinator._leg_notional(sol, md)
+    assert out['a'] == pytest.approx(70.62, abs=0.02)
+    assert out['b'] == pytest.approx(608.63, abs=0.01)
+    assert out['hedge_pct'] == pytest.approx(11.7, abs=0.1)
+    # The ETH ladder, 0.1 BTC contract : 0.35 ETH contract, is the hedge.
+    eth = SimpleNamespace(clip_lots_a=0.1, clip_lots_b=0.35,
+                          hedge_ratio=0.028402,
+                          meta_a={'contract_size': 0.01},
+                          meta_b={'contract_size': 0.1})
+    out = Coordinator._leg_notional(eth, {'leg_a_mid': 60862.55,
+                                          'leg_b_mid': 1709.3})
+    assert out['hedge_pct'] == pytest.approx(100.6, abs=0.2)
+    # A price missing: no figure, never 0.
+    assert Coordinator._leg_notional(eth, {})['hedge_pct'] is None

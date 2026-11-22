@@ -1309,6 +1309,54 @@
   //: "-1234.56" in the tag's bold 11 px.
   var CHART_TAG_ROOM = 62;
 
+  function algoMarginHtml(row, qty) {
+    /* MARGIN & LEVERAGE, in the Algo window: OKX's leverage on each leg,
+     * what one Qty and one Algo trade tie up and are worth, that margin
+     * against the account's equity, and whether the two legs are the
+     * hedge beta says - the SOL ladder went live at 1 lot : 1 lot, a
+     * twelfth of its hedge, and nothing on this window said so. */
+    var exit = row.exit || {};
+    var legs = row.leg_notional || {};
+    var perQty = exit.margin_per_spread;
+    var la = row.leverage_a, lb = row.leverage_b;
+    function lev(x) { return x ? fmt(x, 0) + 'x' : DASH; }
+    var levCls = la && lb && la !== lb ? 'down' : '';
+    var notional = (legs.a !== null && legs.a !== undefined &&
+                    legs.b !== null && legs.b !== undefined)
+      ? legs.a + legs.b : null;
+    var trade = perQty ? perQty * qty : null;
+    var accounts = (state.snapshot || {}).accounts || {};
+    var equity = ((accounts[row.account_a] || {}).equity);
+    var share = trade && equity ? trade / equity * 100 : null;
+    var hedge = legs.hedge_pct;
+    var hedgeOff = hedge !== null && hedge !== undefined &&
+      Math.abs(hedge - 100) > 10;
+    return '<div class="aw-head">Margin &amp; leverage</div>' +
+      '<div class="aw-grid">' +
+      kv('Leverage', 'A ' + lev(la) + ' \u00b7 B ' + lev(lb), levCls,
+         'the leverage OKX holds on each leg (cross). ' +
+         (levCls ? 'The two legs differ: the lower one ties up more ' +
+           'margin - set both in the OKX app.' : '')) +
+      kv('Margin / Qty', perQty ? money(perQty) : DASH, '',
+         'what one spread ties up at OKX, both legs' +
+         (exit.margin_source ? ' (' + exit.margin_source + ')' : '')) +
+      kv('Notional / Qty', notional === null ? DASH : money(notional), '',
+         'leg A ' + money(legs.a) + ' + leg B ' + money(legs.b)) +
+      kv('Algo trade', trade === null ? DASH
+         : money(trade) + ' <small>(' + fmt(qty, 2) + ' Qty)</small>', '',
+         'the margin one Algo trade ties up; position ' +
+         (notional === null ? DASH : money(notional * qty))) +
+      kv('Of equity', share === null ? DASH : fmt(share, 1) + '%',
+         share !== null && share > 50 ? 'down' : '',
+         'one Algo trade\u2019s margin against the account\u2019s equity' +
+         (equity ? ' (' + money(equity) + ')' : '')) +
+      kv('Hedge', hedge === null || hedge === undefined ? DASH
+         : fmt(hedge, 0) + '% of \u03b2', hedgeOff ? 'down' : 'up',
+         'leg A against what beta asks for one Qty of leg B: 100% is the ' +
+         'hedge. Far off it, the position is mostly ONE leg, not a spread') +
+      '</div>';
+  }
+
   function btcDominanceKv() {
     /* BTC.D: Bitcoin's share of the crypto market, from CoinGecko, and
      * its move over 24 h in percentage points. Context for ETH vs BTC -
@@ -3981,7 +4029,8 @@
       (block.ready ? 'ok' : 'wait') + '" style="width:' +
       (block.ready ? 100 : pct) + '%"></div></div><span>' +
       (block.ready ? 'candles ready' : count + '/' + needed + ' candles') +
-      '</span></div>' + warmupHtml(block.warmup);
+      '</span></div>' + warmupHtml(block.warmup) +
+      algoMarginHtml(row, filters.qty || params.algo_qty || 1);
 
     // -- FILTERS -----------------------------------------------------------
     var edge = filters.edge || {};

@@ -6977,3 +6977,38 @@ def test_the_algo_window_shows_btc_dominance(page):
         publisher.algo = 'NONE'
         publisher.algo_block = None
         publisher.publish()
+
+
+def test_the_algo_window_shows_margin_and_leverage(page):
+    """Margin & leverage in the Algo window: each leg's OKX leverage
+    (flagged when they differ), what one Qty and one Algo trade tie up,
+    that against equity, and whether the legs are beta's hedge."""
+    open_ladder(page)
+    publisher = page.paths['publisher']
+    publisher.algo = 'ALGO'
+    publisher.algo_block = _algo_block()
+    was = dict(publisher.pair_extra)
+    publisher.pair_extra.update({
+        'leverage_a': 10, 'leverage_b': 1,
+        'leg_notional': {'a': 70.62, 'b': 608.63, 'hedge_pct': 11.7}})
+    try:
+        publisher.publish()
+        page.wait_for_function(
+            "() => (document.querySelector('.window.algowin .aw-stats')"
+            " || {textContent: ''}).textContent.includes('A 10x')",
+            timeout=WAIT)
+        stats = page.text_content('.window.algowin .aw-stats')
+        assert 'Margin & leverage' in stats
+        assert 'A 10x' in stats and 'B 1x' in stats
+        assert '$679.25' in stats                      # notional per Qty
+        assert '12% of' in stats                       # the hedge, flagged
+        hedge = page.locator('.window.algowin .aw-kv', has_text='Hedge')
+        assert hedge.locator('b.down').count() == 1
+        lev = page.locator('.window.algowin .aw-kv', has_text='Leverage')
+        assert lev.locator('b.down').count() == 1
+    finally:
+        publisher.pair_extra.clear()
+        publisher.pair_extra.update(was)
+        publisher.algo = 'NONE'
+        publisher.algo_block = None
+        publisher.publish()

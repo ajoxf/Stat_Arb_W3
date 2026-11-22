@@ -887,6 +887,28 @@ class Coordinator:
                          "each leg's notional over its own account's "
                          "leverage — the terminals could not price it")}
 
+    @staticmethod
+    def _leg_notional(pair, md):
+        """Each leg's value for ONE Qty (lots x contract size x mid),
+        and the share of the beta hedge leg A covers: 100% is exactly
+        the hedge (A's value = beta x B's units x A's price). None where
+        a price or a contract size is not known."""
+        out = {'a': None, 'b': None, 'hedge_pct': None}
+        units = {}
+        for leg, lots, meta in (('a', pair.clip_lots_a, pair.meta_a),
+                                ('b', pair.clip_lots_b, pair.meta_b)):
+            mid = (md or {}).get(f'leg_{leg}_mid')
+            contract = (meta or {}).get('contract_size')
+            if not mid or not contract or not lots:
+                continue
+            units[leg] = float(lots) * float(contract)
+            out[leg] = round(units[leg] * float(mid), 2)
+        beta = float(pair.hedge_ratio or 0.0)
+        if 'a' in units and 'b' in units and beta > 0 and units['b'] > 0:
+            out['hedge_pct'] = round(units['a'] / (beta * units['b'])
+                                     * 100.0, 1)
+        return out
+
     def _margin_from_leverage(self, account, meta, lots):
         """Notional over THAT account's leverage. Not one for both."""
         info = self.account_info(account) or {}
@@ -4206,6 +4228,10 @@ class Coordinator:
                                                 pair.symbol_a),
                 'leverage_b': self.leg_leverage(pair.account_b,
                                                 pair.symbol_b),
+                # What ONE Qty is on each leg, in money at the mid: the
+                # Algo window's margin panel, and the plain check that
+                # the two legs are the hedge beta says they are.
+                'leg_notional': self._leg_notional(pair, md),
                 'quoting_leg': pair.quoting_leg,
                 # The leg that will ACTUALLY rest the pending — the
                 # setting when there is one, otherwise the wider book.
