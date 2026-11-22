@@ -6235,6 +6235,55 @@
     return html;
   }
 
+  function slipFillsHtml(f, byPair) {
+    /* EVERY FILL: each leg, each end, the price it was sent at against
+     * the price OKX filled it at. Said first and in one line - how many
+     * filled exactly where sent - because 'was there slippage on my
+     * fills?' is the question this tab is opened to answer. */
+    if (!f || !f.rows || !f.rows.length) { return ''; }
+    var s = f.summary || {};
+    function names(key) { return escapeHtml(((byPair[key] || {}).name) || key); }
+    var head = s.measured
+      ? '<b>' + s.exact + ' of ' + s.measured + '</b> leg fills filled ' +
+        'exactly at the price sent' +
+        (s.worse ? ' \u00b7 <span class="down"><b>' + s.worse +
+          '</b> worse, ' + money(-s.worse_money) + '</span>' : '') +
+        (s.better ? ' \u00b7 <span class="up"><b>' + s.better +
+          '</b> better, ' + money(-s.better_money) + '</span>' : '') +
+        (s.unmeasured ? ' \u00b7 ' + s.unmeasured + ' not measured' : '')
+      : 'no fill with its send price recorded yet';
+    var html = '<h4 class="slip-h">Slippage on every fill <small>\u2014 ' +
+      'each leg against the price it was sent at; positive is a cost. A ' +
+      'post-only maker fill fills at its own price, so it reads 0.' +
+      '</small></h4><div class="slip-fills-head">' + head + '</div>' +
+      '<table class="journal slip-fills"><thead><tr><th>Time</th>' +
+      '<th class="l">Ladder</th><th class="l">End</th><th class="l">Leg</th>' +
+      '<th class="l">Side</th><th>Lots</th><th>Sent at</th><th>Filled at</th>' +
+      '<th>Slip</th><th>bp</th><th>$</th></tr></thead><tbody>';
+    f.rows.forEach(function (r) {
+      var cls = r.slip === null || r.slip === undefined ? ''
+        : r.slip > 1e-9 ? 'down' : (r.slip < -1e-9 ? 'up' : '');
+      var when = r.at ? new Date(r.at * 1000) : null;
+      html += '<tr><td>' + (when ? when.toLocaleString(undefined, {
+          month: 'short', day: 'numeric', hour: '2-digit',
+          minute: '2-digit', second: '2-digit'}) : DASH) + '</td>' +
+        '<td class="l">' + names(r.pair_key) + '</td>' +
+        '<td class="l">' + (r.end === 'entry' ? 'Entry' : 'Exit') + '</td>' +
+        '<td class="l">' + r.leg + ' ' + escapeHtml(String(r.symbol || ''))
+          + '</td><td class="l">' + escapeHtml(r.side || DASH) + '</td>' +
+        '<td>' + fmt(r.volume, 2) + '</td>' +
+        '<td>' + fmt(r.sent, 4) + '</td><td>' + fmt(r.filled, 4) + '</td>' +
+        '<td class="' + cls + '">' + (r.slip === null || r.slip === undefined
+          ? DASH : fmt(r.slip, 4)) + '</td>' +
+        '<td class="' + cls + '">' + (r.slip_bps === null ||
+          r.slip_bps === undefined ? DASH : fmt(r.slip_bps, 2)) + '</td>' +
+        '<td class="' + cls + '">' + (r.slip_money === null ||
+          r.slip_money === undefined ? DASH : money(r.slip_money)) +
+        '</td></tr>';
+    });
+    return html + '</tbody></table>';
+  }
+
   function slippageTable() {
     var report = state.slippage;
     var html = '<div class="journal-controls">' +
@@ -6305,6 +6354,8 @@
                  : Math.round(report.click_to_on_median_ms) + ' ms',
                'median this session') +
       '</div>';
+
+    html += slipFillsHtml(report.fills, report.by_pair || {});
 
     // WHERE IT CAME FROM: the part a faster send would save, and the
     // part the broker's fills cost.

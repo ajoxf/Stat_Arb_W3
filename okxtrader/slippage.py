@@ -69,17 +69,20 @@ def session_window(now, offset_sec, close_hour=16, close_minute=55):
 def money(points, position):
     """`points` of spread, in dollars, for this position.
 
-    `spread_units` is `k` — dollars per 1.00 of spread per spread — and
-    `quantity` is how many spreads. Missing either one means the money
-    is unmeasured, not zero.
+    A position's `spread_units` is its WHOLE size already - leg B's
+    filled volume times its contract (see `SpreadPosition.mark`), the
+    dollars per 1.00 of spread for everything that position holds. It
+    used to be multiplied by `quantity` again here: at 30 spreads a slip
+    of 0.23 points read $7.34 where it cost $0.24, and every total and
+    share on the tab was the size times too big. Missing, the money is
+    unmeasured, not zero.
     """
     if points is None:
         return None
     units = position.get('spread_units')
-    quantity = position.get('quantity')
-    if not units or quantity is None:
+    if not units:
         return None
-    return points * float(units) * float(quantity)
+    return points * float(units)
 
 
 def _leg_slips(position):
@@ -358,6 +361,60 @@ def _summarise(rows):
     }
 
 
+def fills(positions):
+    """EVERY FILL, one row each: each leg of each position, at each end,
+    against the price it was SENT at - the broker's own fill, nothing
+    the spread did in between. Newest first, and a headline of how many
+    filled exactly where sent, worse, or better.
+
+    Positive slip is a cost. A post-only maker order fills at its own
+    price by construction, so a maker fill reads 0.00: that is a
+    measurement, not a missing one. A fill whose send price was not
+    kept is unmeasured (None), never 0.
+    """
+    rows = []
+    for position in positions or ():
+        for leg in ('a', 'b'):
+            fill = position.get('leg_' + leg) or {}
+            side = fill.get('side')
+            closing = {'BUY': 'SELL', 'SELL': 'BUY'}.get(side)
+            try:
+                size = float(fill['volume']) * float(fill['contract_size'])
+            except (KeyError, TypeError, ValueError):
+                size = None
+            for end, at, s, sent, got in (
+                    ('entry', position.get('opened_at'), side,
+                     fill.get('sent_price'), fill.get('price')),
+                    ('exit', position.get('closed_at'), closing,
+                     fill.get('exit_sent_price'), fill.get('exit_price'))):
+                if got is None and sent is None:
+                    continue                 # this end has not happened
+                points = _slip(s, sent, got)
+                rows.append({
+                    'at': at, 'position_id': position.get('position_id'),
+                    'pair_key': position.get('pair_key'), 'end': end,
+                    'leg': leg.upper(), 'symbol': fill.get('symbol'),
+                    'side': s, 'volume': fill.get('volume'),
+                    'sent': sent, 'filled': got, 'slip': points,
+                    'slip_bps': (None if points is None or not sent
+                                 else points / float(sent) * 1e4),
+                    'slip_money': (None if points is None or size is None
+                                   else points * size)})
+    rows.sort(key=lambda r: -(r['at'] or 0))
+    measured = [r for r in rows if r['slip'] is not None]
+    tiny = 1e-9
+    worse = [r for r in measured if r['slip'] > tiny]
+    better = [r for r in measured if r['slip'] < -tiny]
+    return {'rows': rows,
+            'summary': {
+                'fills': len(rows), 'measured': len(measured),
+                'exact': len(measured) - len(worse) - len(better),
+                'worse': len(worse), 'better': len(better),
+                'worse_money': sum(r['slip_money'] or 0.0 for r in worse),
+                'better_money': sum(r['slip_money'] or 0.0 for r in better),
+                'unmeasured': len(rows) - len(measured)}}
+
+
 def report(positions, window=None, names=None, worst_n=WORST_N):
     """The whole report for one session.
 
@@ -392,6 +449,7 @@ def report(positions, window=None, names=None, worst_n=WORST_N):
         'click_to_on_median_ms': _median([r['click_to_on_ms']
                                           for r in rows]),
         'pnl': _against_pnl(rows),
+        'fills': fills(positions),
         'counts': {
             'positions': len(rows),
             'open': sum(1 for r in rows if r['open']),

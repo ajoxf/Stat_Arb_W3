@@ -26,11 +26,17 @@ def position(**overrides):
 
 
 def test_money_uses_the_one_multiplier_and_nothing_else():
-    """`points x k x quantity` — the same conversion as the mark. A
-    second multiplier invented here would put the report and the P&L on
-    different scales."""
+    """`points x spread_units` - the same conversion as the mark, where
+    a position's spread_units is its WHOLE size already. Multiplying by
+    the quantity again (as this report did) put the slippage on a scale
+    `quantity` times the P&L's: 0.23 points on 30 spreads read $7.34
+    where it cost $0.24."""
     assert slippage.money(0.01, position(spread_units=1000.0, quantity=2.0)) \
-        == pytest.approx(20.0)
+        == pytest.approx(10.0)
+    from okxtrader.models import SpreadPosition
+    mark = SpreadPosition.mark
+    assert 'spread_units' in mark.__code__.co_names or \
+        'spread_units' in str(mark.__code__.co_names)
 
 
 def test_money_is_unmeasured_when_the_size_is_unknown():
@@ -234,3 +240,52 @@ def test_the_report_runs_over_the_store_end_to_end(tmp_path):
 
     assert body['counts']['positions'] == 1
     assert body['overall']['entry']['money_total'] == pytest.approx(10.0)
+
+
+def _leg(side, sent, price, exit_sent=None, exit_price=None, volume=0.35,
+         contract=0.1, symbol='ETH-USDT-SWAP'):
+    return {'side': side, 'sent_price': sent, 'price': price,
+            'exit_sent_price': exit_sent, 'exit_price': exit_price,
+            'volume': volume, 'contract_size': contract, 'symbol': symbol}
+
+
+def test_every_fill_against_the_price_it_was_sent_at():
+    """One row per leg per end: sent at, filled at, the slip in price,
+    bp and money - positive a cost. A maker fill at its own price is
+    0, said as 'exact'; a send price not kept is unmeasured, not 0."""
+    pos = position(
+        leg_a=_leg('SELL', 61000.0, 61000.0, 60900.0, 60905.0, volume=0.1,
+                   contract=0.01, symbol='BTC-USDT-SWAP'),
+        leg_b=_leg('BUY', 1709.30, 1709.40, None, 1712.0))
+    body = slippage.fills([pos])
+    rows = {(r['end'], r['leg']): r for r in body['rows']}
+    # Leg A entry: a maker fill at its own price.
+    assert rows[('entry', 'A')]['slip'] == 0.0
+    # Leg B entry: bought 0.10 above the price sent - a cost.
+    b = rows[('entry', 'B')]
+    assert b['slip'] == pytest.approx(0.10)
+    assert b['slip_bps'] == pytest.approx(0.10 / 1709.30 * 1e4)
+    assert b['slip_money'] == pytest.approx(0.10 * 0.35 * 0.1)
+    # Leg A exit: a SELL's close is a BUY - paid 5 above what was sent.
+    assert rows[('exit', 'A')]['side'] == 'BUY'
+    assert rows[('exit', 'A')]['slip'] == pytest.approx(5.0)
+    # Leg B exit: the send price was not kept - unmeasured, not 0.
+    assert rows[('exit', 'B')]['slip'] is None
+    s = body['summary']
+    assert (s['fills'], s['measured'], s['exact'], s['worse'], s['better'],
+            s['unmeasured']) == (4, 3, 1, 2, 0, 1)
+
+
+def test_an_open_position_has_its_entry_fills_only():
+    pos = position(closed_at=None,
+                   leg_a=_leg('SELL', 61000.0, 61000.0),
+                   leg_b=_leg('BUY', 1709.3, 1709.3))
+    body = slippage.fills([pos])
+    assert [r['end'] for r in body['rows']] == ['entry', 'entry']
+    assert body['summary']['exact'] == 2
+
+
+def test_the_report_carries_the_fills():
+    body = slippage.report([position(leg_a=_leg('SELL', 1.0, 1.0),
+                                     leg_b=_leg('BUY', 2.0, 2.0))])
+    assert body['fills']['summary']['measured'] == 2

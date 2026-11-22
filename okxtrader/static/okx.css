@@ -149,3 +149,8 @@
 /* The Algo window's Margin & leverage: one row per line, the figures
  * on one line at the right. */
 .window.algowin .aw-margin .aw-kv > b { white-space: nowrap; }
+
+/* Slippage on every fill: the one-line headline above the table. */
+.slip-fills-head { margin: 2px 0 4px; font-size: 12px; }
+.slip-fills-head .down { color: #c0392b; }
+.slip-fills-head .up { color: #2e9e4f; }

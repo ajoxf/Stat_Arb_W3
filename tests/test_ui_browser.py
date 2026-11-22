@@ -6712,6 +6712,14 @@ def test_the_slippage_page_says_what_it_cost_and_where_it_came_from(page):
         assert page.evaluate(
             "() => document.querySelector('.slip-detail').open") is False
         assert 'Round turn' in pane and 'Entries by ladder' in pane
+        # EVERY FILL, in one line and then one row each: sent against
+        # filled, per leg, per end.
+        head = page.text_content('.monitor .slip-fills-head')
+        assert 'leg fills filled exactly at the price sent' in head
+        heads = page.locator('.monitor .slip-fills th').all_text_contents()
+        for word in ('Sent at', 'Filled at', 'Slip', 'bp', '$'):
+            assert word in heads, word
+        assert page.locator('.monitor .slip-fills tbody tr').count() >= 2
     finally:
         page.evaluate("""() => { const s = window.MT5Trader.state;
             s.slippage = null; s.monitorTab = 'positions';
