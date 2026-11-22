@@ -889,7 +889,12 @@
     // Clamped on the way in as well as on the way out: a layout saved
     // on a big monitor must not hide a window on a laptop.
     if (at.left !== saved.left || at.top !== saved.top) {
-      layout[id] = {left: at.left, top: at.top, z: saved.z || 10};
+      // Moved back onto the screen, its SIZE kept: dropping it here
+      // shrank a tiled window to its default the first time it was
+      // pulled in from a bigger monitor's edge.
+      layout[id] = Object.assign({}, saved,
+                                 {left: at.left, top: at.top,
+                                  z: saved.z || 10});
       writeLayout();
     }
   }
@@ -902,6 +907,139 @@
     node.style.zIndex = nextZ();
     layout[id].z = topZ;
     writeLayout();
+  }
+
+  // -- Tidy: the desk tiled -------------------------------------------------
+  //
+  // One click lays every open window out edge to edge, filling the desk:
+  //
+  //   | ladder | ladder | Algo | Algo |  chart   |
+  //   |        |        |-------------|----------|
+  //   |        |        |   Monitor   |  chart   |
+  //
+  // Ladders full height on the left; the Algo windows beside them with
+  // the Trading Monitor under them across the same width; charts, the
+  // calculators and any other tool stacked down the right, sharing the
+  // height. Every window gets its place and size in the layout, so the
+  // arrangement is saved like one made by hand.
+
+  //: The width a ladder and an Algo window are given.
+  var TILE_LADDER_W = 380;
+  var TILE_ALGO_W = 380;
+  //: The Monitor's width when there is no Algo window over it.
+  var TILE_MONITOR_W = 760;
+  //: The least the right-hand column is given; past the screen's edge
+  //: the desk scrolls to it.
+  var TILE_RIGHT_MIN_W = 480;
+  //: The share of the height the Algo windows take over the Monitor.
+  var TILE_ALGO_SHARE = 0.62;
+  //: The most Tidy narrows the ladders and the middle column to fit
+  //: the charts on the screen: never below 85% of their width.
+  var TILE_MIN_SCALE = 0.85;
+  //: The least the middle column is given while the Monitor is in it:
+  //: its tables need the room, and the Algo windows widen to match.
+  var TILE_MIDDLE_MIN_W = 560;
+  //: How the right-hand column's height is shared: a chart is two plots
+  //: and takes twice a calculator's share.
+  var TILE_WEIGHT = {chart: 2, calc: 1, fair: 1, grid: 1.5, settings: 1.5};
+
+  function tileWindows() {
+    var desktop = el('desktop');
+    var W = desktop.clientWidth - 4, H = desktop.clientHeight - 4;
+    if (W <= 0 || H <= 0) { return tidyWindows(); }
+    var gap = SNAP_GAP;
+    var groups = {ladder: [], algo: [], monitor: [], right: []};
+    Array.prototype.forEach.call(
+      document.querySelectorAll('#desktop > .window'), function (node) {
+        var kind = panelIdOf(node).split(':')[0];
+        if (kind === 'ladder') { groups.ladder.push(node); }
+        else if (kind === 'algo') { groups.algo.push(node); }
+        else if (kind === 'monitor') { groups.monitor.push(node); }
+        else { groups.right.push(node); }
+      });
+    // In the taskbar's order, so Tidy is the same every time.
+    function byTab(a, b) {
+      return state.open.indexOf(panelIdOf(a)) -
+        state.open.indexOf(panelIdOf(b));
+    }
+    Object.keys(groups).forEach(function (k) { groups[k].sort(byTab); });
+    state.maximized = {};
+    var placed = [];
+    function put(node, left, top, w, h) {
+      placed.push({node: node, left: Math.round(left), top: Math.round(top),
+                   w: Math.max(240, Math.round(w)),
+                   h: Math.max(120, Math.round(h))});
+    }
+    // EVERYTHING ON ONE SCREEN where it can be: with two ladders, two
+    // Algo windows and the charts, the right-hand column would start
+    // past the edge - so the ladders and the middle column give up to
+    // 15% of their width first.
+    var algos = groups.algo.length;
+    var middleW = algos ? algos * TILE_ALGO_W + (algos - 1) * gap
+      : (groups.monitor.length ? TILE_MONITOR_W : 0);
+    if (groups.monitor.length) {
+      middleW = Math.max(middleW, TILE_MIDDLE_MIN_W);
+    }
+    var ladderW = TILE_LADDER_W;
+    var leftW = groups.ladder.length * (ladderW + gap) +
+      (middleW ? middleW + gap : 0);
+    var wantRight = groups.right.length ? TILE_RIGHT_MIN_W : 0;
+    if (leftW + wantRight > W && leftW > 0) {
+      var scale = Math.max(TILE_MIN_SCALE, (W - wantRight) / leftW);
+      ladderW = Math.floor(ladderW * scale);
+      middleW = Math.floor(middleW * scale);
+    }
+    var x = 0;
+    groups.ladder.forEach(function (node) {
+      put(node, x, 0, ladderW, H);
+      x += ladderW + gap;
+    });
+    var algoW = algos ? (middleW - (algos - 1) * gap) / algos : 0;
+    var algoH = groups.monitor.length && algos
+      ? Math.round(H * TILE_ALGO_SHARE) : H;
+    groups.algo.forEach(function (node, i) {
+      put(node, x + i * (algoW + gap), 0, algoW, algoH);
+    });
+    groups.monitor.forEach(function (node) {
+      var top = algos ? algoH + gap : 0;
+      put(node, x, top, middleW, H - top);
+    });
+    if (middleW) { x += middleW + gap; }
+    var n = groups.right.length;
+    if (n) {
+      var rightW = Math.max(W - x, TILE_RIGHT_MIN_W);
+      var weights = groups.right.map(function (node) {
+        return TILE_WEIGHT[panelIdOf(node).split(':')[0]] || 1;
+      });
+      var total = weights.reduce(function (a, b) { return a + b; }, 0);
+      var room = H - (n - 1) * gap, top = 0;
+      groups.right.forEach(function (node, i) {
+        var h = room * weights[i] / total;
+        put(node, x, top, rightW, h);
+        top += h + gap;
+      });
+    }
+    layout = {};
+    placed.forEach(function (p) {
+      var id = panelIdOf(p.node);
+      delete p.node.dataset.tidied;
+      p.node.classList.remove('maximized');
+      layout[id] = {left: p.left, top: p.top, w: p.w, h: p.h,
+                    z: 10, auto: false};
+    });
+    writeLayout();
+    desktop.scrollLeft = 0;
+    desktop.scrollTop = 0;
+    placed.forEach(function (p) {
+      size(p.node, p.w, p.h);
+      place(p.node, p.left, p.top);
+      p.node.style.zIndex = 10;
+      // A chart draws at its box's size: redraw at the new one.
+      if (p.node.classList.contains('chartwin')) {
+        p.node.dataset.drawn = '';
+      }
+    });
+    render();
   }
 
   function tidyWindows() {
@@ -8949,7 +9087,11 @@
       Array.prototype.forEach.call(
         document.querySelectorAll('.window.maximized'), applyMaximized);
     });
-    el('tidy').addEventListener('click', tidyWindows);
+    // Tidy tiles the desk; with Shift held, every window back in the
+    // plain row instead.
+    el('tidy').addEventListener('click', function (e) {
+      if (e.shiftKey) { tidyWindows(); render(); } else { tileWindows(); }
+    });
     poll();
     window.setInterval(poll, REFRESH_MS);
   }
@@ -8982,7 +9124,7 @@
     state: state, render: render, toast: toast, ask: ask, send: send,
     panelId: panelId, openPanel: openPanel, closePanel: closePanel,
     fmt: fmt, money: money, DASH: DASH,
-    tidyWindows: tidyWindows, sound: sound,
+    tidyWindows: tidyWindows, tileWindows: tileWindows, sound: sound,
     showFairWindow: showFairWindow, setAlgo: setAlgo,
     calcPosition: calcPosition,
     toastOutcome: toastOutcome

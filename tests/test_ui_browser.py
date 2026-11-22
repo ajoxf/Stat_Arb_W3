@@ -1369,7 +1369,9 @@ def tidy(page):
     moving when the click returns; a position read then is where a
     window WAS.
     """
-    page.click('#tidy')
+    # Shift: the plain row, the known baseline these tests start from.
+    # A plain click TILES the desk (test_tidy_tiles_the_desk...).
+    page.click('#tidy', modifiers=['Shift'])
     # A fresh baseline: two readings from THIS layout, not one left
     # over from a previous test's.
     page.evaluate("() => { window.__settleWas = {}; }")
@@ -7230,3 +7232,67 @@ def test_windows_snap_edge_to_edge_and_the_layout_is_kept_on_the_desk(page):
     page.evaluate("() => window.MT5Trader.closePanel('monitor:')")
     tidy(page)
     page.wait_for_timeout(1500)
+
+
+def test_tidy_tiles_the_desk_edge_to_edge(page):
+    """Tidy lays the desk out in one click: ladders full height on the
+    left, the Algo window beside them with the Trading Monitor under it,
+    charts and calculators stacked down the right - every window touching
+    its neighbour, nothing overlapping, the desk filled. Shift-Tidy is
+    the plain row."""
+    open_ladder(page)
+    publisher = page.paths['publisher']
+    publisher.algo = 'ALGO'
+    publisher.algo_block = _algo_block()
+    key = 'XAUUSD_|GC1226'
+    write_chart_history(page, key, 15)
+    try:
+        publisher.publish()
+        page.wait_for_selector('.window.algowin', timeout=WAIT)
+        page.evaluate("""(key) => { window.MT5Trader.openPanel('monitor:');
+            window.MT5Trader.openPanel('chart:' + key);
+            window.MT5Trader.openPanel('calc:' + key); }""", key)
+        page.wait_for_selector('.window.calcwin', timeout=WAIT)
+        page.wait_for_selector('.window.chartwin', timeout=WAIT)
+        page.errors.clear()
+        page.click('#tidy')
+        page.wait_for_timeout(300)
+        box = {name: page.locator(sel).first.bounding_box() for name, sel in (
+            ('ladder', '.window.ladder'), ('algo', '.window.algowin'),
+            ('monitor', '.window.monitor'), ('chart', '.window.chartwin'),
+            ('calc', '.window.calcwin'))}
+        desk = page.locator('#desktop').bounding_box()
+        near = lambda a, b: abs(a - b) <= 4
+        right = lambda b: b['x'] + b['width']
+        bottom = lambda b: b['y'] + b['height']
+        # Ladder on the left, full height.
+        assert near(box['ladder']['x'], desk['x'])
+        assert box['ladder']['height'] >= desk['height'] - 12
+        # The Algo window beside it, the Monitor under it, same column.
+        assert near(box['algo']['x'], right(box['ladder']))
+        assert near(box['monitor']['x'], box['algo']['x'])
+        assert near(box['monitor']['y'], bottom(box['algo']))
+        assert near(bottom(box['monitor']), bottom(box['ladder']))
+        # Chart and calculator stacked down the right, to the bottom.
+        assert near(box['chart']['x'], right(box['algo']))
+        assert near(box['calc']['x'], box['chart']['x'])
+        assert near(box['calc']['y'], bottom(box['chart'])) or \
+            near(box['chart']['y'], bottom(box['calc']))
+        assert near(max(bottom(box['chart']), bottom(box['calc'])),
+                    bottom(box['ladder']))
+        # Saved like a layout made by hand.
+        saved = page.evaluate(
+            "() => JSON.parse(localStorage.getItem('okxtrader.windows.v1'))")
+        assert saved['monitor:']['auto'] is False
+        assert page.errors == []
+        # Shift-Tidy: the plain row.
+        tidy(page)
+        assert page.locator('.window.floating').count() == 0
+    finally:
+        page.evaluate("""(key) => { const t = window.MT5Trader;
+            t.closePanel('monitor:'); t.closePanel('chart:' + key);
+            t.closePanel('calc:' + key); }""", key)
+        publisher.algo = 'NONE'
+        publisher.algo_block = None
+        publisher.publish()
+        tidy(page)

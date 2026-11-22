@@ -189,3 +189,11 @@
 /* The desk scrolls DOWN as well as across: a window placed below the
  * fold (a chart under a ladder) is reached by scrolling, never cut off. */
 #desktop { overflow-y: auto; }
+
+/* The calculator in a wide pane (tiled down the right): the form and
+ * the figures keep their own width at the left, not stretched across. */
+.window.calcwin .pc-body > * { max-width: 560px; }
+
+/* An Algo window given a size - by Tidy, or by its corner - takes it:
+ * the 420px cap is for the window as it first opens. */
+.window.algowin.sized { max-width: none; }
