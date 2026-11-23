@@ -339,3 +339,10 @@ def test_candles_through_okxs_rate_limit_are_asked_again(broker, sim):
     assert len(refused) == 2
     assert len(bars) == 600
     assert all('open' in b for b in bars)
+
+
+def test_candles_carry_their_volume_in_usdt(broker):
+    """OKX's 8th candle field, volCcyQuote: the leg's traded value in
+    USDT - the same unit on both legs, for the volume profile."""
+    bars = broker.rates('BTC-USDT-SWAP', 5, 10)
+    assert bars and all(b['volume'] == 7800000.0 for b in bars)

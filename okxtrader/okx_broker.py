@@ -617,8 +617,11 @@ class OKXBroker:
                 return None
         if not out:
             return None
+        # VOLUME in the quote currency (USDT): OKX's volCcyQuote, the
+        # 8th field. It prices the two legs alike, where contracts do not.
         bars = [{'time': int(int(r[0]) / 1000), 'open': float(r[1]),
-                 'close': float(r[4]), 'spread': 0, 'point': point}
+                 'close': float(r[4]), 'spread': 0, 'point': point,
+                 'volume': _f(r[7], None) if len(r) > 7 else None}
                 for r in out[:wanted]]
         bars.sort(key=lambda b: b['time'])
         return bars

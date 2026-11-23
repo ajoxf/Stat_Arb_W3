@@ -231,12 +231,36 @@ def spread_ohlc(bars_a, bars_b, beta, sub_sec, candle_sec, offset_a,
         open_b = open_by_bucket(bars_b, offset_b)
         opens = {k: open_b[k] - beta_f * open_a[k]
                  for k in set(open_a) & set(open_b)}
+    # VOLUME, where both legs' bars carry it (OKX's do, in USDT): the
+    # two legs' traded value in each finer bar, added - a spread has no
+    # volume of its own, and its legs' is how busy its price was. Each
+    # candle keeps its finer bars as [close, volume] in `f`, so a volume
+    # PROFILE can put the volume at the price it traded at rather than
+    # at the candle's close.
+    volumes = {}
+    if offset_a is not None and offset_b is not None:
+        def volume_by_bucket(bars, offset):
+            out = {}
+            for bar in bars or ():
+                if bar.get('volume') is None or bar.get('time') is None:
+                    continue
+                utc = float(bar['time']) - float(offset)
+                key = bucket_of(utc, sub_sec, anchor)
+                out[key] = out.get(key, 0.0) + float(bar['volume'])
+            return out
+        vol_a = volume_by_bucket(bars_a, offset_a)
+        vol_b = volume_by_bucket(bars_b, offset_b)
+        volumes = {k: vol_a[k] + vol_b[k] for k in set(vol_a) & set(vol_b)}
     candles = []
     for bucket, close in fine:
         start = bucket_of(bucket, candle_sec, anchor)
         opened = opens.get(bucket)
+        volume = volumes.get(bucket)
         if candles and candles[-1]['t'] == start:
             candle = candles[-1]
+            if volume is not None:
+                candle['v'] = candle.get('v', 0.0) + volume
+                candle.setdefault('f', []).append([close, volume])
             for price in (opened, close):
                 if price is not None:
                     candle['h'] = max(candle['h'], price)
@@ -244,9 +268,12 @@ def spread_ohlc(bars_a, bars_b, beta, sub_sec, candle_sec, offset_a,
             candle['c'] = close
         else:
             first = close if opened is None else opened
-            candles.append({'t': start, 'o': first,
-                            'h': max(first, close), 'l': min(first, close),
-                            'c': close})
+            candle = {'t': start, 'o': first, 'h': max(first, close),
+                      'l': min(first, close), 'c': close}
+            if volume is not None:
+                candle['v'] = volume
+                candle['f'] = [[close, volume]]
+            candles.append(candle)
     return candles
 
 

@@ -234,3 +234,10 @@
 .monitor .an-report { margin-left: 10px; padding: 1px 10px; border: 1px solid #808080;
   background: #fff; color: #16324f; font-weight: 600; text-decoration: none; }
 .monitor .an-report:hover { background: #16324f; color: #fff; }
+
+/* The volume profile switch on a chart window: lit while it is on. */
+.window.chartwin .cw-vp-toggle { padding: 0 6px; font-weight: 700;
+  cursor: pointer; margin-left: 4px; }
+.window.chartwin .cw-vp-toggle.on { background: #2f6fb0; color: #fff;
+  border-color: #1f4f80; }
+.window.chartwin .cw-vp { pointer-events: none; }

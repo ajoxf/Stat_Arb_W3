@@ -2426,7 +2426,9 @@ class Coordinator:
             'stop_z': params['stop_z'] if params['stop_z_on'] else None,
             'algo_timeframe_min': params['timeframe_min'],
             'anchor': anchor, 'at': now,
-            'candles': [{k: (round(v, 6) if k != 't' else v)
+            'candles': [{k: (v if k == 't' else
+                             [[round(p, 6), round(q, 2)] for p, q in v]
+                             if k == 'f' else round(v, 6 if k != 'v' else 2))
                          for k, v in c.items()} for c in candles]}
         cache[(pair_key, timeframe_min)] = (now, answer)
         # Written to a file of its own, not returned through the command

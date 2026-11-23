@@ -5993,7 +5993,8 @@ def test_the_signal_journal_reads_like_the_trade_journal(page):
     assert page.errors == []
 
 
-def write_chart_history(page, key, tf, count=150, age_sec=0.0):
+def write_chart_history(page, key, tf, count=150, age_sec=0.0,
+                        volume=False):
     """What the engine writes when the chart asks for MT5's candles.
     `age_sec`: how long ago it was read - its candles end then."""
     from okxtrader import chart
@@ -6007,6 +6008,11 @@ def write_chart_history(page, key, tf, count=150, age_sec=0.0):
         x += 0.02 * math.sin(i / 6.0) + (0.6 if i == count - 3 else 0)
         candles.append({'t': t, 'o': o, 'h': max(o, x) + 0.01,
                         'l': min(o, x) - 0.01, 'c': x})
+        if volume:
+            # Busiest near 59.10: the point of control sits there.
+            weight = 1000.0 / (1.0 + 400.0 * (x - 59.1) ** 2)
+            candles[-1]['f'] = [[o, weight], [x, weight]]
+            candles[-1]['v'] = 2 * weight
     path = chart.history_path(page.paths['status'])
     try:
         body = json.load(open(path, encoding='utf-8'))
@@ -7457,3 +7463,47 @@ def test_the_algo_levels_say_where_the_mean_exit_is(page):
     assert 'past TP' in words[2]
     assert words[3] == ''
     assert 'exits here first' in words[4]
+
+
+def test_the_volume_profile_puts_volume_in_its_price_band(page):
+    """[price, volume] of each finer bar, binned into even price bands
+    over the candles shown; nothing at all when no candle has volume."""
+    vp = page.evaluate("""() => window.MT5Trader.volumeProfile(
+        [{f: [[-20.1, 100], [-19.6, 50]]}, {f: [[-20.05, 300]]}, null],
+        -21, -19, 4)""")
+    assert [round(r['v']) for r in vp] == [0, 400, 50, 0]
+    assert page.evaluate(
+        "() => window.MT5Trader.volumeProfile([{c: 1}], 0, 1, 4)") == []
+
+
+def test_the_spread_chart_draws_a_volume_profile_and_turns_it_off(page):
+    """Both legs' traded value at each spread price, over the candles
+    shown: bars from the right edge, the fullest (POC) marked with its
+    price - and a VP button that takes it away."""
+    key = 'XAUUSD_|GC1226'
+    write_chart_history(page, key, 15, volume=True)
+    page.errors.clear()
+    # An earlier test's history (no volume) may still be held: read again.
+    page.evaluate("""(key) => { const t = window.MT5Trader;
+        t.closePanel('chart:' + key);
+        t.state.chartHist = {}; t.state.chartHistFetch = {};
+        t.state.chartVp = true;
+        t.openPanel('chart:' + key); }""", key)
+    page.wait_for_selector('.window.chartwin .cw-spread .cw-vp',
+                           timeout=WAIT)
+    win = page.locator('.window.chartwin')
+    assert win.locator('.cw-spread .cw-vp-bar').count() >= 3
+    assert win.locator('.cw-spread .cw-vp-bar.poc').count() == 1
+    assert 'POC 59.1' in win.locator('.cw-spread .cw-vp').text_content()
+    assert win.locator('.cw-z .cw-vp').count() == 0     # spread chart only
+    assert 'on' in win.locator('.cw-vp-toggle').get_attribute('class')
+    win.locator('.cw-vp-toggle').click()
+    page.wait_for_function(
+        "() => !document.querySelector('.window.chartwin .cw-spread .cw-vp')",
+        timeout=WAIT)
+    win.locator('.cw-vp-toggle').click()
+    page.wait_for_selector('.window.chartwin .cw-spread .cw-vp',
+                           timeout=WAIT)
+    page.evaluate("(key) => window.MT5Trader.closePanel('chart:' + key)",
+                  key)
+    assert page.errors == []

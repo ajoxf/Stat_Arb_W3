@@ -1349,6 +1349,18 @@
     });
     node.querySelector('.cw-zoom-reset').addEventListener('click',
       function () { chartResetView(node, key); });
+    node.querySelector('.cw-vp-toggle').addEventListener('click',
+      function () {
+        state.chartVp = !chartVpOn();
+        try {
+          window.localStorage.setItem('okxtrader.chartVp',
+                                      state.chartVp ? '1' : '0');
+        } catch (err) { /* a preference */ }
+        document.querySelectorAll('.chartwin').forEach(function (w) {
+          w.dataset.drawn = '';
+        });
+        render();
+      });
     node.querySelectorAll('.cw-tfs button').forEach(function (button) {
       button.addEventListener('click', function () {
         state.chartTf[key] = parseInt(button.dataset.tf, 10) || 15;
@@ -1554,6 +1566,8 @@
     var byT = {};
     var out = history.map(function (c) {
       var copy = {t: c.t, o: c.o, h: c.h, l: c.l, c: c.c};
+      // Volume rides along where OKX gave it: the profile reads it.
+      if (c.f) { copy.f = c.f; copy.v = c.v; }
       byT[c.t] = copy;
       return copy;
     });
@@ -2206,6 +2220,39 @@
     return kv('BTC.D', text, cls, title);
   }
 
+  function chartVpOn() {
+    /* The volume profile, on unless the trader turned it off (per
+     * browser). */
+    if (state.chartVp === undefined) {
+      try {
+        state.chartVp = window.localStorage.getItem('okxtrader.chartVp')
+          !== '0';
+      } catch (err) { state.chartVp = true; }
+    }
+    return state.chartVp;
+  }
+
+  function volumeProfile(candles, lo, hi, rows) {
+    /* [{lo, hi, v}] - the volume traded in each of `rows` even price
+     * bands from lo to hi, over the candles given. Each candle's volume
+     * sits at the prices its FINER bars closed at (`f`: [price, volume]),
+     * not all at its close. The point of control is the fullest row. */
+    var step = (hi - lo) / rows, out = [];
+    for (var r = 0; r < rows; r++) {
+      out.push({lo: lo + r * step, hi: lo + (r + 1) * step, v: 0});
+    }
+    var total = 0;
+    candles.forEach(function (c) {
+      (c && c.f || []).forEach(function (pv) {
+        var i = Math.floor((pv[0] - lo) / step);
+        if (i < 0 || i >= rows || !(pv[1] > 0)) { return; }
+        out[i].v += pv[1];
+        total += pv[1];
+      });
+    });
+    return total > 0 ? out : [];
+  }
+
   function svgCandles(box, candles, opts) {
     /* One candlestick plot at the box's own pixel size, so the labels
      * are crisp. Candles sit on the CLOCK: a stretch the broker sent
@@ -2294,6 +2341,40 @@
         '" text-anchor="end" font-size="11" fill="' + CHART.axis + '">' +
         v.toFixed(digits) + '</text>';
     });
+    // THE VOLUME PROFILE, behind everything priced: a bar per price
+    // band from the right edge of the plot, as long as the volume
+    // traded there. The fullest one (the point of control) darker,
+    // with a dotted line across at its middle.
+    if (opts.profile) {
+      var rows = Math.max(8, Math.min(48, Math.floor((h - top - bottom) / 5)));
+      var vp = volumeProfile(candles, lo, hi, rows);
+      if (vp.length) {
+        var vpMost = 0, poc = null;
+        vp.forEach(function (b) { if (b.v > vpMost) { vpMost = b.v; poc = b; } });
+        var widest = plotW * 0.28;
+        svg += '<g class="cw-vp">';
+        vp.forEach(function (b) {
+          if (!b.v) { return; }
+          var len = b.v / vpMost * widest;
+          var y1 = Y(b.hi), y2 = Y(b.lo);
+          svg += '<rect class="cw-vp-bar' + (b === poc ? ' poc' : '') +
+            '" x="' + (w - right - len).toFixed(1) + '" y="' +
+            (y1 + 0.5).toFixed(1) + '" width="' + len.toFixed(1) +
+            '" height="' + Math.max(1, y2 - y1 - 1).toFixed(1) +
+            '" fill="' + (b === poc ? '#2f6fb0' : '#7fa7cf') +
+            '" opacity="' + (b === poc ? '.45' : '.28') + '"/>';
+        });
+        var pocY = Y((poc.lo + poc.hi) / 2);
+        svg += '<line class="cw-vp-poc" x1="' + left + '" x2="' +
+          (w - right) + '" y1="' + pocY.toFixed(1) + '" y2="' +
+          pocY.toFixed(1) + '" stroke="#2f6fb0" stroke-width="1" ' +
+          'stroke-dasharray="2 3" opacity=".7"/>' +
+          '<text x="' + (w - right - widest - 4).toFixed(1) + '" y="' +
+          (pocY + 3).toFixed(1) +
+          '" text-anchor="end" font-size="10" fill="#2f6fb0">POC ' +
+          ((poc.lo + poc.hi) / 2).toFixed(2) + '</text></g>';
+      }
+    }
     lines.forEach(function (line) {
       svg += '<line class="' + (line.cls || '') + '" x1="' + left +
         '" x2="' + (w - right) + '" y1="' + Y(line.y).toFixed(1) +
@@ -2552,6 +2633,8 @@
     var sBox = node.querySelector('.cw-spread');
     // Only when the data or the room it is drawn in has changed.
     var view = chartView(key);
+    var vpButton = node.querySelector('.cw-vp-toggle');
+    if (vpButton) { vpButton.classList.toggle('on', chartVpOn()); }
     var stale = !!(hist && hist.ok && hist.at &&
                    Date.now() - hist.at * 1000 > CHART_STALE_MS);
     var stamp = [tf, view.shown, view.back, hist ? hist.at : '',
@@ -2665,7 +2748,8 @@
     }
     var sPlot = svgCandles(sBox, shown, {curves: curves, digits: 4,
                                          nowTag: true, nowDigits: 2,
-                                         times: times, seconds: seconds});
+                                         times: times, seconds: seconds,
+                                         profile: chartVpOn()});
     sBox.innerHTML = sPlot.svg;
     geom.s = sPlot.geom;
     node._drawn = {shown: shown, zc: zc, geom: geom, entry: entry,
@@ -9513,7 +9597,7 @@
     panelId: panelId, openPanel: openPanel, closePanel: closePanel,
     fmt: fmt, money: money, DASH: DASH,
     tidyWindows: tidyWindows, tileWindows: tileWindows, sound: sound,
-    sizingPane: sizingPane, sizingRow: sizingRow, meanExitWords: meanExitWords,
+    sizingPane: sizingPane, sizingRow: sizingRow, meanExitWords: meanExitWords, volumeProfile: volumeProfile,
     showFairWindow: showFairWindow, setAlgo: setAlgo,
     calcPosition: calcPosition,
     toastOutcome: toastOutcome

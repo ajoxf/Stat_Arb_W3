@@ -304,3 +304,26 @@ def test_a_history_that_could_not_be_written_is_not_kept_or_called_done(
     assert not [p for p in tmp_path.iterdir() if p.name.endswith('.tmp')]
     monkeypatch.undo()
     assert coordinator.chart_history(pair.key, 15)['ok'] is True
+
+
+def test_a_candle_carries_its_legs_volume_at_the_prices_it_traded():
+    """VOLUME PROFILE: a spread has no volume of its own, so each candle
+    carries both legs' traded value (USDT) - in total, and per finer bar
+    at that bar's spread, so the profile puts it where it traded."""
+    a = [{'time': 300 * i, 'open': 100.0, 'close': 100.0,
+          'volume': 1000.0} for i in range(3)]
+    b = [{'time': 0, 'open': 104.0, 'close': 92.0, 'volume': 500.0},
+         {'time': 300, 'open': 92.0, 'close': 101.0, 'volume': 700.0},
+         {'time': 600, 'open': 101.0, 'close': 103.0, 'volume': 300.0}]
+    [candle] = bands.spread_ohlc(a, b, 1.0, 300, 900, 0, 0)
+    assert candle['v'] == pytest.approx(4500.0)
+    assert candle['f'] == [[pytest.approx(-8.0), 1500.0],
+                           [pytest.approx(1.0), 1700.0],
+                           [pytest.approx(3.0), 1300.0]]
+
+
+def test_bars_without_volume_give_candles_without_it():
+    a = [bar(60 * i, 100.0) for i in range(3)]
+    b = [bar(60 * i, 105.0) for i in range(3)]
+    [candle] = bands.spread_ohlc(a, b, 1.0, 60, 900, 0, 0)
+    assert 'v' not in candle and 'f' not in candle
