@@ -126,6 +126,8 @@ def maker_words(job):
             'both legs resting as maker')
     return f"{what}: {legs}  ({int(job.get('age_sec') or 0)}s)"
 
+ADD_SIZES = [('SAME', 'Same as trade'), ('QTY', 'Qty'),
+             ('MARGIN', 'Total margin $')]
 DIRECTIONS = [('BOTH', 'Both'), ('H_TO_L', 'H to L only'),
               ('L_TO_H', 'L to H only')]
 LEVEL_MODES = [('MARGIN', '% of margin'), ('ATR', 'ATR')]
@@ -179,6 +181,9 @@ FIELDS = [
     ('add_on', 'Add on re-entry', 'algo', 'bool'),
     ('add_sigma', 'Add: sigma past the entry', 'algo', 'number'),
     ('max_adds', 'Most adds a trade', 'algo', 'number'),
+    ('add_size_by', 'Add size by', 'algo', ADD_SIZES),
+    ('add_qty', 'Add qty (spreads)', 'algo', 'number'),
+    ('add_margin', 'Add total margin $', 'algo', 'number'),
     # Daily limits
     ('max_trades_day', 'Max trades a day', 'algo', 'number'),
     ('max_losses_row', 'Max losses in a row', 'algo', 'number'),
@@ -227,7 +232,8 @@ SECTIONS = {
         f'{key}_{suffix}' for suffix in ('sell', 'buy')
         for key in ('stop_mode', 'target_mode', 'stop_loss_pct', 'tp_pct',
                     'atr_stop_mult', 'atr_target_mult')]),
-    'adds': ('Adding to a trade', ['add_on', 'add_sigma', 'max_adds']),
+    'adds': ('Adding to a trade', ['add_on', 'add_sigma', 'max_adds',
+                                   'add_size_by', 'add_qty', 'add_margin']),
     'limits': ('Daily limits', ['max_trades_day', 'max_losses_row',
                                 'daily_loss_limit']),
     'costs': ('Session and costs', ['session_open', 'session_close',
@@ -253,6 +259,8 @@ SHORT_LABELS = {
     'stop_z_on': 'Z-stop', 'stop_z': 'Z-stop at |z|',
     'time_stop_on': 'Time stop', 'time_stop_candles': 'Time stop bars',
     'add_on': 'Add', 'add_sigma': 'Add sigma', 'max_adds': 'Most adds',
+    'add_size_by': 'Add size by', 'add_qty': 'Add qty',
+    'add_margin': 'Add margin $',
     'max_trades_day': 'Trades a day', 'max_losses_row': 'Losses in row',
     'daily_loss_limit': 'Loss limit', 'commission_per_lot_a': 'Comm A /lot',
     'commission_per_lot_b': 'Comm B /lot', 'max_entry_z': 'Max entry z',

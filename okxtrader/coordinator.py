@@ -899,6 +899,15 @@ class Coordinator:
         sizing = getattr(self, '_algo_sizing', None)
         if sizing is None:
             sizing = self._algo_sizing = {}
+        if params['add_size_by'] == 'MARGIN':
+            # The ADD sized by a total margin of its own: the same
+            # arithmetic, into `add_qty` (0 while it cannot be priced -
+            # an add that is not sized does not go on).
+            per = (self.margin_detail(pair) or {}).get('money')
+            add = algo_module.qty_for_margin(params['add_margin'], per)
+            if pair.algo_params is None:
+                pair.algo_params = {}
+            pair.algo_params['add_qty'] = add or 0.0
         if params['algo_size_by'] != 'MARGIN':
             sizing.pop(pair.key, None)
             return

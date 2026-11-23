@@ -86,3 +86,28 @@ def test_a_poll_sizes_the_algo_from_its_margin(config, pair, legs):
     row = coordinator.snapshot()['pairs'][pair.key]
     assert row['algo_sizing']['qty'] == pytest.approx(25.0)
     assert row['algo_params']['algo_qty'] == pytest.approx(25.0)
+
+
+def test_the_add_qty_follows_its_own_total_margin(config, pair, legs):
+    """Add size by Total margin: its own Qty, worked out like the
+    trade's - and the trade's Qty is left alone."""
+    pair.algo_params = {'algo_qty': 3.0, 'add_size_by': 'MARGIN',
+                        'add_margin': 60.0}
+    coordinator = _coordinator(config, legs, 6.0426)
+    coordinator._algo_size_from_margin(pair)
+    params = algo.clean_params(pair.algo_params)
+    assert params['add_qty'] == pytest.approx(9.92)
+    assert params['algo_qty'] == 3.0
+    assert algo.add_quantity(params) == pytest.approx(9.92)
+    # Too small to buy the smallest size: no add size, so no add.
+    pair.algo_params['add_margin'] = 0.01
+    coordinator._algo_size_from_margin(pair)
+    assert algo.add_quantity(algo.clean_params(pair.algo_params)) is None
+
+
+def test_add_size_by_is_checked_and_same_by_default():
+    assert algo.DEFAULT_PARAMS['add_size_by'] == 'SAME'
+    assert algo.add_quantity(algo.clean_params({'algo_qty': 4})) == 4
+    assert algo.check_params({'add_size_by': 'LOTS'})
+    assert algo.clean_params({'add_size_by': 'margin'})['add_size_by'] == \
+        'MARGIN'

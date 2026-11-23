@@ -3412,6 +3412,9 @@
     ['.ls-az-add-on', 'add_on', 'check'],
     ['.ls-az-add-sigma', 'add_sigma', 'number'],
     ['.ls-az-max-adds', 'max_adds', 'number'],
+    ['.ls-az-add-size-by', 'add_size_by', 'text'],
+    ['.ls-az-add-qty', 'add_qty', 'number'],
+    ['.ls-az-add-margin', 'add_margin', 'number'],
     ['.ls-az-time-on', 'time_stop_on', 'check'],
     ['.ls-az-time', 'time_stop_candles', 'number']
   ];
@@ -4455,7 +4458,8 @@
           : levelWords(first.sl, first.sl_money, digits)) +
         // Where an ADD would go on: the spread it must reach first.
         (add.beyond === null || add.beyond === undefined ? ''
-          : ' · add ' + (add.side === 'SELL' ? '\u2265 ' : '\u2264 ') +
+          : ' · add ' + addSizeWords(block.params || {}) +
+            (add.side === 'SELL' ? '\u2265 ' : '\u2264 ') +
             fmt(add.beyond, digits) + ' on re-entry');
     }
     if (state === 'BLOCKED') { return 'held: ' + (block.blocked || ''); }
@@ -4777,6 +4781,15 @@
       fmt(covered, 2).replace(/\.?0+$/, '') + ' of ' +
       fmt(total, 2).replace(/\.?0+$/, '') + '.</b> The other ' +
       fmt(rest, 2).replace(/\.?0+$/, '') + ' has no close order.</div>';
+  }
+
+  function addSizeWords(params) {
+    /* "17.25 " - the Qty an add would go on at, from its own size or the
+     * trade's; "(size not set) " when it has one of its own that is 0. */
+    var qty = (params.add_size_by || 'SAME') === 'SAME' ? params.algo_qty
+      : params.add_qty;
+    if (qty === undefined) { return ''; }
+    return qty > 0 ? fmt(qty, 2) + ' ' : '(size not set) ';
   }
 
   function addsHtml(adds, block, params, digits) {
@@ -9641,7 +9654,7 @@
     panelId: panelId, openPanel: openPanel, closePanel: closePanel,
     fmt: fmt, money: money, DASH: DASH,
     tidyWindows: tidyWindows, tileWindows: tileWindows, sound: sound,
-    sizingPane: sizingPane, sizingRow: sizingRow, meanExitWords: meanExitWords, volumeProfile: volumeProfile,
+    sizingPane: sizingPane, sizingRow: sizingRow, meanExitWords: meanExitWords, volumeProfile: volumeProfile, addSizeWords: addSizeWords,
     showFairWindow: showFairWindow, setAlgo: setAlgo,
     calcPosition: calcPosition,
     toastOutcome: toastOutcome

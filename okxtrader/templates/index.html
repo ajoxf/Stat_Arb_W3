@@ -762,6 +762,19 @@
           <label class="lsf" title="The most adds to one trade. 1: never more than two positions on the ladder.">
             <span>Most adds</span>
             <input class="ls-az-max-adds" type="number" min="0" step="1"></label>
+          <label class="lsf" title="How big an ADD is. Same as trade: whatever sizes the Algo trade (its Qty or its total margin). Qty: the Add qty below. Total margin: the margin one add may tie up at OKX, both legs together - the Qty is worked out from it on every poll, rounded down.">
+            <span>Add size by</span>
+            <select class="ls-az-add-size-by">
+              <option value="SAME">Same as trade</option>
+              <option value="QTY">Qty</option>
+              <option value="MARGIN">Total margin $</option>
+            </select></label>
+          <label class="lsf" title="With Add size by = Qty: one add, in spreads.">
+            <span>Add qty</span>
+            <input class="ls-az-add-qty" type="number" min="0" step="0.01"></label>
+          <label class="lsf" title="With Add size by = Total margin: the margin ONE add may tie up at OKX, both legs together.">
+            <span>Add margin $</span>
+            <input class="ls-az-add-margin" type="number" min="0" step="10"></label>
           <label class="lsf" title="One Algo trade, in spreads: 1 = this ladder&#8217;s Leg A lots / Leg B lots. Its own number — the keypad does not change it.">
             <span>Algo qty</span>
             <input class="ls-az-qty" type="number" min="0.01" step="0.01"></label>

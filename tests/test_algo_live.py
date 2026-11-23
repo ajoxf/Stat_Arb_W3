@@ -372,3 +372,34 @@ def test_a_failed_exit_is_retried_at_a_pace(ready):
     clock.now += 5
     coordinator.poll_once()
     assert len(fake.left) == 2
+
+
+def test_an_add_goes_on_at_its_own_size(ready):
+    """The ADD has a size of its own where the trader gives it one; the
+    trade keeps the Algo's. An add whose own size is not set does not go
+    on - and says why."""
+    config, pair, legs = ready
+    pair.algo_params = dict(QUIET, algo_qty=2.0, add_size_by='QTY',
+                            add_qty=0.5)
+    coordinator = engine(config, legs)
+    live(coordinator, pair)
+    coordinator.poll_once()
+    fake = coordinator.algos.live = FakeLive()
+    run = coordinator.algos._runs[pair.key]
+    desk = coordinator.algos
+    desk._send(pair, run, {'action': 'ENTER', 'side': 'SELL', 'z': 2.6,
+                           'add': True}, 0.0)
+    desk._send(pair, run, {'action': 'ENTER', 'side': 'SELL', 'z': 2.6},
+               0.0)
+    assert [q for _side, q in fake.entered] == [0.5, 2.0]
+    # Same as the trade: the Algo's own Qty.
+    run.params = dict(run.params, add_size_by='SAME')
+    desk._send(pair, run, {'action': 'ENTER', 'side': 'SELL', 'z': 2.6,
+                           'add': True}, 0.0)
+    assert fake.entered[-1][1] == 2.0
+    # A size of its own, not set: nothing is sent.
+    run.params = dict(run.params, add_size_by='QTY', add_qty=0.0)
+    answer = desk._send(pair, run, {'action': 'ENTER', 'side': 'SELL',
+                                    'z': 2.6, 'add': True}, 0.0)
+    assert not answer['ok'] and 'add size' in answer['reason']
+    assert len(fake.entered) == 3

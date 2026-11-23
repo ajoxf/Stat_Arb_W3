@@ -255,7 +255,27 @@ DEFAULT_PARAMS = {
     'add_on': True,
     'add_sigma': 2.0,
     'max_adds': 1,
+    #: The ADD's own size: SAME as the trade (whatever sizes it), a QTY
+    #: of its own (`add_qty`), or a TOTAL MARGIN of its own
+    #: (`add_margin`, both legs together - the desk works the Qty out
+    #: from it on every poll, as it does for the trade, into `add_qty`).
+    'add_size_by': 'SAME',
+    'add_qty': 0.0,
+    'add_margin': 0.0,
 }
+
+#: How the add is sized.
+ADD_SIZE_BY = ('SAME', 'QTY', 'MARGIN')
+
+
+def add_quantity(params):
+    """The Qty ONE add goes on at, or None when it is not set (a Qty or
+    margin of its own that is 0, or a margin too small for the smallest
+    size)."""
+    if params.get('add_size_by', 'SAME') == 'SAME':
+        return params['algo_qty']
+    qty = params.get('add_qty') or 0.0
+    return qty if qty > 0 else None
 
 #: The exit settings a SIDE can have its own value of. Blank (None) is
 #: the ladder's own value - which, for `tp_pct`, is the ladder's TP % of
@@ -351,6 +371,11 @@ def clean_params(raw):
                 if chosen in SIZE_BY:
                     out[key] = chosen
                 continue
+            if key == 'add_size_by':
+                chosen = str(value).strip().upper()
+                if chosen in ADD_SIZE_BY:
+                    out[key] = chosen
+                continue
             if key in ('stop_mode', 'target_mode') or \
                     _side_base(key) in ('stop_mode', 'target_mode'):
                 chosen = str(value).strip().upper()
@@ -420,6 +445,11 @@ def check_params(raw):
         if key == 'algo_size_by':
             if str(value).strip().upper() not in SIZE_BY:
                 problems.append(f'size by {value!r} — choose QTY or MARGIN')
+            continue
+        if key == 'add_size_by':
+            if str(value).strip().upper() not in ADD_SIZE_BY:
+                problems.append(f'add size by {value!r} — choose SAME, QTY '
+                                f'or MARGIN')
             continue
         if key in ('stop_mode', 'target_mode') or \
                 _side_base(key) in ('stop_mode', 'target_mode'):

@@ -7559,3 +7559,11 @@ def test_the_algo_box_shows_an_add_and_where_the_next_would_go(page):
         publisher.algo = 'NONE'
         publisher.algo_block = None
         publisher.publish()
+
+
+def test_the_add_says_the_size_it_would_go_on_at(page):
+    words = page.evaluate("""() => { const f = window.MT5Trader.addSizeWords;
+        return [f({algo_qty: 17.25}), f({add_size_by: 'QTY', add_qty: 5}),
+                f({add_size_by: 'MARGIN', add_qty: 0, algo_qty: 3}), f({})];
+    }""")
+    assert words == ['17.25 ', '5.00 ', '(size not set) ', '']

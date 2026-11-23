@@ -128,7 +128,10 @@ def signal_alert(intent, positions, params, now, previous=None):
         return f'{float(value):+.{digits}f}' if signed \
             else f'{float(value):.{digits}f}'
     if intent['action'] == 'ENTER':
-        text = (f"{words} — {side} {params['algo_qty']:g} @ "
+        qty = (algo_module.add_quantity(params) if intent.get('add')
+               else params['algo_qty']) or 0.0
+        text = (f"{'ADD ' if intent.get('add') else ''}{words} — {side} "
+                f"{qty:g} @ "
                 f"{num(intent.get('spread'))} (z {num(intent.get('z'), 2, True)})")
         kind, reason = 'ENTRY', None
     else:
@@ -501,8 +504,16 @@ class AlgoDesk:
         """Hand a LIVE intent to the live sink, and keep score."""
         try:
             if intent['action'] == 'ENTER':
-                answer = self.live.enter(pair, intent['side'],
-                                         run.params['algo_qty'])
+                # An ADD goes on at its own size, where it has one.
+                qty = (algo_module.add_quantity(run.params)
+                       if intent.get('add') else run.params['algo_qty'])
+                if not qty:
+                    answer = {'ok': False,
+                              'reason': 'the add size is not set - give it '
+                                        'a Qty or a total margin, or '
+                                        'size it the same as the trade'}
+                else:
+                    answer = self.live.enter(pair, intent['side'], qty)
             else:
                 answer = self.live.leave(pair, intent['position_id'],
                                          intent.get('reason'))
