@@ -7363,3 +7363,46 @@ def test_the_dollar_keypad_sizes_by_total_margin_and_the_buttons_say_it(
         publisher.publish()
         page.evaluate("""() => { const s = window.MT5Trader.state;
             s.armed = {}; s.armedUsd = {}; window.MT5Trader.render(); }""")
+
+
+def test_the_sizing_tab_is_the_sheet_live_with_a_win_rate_toggle(page):
+    """A Sizing tab beside Analysis: capital in hand from $5k to $500k,
+    per trade, a month and drawdowns, from the ETH vs BTC ladder's live
+    prices (fixed figures without one) - with the win rate toggled and
+    the target, stop, trades a day and margin share typed in."""
+    page.errors.clear()
+    page.evaluate("""() => { const s = window.MT5Trader.state;
+        s.open = ['monitor:']; s.monitorTab = 'sizing'; s.sizing = null;
+        window.MT5Trader.render(); }""")
+    page.wait_for_selector('.monitor table.sz-table', timeout=WAIT)
+    rows = page.locator('.monitor table.sz-table tbody tr')
+    assert rows.count() == 22
+    assert rows.first.locator('td').nth(1).text_content() == '$5k'
+    assert rows.last.locator('td').nth(1).text_content() == '$500k'
+    # The defaults: target 1.5% of margin (0.9% of capital), stop 1.5% of
+    # capital, 65% wins, 90 trades: +5.4% of capital a month.
+    summary = page.text_content('.monitor .sz-sum')
+    assert 'break-even win rate 62.5%' in summary
+    assert '+5.4% of capital a month' in summary
+    hundred = rows.nth(5).locator('td')
+    assert hundred.nth(1).text_content() == '$100k'
+    assert hundred.nth(6).text_content() == '+$900'
+    assert hundred.nth(7).text_content() == '−$1,500'
+    assert hundred.nth(11).text_content() == '+$5.4k'
+    # 70%: 0.7 x 0.9 - 0.3 x 1.5 = +0.18% a trade, +16.2% a month.
+    page.click('.monitor .sz-win[data-win="70"]')
+    page.wait_for_function(
+        "() => document.querySelector('.monitor .sz-sum').textContent"
+        ".includes('+16.2% of capital a month')", timeout=WAIT)
+    assert 'on' in page.locator('.monitor .sz-win[data-win="70"]') \
+        .get_attribute('class')
+    # A stop of 1% of capital: 0.7 x 0.9 - 0.3 x 1.0 = +0.33%, +29.7%.
+    box = page.locator('.monitor .sz-input[data-key="stopPctCapital"]')
+    box.fill('1')
+    box.press('Tab')
+    page.wait_for_function(
+        "() => document.querySelector('.monitor .sz-sum').textContent"
+        ".includes('+29.7% of capital a month')", timeout=WAIT)
+    assert page.errors == []
+    page.evaluate("""() => { const s = window.MT5Trader.state;
+        s.sizing = null; s.open = []; window.MT5Trader.render(); }""")

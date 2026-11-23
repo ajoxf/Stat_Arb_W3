@@ -201,3 +201,27 @@
 /* M on the ladder: the Algo's mean while a position is on, in the
  * chart's own mean orange. Visual only. */
 .ladder .price .lvl-tag.mean { background: #fd7e14; }
+
+/* THE SIZING TAB: the win-rate toggle and the settings in one bar, a
+ * one-line summary, then the table - every cell centred, ruled. */
+.monitor .sz { padding: 4px 2px; }
+.monitor .sz-bar { display: flex; flex-wrap: wrap; align-items: center;
+  gap: 4px 6px; margin-bottom: 4px; }
+.monitor .sz-label { font-weight: 600; font-size: 11px; }
+.monitor .sz-win { font: 600 11px var(--font); padding: 1px 8px;
+  border: 1px solid rgba(0, 0, 0, .3); border-radius: 2px;
+  background: var(--chrome); cursor: pointer; }
+.monitor .sz-win.on { background: #0d6efd; color: #fff; border-color: #0d6efd; }
+.monitor .sz-inputs { display: inline-flex; flex-wrap: wrap; gap: 4px 10px;
+  margin-left: 10px; font-size: 11px; }
+.monitor .sz-inputs input { width: 56px; font: 11px var(--font); }
+.monitor .sz-sum { font-size: 11px; margin: 2px 0 6px; }
+.monitor .sz-sum .up { color: #2e9e4f; } .monitor .sz-sum .down { color: #c0392b; }
+.monitor .sz-wrap { overflow-x: auto; }
+.monitor table.sz-table { width: 100%; border-collapse: collapse; }
+.monitor table.sz-table th, .monitor table.sz-table td {
+  text-align: center; border: 1px solid #b8bec5; padding: 2px 4px; }
+.monitor table.sz-table th small { font-weight: 400; color: #6b7280; }
+.monitor table.sz-table td.up { color: #2e9e4f; }
+.monitor table.sz-table td.down { color: #c0392b; }
+.monitor .sz-notes { font-size: 10.5px; margin-top: 6px; color: #444; }

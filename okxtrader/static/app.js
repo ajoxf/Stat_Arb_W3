@@ -1873,6 +1873,157 @@
     out.innerHTML = html;
   }
 
+  // -- the Sizing tab ------------------------------------------------------
+  //
+  // The sizing sheet, live: capital in hand down the side, what it
+  // means per trade, a month and in a run of losses. Worked out here
+  // from the ETH vs BTC ladder's own prices, beta and leverage and OKX's
+  // UAE (AED) futures fee schedule. A planning table only.
+
+  //: OKX UAE futures fee tiers: 30-day volume floor (AED), maker and
+  //: taker in bp. From okx.com/en-ae/fees, 23 Nov 2026.
+  var SZ_TIERS = [['Regular', 0, 10, 25], ['VIP 1', 100e6, 5, 12.5],
+                  ['VIP 2', 200e6, 4, 10], ['VIP 3', 500e6, 2.5, 9],
+                  ['VIP 4', 1250e6, 1.5, 8.5], ['VIP 5', 2160e6, 0.8, 8],
+                  ['VIP 6', 3600e6, 0, 7.5]];
+  var SZ_AED_USD = 1 / 3.6725;
+  var SZ_WINS = [55, 60, 62.5, 65, 70, 75, 80];
+  var SZ_LOSS_SHARES = [5, 10, 15, 20, 25, 30, 35];
+
+  function sizingSettings() {
+    var d = {win: 65, perDay: 3, targetPctMargin: 1.5, stopPctCapital: 1.5,
+             marginShare: 60};
+    return Object.assign(d, state.sizing || {});
+  }
+
+  function sizingMarket() {
+    /* ETH + beta x BTC and the leverage, from the ETH vs BTC ladder;
+     * fixed figures until one is live. */
+    var pairs = (state.snapshot || {}).pairs || {};
+    var found = null;
+    Object.keys(pairs).forEach(function (key) {
+      var r = pairs[key];
+      if (!found && /BTC-USDT-SWAP/.test(r.symbol_a || '') &&
+          /ETH-USDT-SWAP/.test(r.symbol_b || '')) { found = r; }
+    });
+    var m = (found || {}).market || {};
+    var a = mid(m.leg_a_bid, m.leg_a_ask), b = mid(m.leg_b_bid, m.leg_b_ask);
+    var beta = (found || {}).hedge_ratio;
+    var lev = Math.min((found || {}).leverage_a || 20,
+                       (found || {}).leverage_b || 20) || 20;
+    if (a && b && beta) {
+      return {per: b + beta * a, lev: lev, live: true, eth: b, btc: a};
+    }
+    return {per: 1720 + 0.028402 * 61400, lev: 20, live: false,
+            eth: 1720, btc: 61400};
+  }
+
+  function sizingPane() {
+    var cfg = sizingSettings();
+    var mk = sizingMarket();
+    var w = cfg.win / 100, perMonth = cfg.perDay * 30;
+    function k(x) {
+      var a = Math.abs(x);
+      return (a < 100e3 && Math.round(a) % 1000 ? '$' + (a / 1e3).toFixed(1)
+        : '$' + Math.round(a / 1e3).toLocaleString('en-US')) + 'k';
+    }
+    function usd(x) {
+      return '$' + Math.round(Math.abs(x)).toLocaleString('en-US');
+    }
+    function signed(x, f) { return (x >= 0 ? '+' : '−') + f(x); }
+    var wins = SZ_WINS.map(function (v) {
+      return '<button type="button" class="sz-win' +
+        (v === cfg.win ? ' on' : '') + '" data-win="' + v + '">' + v +
+        '%</button>';
+    }).join('');
+    function input(key, label, step) {
+      return '<label>' + label + ' <input class="sz-input" type="number" ' +
+        'min="0" step="' + step + '" data-key="' + key + '" value="' +
+        cfg[key] + '"></label>';
+    }
+    // Per trade, as shares of capital: the rest is the same arithmetic.
+    var target = cfg.targetPctMargin / 100 * cfg.marginShare / 100;
+    var stop = cfg.stopPctCapital / 100;
+    var perTrade = w * target - (1 - w) * stop;
+    var breakEven = stop / (target + stop) * 100;
+    var losses = SZ_LOSS_SHARES.map(function (p) {
+      return Math.ceil(perMonth * p / 100);
+    });
+    var html = '<div class="sz">' +
+      '<div class="sz-bar"><span class="sz-label">Win rate</span>' + wins +
+      '<span class="sz-inputs">' + input('perDay', 'Trades / day', 1) +
+      input('targetPctMargin', 'Target % of margin', 0.1) +
+      input('stopPctCapital', 'Stop % of capital', 0.1) +
+      input('marginShare', 'In trade % of capital', 5) + '</span></div>' +
+      '<div class="sz-sum">Per trade: target <b>+' +
+      (target * 100).toFixed(2) + '%</b> of capital, stop <b>−' +
+      (stop * 100).toFixed(2) + '%</b> · break-even win rate <b>' +
+      breakEven.toFixed(1) + '%</b> · at ' + cfg.win + '%: <b class="' +
+      (perTrade >= 0 ? 'up' : 'down') + '">' +
+      signed(perTrade * perMonth * 100, function (v) {
+        return Math.abs(v).toFixed(1); }) + '% of capital a month</b> (' +
+      perMonth + ' trades) · ' + cfg.marginShare + '% of capital ' +
+      'as margin at ' + mk.lev + 'x · ' + (mk.live
+        ? 'live: ETH ' + mk.eth.toFixed(2) + ', BTC ' +
+          Math.round(mk.btc).toLocaleString('en-US')
+        : 'no live price yet: ETH 1,720, BTC 61,400') + '</div>' +
+      '<div class="sz-wrap"><table class="sz-table"><thead>' +
+      '<tr><th rowspan="2">Sr</th><th colspan="5">Size</th>' +
+      '<th colspan="2">Per trade (net)</th><th colspan="3">Volume and fee ' +
+      'tier</th><th colspan="3">Month at ' + cfg.win + '% wins</th>' +
+      '<th colspan="7">Drawdown if this share of the ' + perMonth +
+      ' trades lose, back to back</th></tr><tr>' +
+      '<th>Capital in hand</th><th>Margin / trade</th><th>Free</th>' +
+      '<th>Position (both legs)</th><th>$ / point</th>' +
+      '<th>Target</th><th>Stop</th>' +
+      '<th>30-day volume</th><th>AED tier</th><th>Maker / Taker (bp)</th>' +
+      '<th>Net P&amp;L</th><th>Return on capital</th>' +
+      '<th>Return on margin</th>' +
+      SZ_LOSS_SHARES.map(function (p, i) {
+        return '<th>' + p + '%<br><small>' + losses[i] + ' losses · ' +
+          '−' + (losses[i] * stop * 100).toFixed(1) + '%</small></th>';
+      }).join('') + '</tr></thead><tbody>';
+    var caps = [5e3, 10e3];
+    for (var c = 25e3; c <= 500e3; c += 25e3) { caps.push(c); }
+    caps.forEach(function (capital, i) {
+      var margin = capital * cfg.marginShare / 100;
+      var position = margin * mk.lev;
+      var point = position / mk.per;
+      var volume = position * 2 * perMonth;
+      var tier = SZ_TIERS[0];
+      SZ_TIERS.forEach(function (t) {
+        if (volume >= t[1] * SZ_AED_USD) { tier = t; }
+      });
+      var net = perTrade * capital * perMonth;
+      var cls = net >= 0 ? 'up' : 'down';
+      html += '<tr><td>' + (i + 1) + '</td><td>' + k(capital) + '</td><td>' +
+        k(margin) + '</td><td>' + k(capital - margin) + '</td><td>$' +
+        (position / 1e6).toFixed(2) + 'M</td><td>' + usd(point) +
+        '</td><td>+' + usd(target * capital) + '</td><td>−' +
+        usd(stop * capital) + '</td><td>$' +
+        Math.round(volume / 1e6).toLocaleString('en-US') + 'M</td><td>' +
+        tier[0] + '</td><td>' + tier[2] + ' / ' + tier[3] + '</td>' +
+        '<td class="' + cls + '">' + signed(net, k) + '</td>' +
+        '<td class="' + cls + '">' + signed(perTrade * perMonth * 100,
+          function (v) { return Math.abs(v).toFixed(1); }) + '%</td>' +
+        '<td class="' + cls + '">' + signed(perTrade * perMonth * 100 /
+          (cfg.marginShare / 100), function (v) {
+            return Math.abs(v).toFixed(1); }) + '%</td>' +
+        losses.map(function (n) {
+          return '<td>−' + k(n * stop * capital) + '</td>';
+        }).join('') + '</tr>';
+    });
+    html += '</tbody></table></div><div class="sz-notes">' +
+      '<b>$ / point:</b> P&amp;L for one point of spread (−20 → ' +
+      '−19). <b>Target / Stop:</b> from break-even, so a win nets the ' +
+      'target and a stop costs the stop; fees move break-even, not the ' +
+      'result. <b>Volume</b> = position × 2 (open + close) × ' +
+      'trades; VIP 5 ≥ $588M, VIP 6 ≥ $980M a month. ' +
+      '<b>Not included:</b> slippage on stops, taker fills on entries or ' +
+      'targets, funding.</div></div>';
+    return html;
+  }
+
   function sizeDollars(row, qty) {
     /* ' · $3,563': a size in spreads as money, both legs together at
      * the mid now. Nothing when a leg's price or size is not known. */
@@ -5750,7 +5901,8 @@
         '<button data-tab="slippage">Slippage</button>' +
         '<button data-tab="accounts">Accounts</button>' +
         '<button data-tab="reconcile">Reconciler</button>' +
-        '<button data-tab="analysis">Analysis</button></div>' +
+        '<button data-tab="analysis">Analysis</button>' +
+        '<button data-tab="sizing">Sizing</button></div>' +
         // `monitor-note`, not `note`: the panes have notes of their own,
         // and a bare `.note` selector reaches into them and overwrites
         // the first one it finds.
@@ -5804,6 +5956,15 @@
         }
         if (e.target.classList.contains('an-bt-days')) {
           state.analysisBtDays = Number(e.target.value);
+        }
+        if (e.target.classList.contains('sz-input')) {
+          var v = parseFloat(e.target.value);
+          if (isFinite(v) && v > 0) {
+            var next = sizingSettings();
+            next[e.target.dataset.key] = v;
+            state.sizing = next;
+            render();
+          }
         }
         // Changing the PAIR clears the two tickets: they belong to that
         // pair's accounts, and carrying them over would leave a choice
@@ -5870,9 +6031,17 @@
       loadAnalysis();
       pane.innerHTML = analysisPane();
     }
+    else if (state.monitorTab === 'sizing') {
+      pane.innerHTML = sizingPane();
+    }
     else { pane.innerHTML = reconcileTable(); }
     node.querySelector('.monitor-note').textContent =
-      state.monitorTab === 'analysis'
+      state.monitorTab === 'sizing'
+      ? 'A planning table, worked out here from the live prices, beta and ' +
+        'leverage of the ETH vs BTC ladder and OKX\u2019s UAE (AED) ' +
+        'futures fee schedule. Target and stop are measured from ' +
+        'break-even, as the desk sets them. Nothing here sends an order.'
+      : state.monitorTab === 'analysis'
       ? 'Built from what is recorded: closed positions, the Algo\u2019s ' +
         'own audit trail and the trackers. Nothing here sends an order. ' +
         'A figure nobody measured is a dash, never 0 \u2014 trades closed ' +
@@ -5911,6 +6080,13 @@
     var pane = node.querySelector('.pane');
     var desktop = el('desktop');
     if (!pane || !desktop) { return; }
+    // Maximized, the window's own height is the room: the pane fills it
+    // (a cap measured for the unmaximized window showed five rows of a
+    // full-screen table and left the rest bare).
+    if (node.classList.contains('maximized')) {
+      pane.style.maxHeight = '';
+      return;
+    }
     var note = node.querySelector('.monitor-note');
     var foot = desktop.getBoundingClientRect().bottom;
     var top = pane.getBoundingClientRect().top;
@@ -8228,6 +8404,12 @@
     }
     var button = e.target.closest('button');
     if (!button) { return; }
+    if (button.classList.contains('sz-win')) {
+      state.sizing = Object.assign(sizingSettings(),
+                                   {win: parseFloat(button.dataset.win)});
+      render();
+      return;
+    }
     if (button.classList.contains('okx-orders-refresh')) {
       loadOkxOrders(true);
       return;
@@ -8623,6 +8805,7 @@
     var id = panelIdOf(node);
     state.maximized[id] = !state.maximized[id];
     applyMaximized(node);
+    if (node.classList.contains('monitor')) { render(); }
     // Charts draw at the size of their box: redraw at the new one.
     if (node.classList.contains('chartwin')) {
       node.dataset.drawn = '';
@@ -9189,6 +9372,7 @@
     panelId: panelId, openPanel: openPanel, closePanel: closePanel,
     fmt: fmt, money: money, DASH: DASH,
     tidyWindows: tidyWindows, tileWindows: tileWindows, sound: sound,
+    sizingPane: sizingPane,
     showFairWindow: showFairWindow, setAlgo: setAlgo,
     calcPosition: calcPosition,
     toastOutcome: toastOutcome
