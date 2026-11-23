@@ -43,6 +43,14 @@
     // is filtered to. The backtest's answer is kept here too, because
     // the pane is redrawn on every snapshot.
     analysis: null, analysisAt: 0, analysisDays: 7, analysisPair: '',
+    // NET P&L on the Analysis tab and its report: 'show', 'mask' (the
+    // column is there, the dollars are dots) or 'hide' (left out). The
+    // percentages stay. Per browser.
+    analysisPnl: (function () {
+      try {
+        return window.localStorage.getItem('okxtrader.analysisPnl') || 'show';
+      } catch (err) { return 'show'; }
+    }()),
     // The SIGMA ZONE track's own range. A day by default: the rows are
     // a tick-by-tick record, and a day of them is the usual read.
     zoneDays: 1, zoneDate: '', deriving: false, deriveNote: null,
@@ -5999,6 +6007,14 @@
           state.analysisPair = e.target.value;
           loadAnalysis(true);
         }
+        if (e.target.classList.contains('an-pnl')) {
+          state.analysisPnl = e.target.value;
+          try {
+            window.localStorage.setItem('okxtrader.analysisPnl',
+                                        state.analysisPnl);
+          } catch (err) { /* a preference, not the money */ }
+          render();
+        }
         if (e.target.classList.contains('an-capital')) {
           saveCapital(e.target.value);
         }
@@ -7837,7 +7853,23 @@
       '<input class="an-capital" type="number" min="0" step="100" ' +
       'placeholder="not set" value="' +
       (anCapital() ? escapeHtml(String(anCapital())) : '') +
-      '"></label></div>';
+      '"></label> \u00b7 <label title="Show the money each trade made, ' +
+      'mask it with dots, or leave the column out - for a screen or a ' +
+      'report that others see. The percentages stay.">Net P&amp;L ' +
+      '<select class="an-pnl">' + [['show', 'show'], ['mask', 'mask'],
+        ['hide', 'hide']].map(function (o) {
+        return '<option value="' + o[0] + '"' +
+          (state.analysisPnl === o[0] ? ' selected' : '') + '>' + o[1] +
+          '</option>';
+      }).join('') + '</select></label>' +
+      // THE PRINTABLE REPORT: this period and ladder, on a page of its
+      // own laid out for A4 and Print / Save as PDF.
+      ' <a class="an-report" target="_blank" rel="noopener" href="/report?days=' +
+      state.analysisDays + (state.analysisPair ? '&pair=' +
+        encodeURIComponent(state.analysisPair) : '') +
+      '&pnl=' + encodeURIComponent(state.analysisPnl || 'show') +
+      '" title="This period and ladder as a printable report, with the ' +
+      'logo on top">Print report</a></div>';
     if (a === null) {
       return html + '<p class="hint">reading the record\u2026</p></div>';
     }
@@ -7880,8 +7912,15 @@
     // page where it can be compared with the one above it.
     var trips = a.journal || [];
     var total = trips.length ? trips[0].cum_pnl : null;
-    html += '<h4>Trade journal <small>— ' + trips.length +
-      ' closed, running total ' + money(total) + '</small></h4>' +
+    var pnlMode = state.analysisPnl || 'show';
+    var pnlHidden = pnlMode === 'hide';
+    // The money a trade made, as the Net P&L setting above shows it.
+    function pnlCash(x) {
+      return pnlMode === 'show' ? money(x) : '\u2022\u2022\u2022\u2022\u2022';
+    }
+    html += '<h4>Trade journal <small>— ' + trips.length + ' closed' +
+      (pnlHidden ? '' : ', running total ' + pnlCash(total)) +
+      '</small></h4>' +
       '<table class="an-table"><thead><tr><th>Closed</th><th class="l">Pair</th>' +
       '<th class="l">Side</th><th class="l">Who</th><th>Size</th><th>z in → out</th>' +
       '<th>Spread in → out</th>' +
@@ -7894,7 +7933,8 @@
       '<th title="How far past the level it was measured against the ' +
       'close actually went">vs level</th>' +
       '<th>Leg A in</th><th>Leg B in</th>' +
-      '<th>Held</th><th class="l">Exit</th><th>Net P&amp;L</th>' +
+      '<th>Held</th><th class="l">Exit</th>' +
+      (pnlHidden ? '' : '<th>Net P&amp;L</th>') +
       '<th title="net P&amp;L \u00f7 the margin BOTH legs tied up at entry - ' +
       'the base the TP % and SL % are set on. NET: after every fee">' +
       'Net % on margin</th>' +
@@ -7905,7 +7945,7 @@
       '<th title="Both legs\u2019 face value at entry \u00f7 the capital ' +
       'managed: 1.0x is a position as big as the capital">Exposure</th>' +
       '<th title="net P&amp;L \u00f7 the capital managed">Net % on capital</th>' +
-      '<th>Running</th>' +
+      (pnlHidden ? '' : '<th>Running</th>') +
       '</tr></thead><tbody>';
     if (!trips.length) {
       html += '<tr><td colspan="22" class="hint">no closed trade in this ' +
@@ -7929,9 +7969,9 @@
         '<td>' + (t.leg_a.side || '') + ' ' + fmt(t.leg_a.entry, 3) +
         '</td><td>' + (t.leg_b.side || '') + ' ' + fmt(t.leg_b.entry, 3) +
         '</td><td>' + anHeld(t.held_sec) + '</td><td class="l">' +
-        escapeHtml(t.exit_reason || DASH) +
-        '</td><td class="' + anSign(t.pnl) + '">' + money(t.pnl) +
-        '</td>' + pctCell(t.pct_margin, 2, t.margin_estimated) +
+        escapeHtml(t.exit_reason || DASH) + '</td>' +
+        (pnlHidden ? '' : '<td class="' + anSign(t.pnl) + '">' +
+          pnlCash(t.pnl) + '</td>') + pctCell(t.pct_margin, 2, t.margin_estimated) +
         pctCell(t.pct_notional, 3, false) +
         '<td' + (t.margin ? ' title="' + escapeHtml(money(t.margin)) +
           ' of margin"' : '') + '>' +
@@ -7942,8 +7982,8 @@
         (t.exposure === null || t.exposure === undefined ? DASH
           : fmt(t.exposure, 2) + 'x') + '</td>' +
         pctCell(t.pct_capital, 2, false) +
-        '<td class="' + anSign(t.cum_pnl) + '">' + money(t.cum_pnl) +
-        '</td></tr>';
+        (pnlHidden ? '' : '<td class="' + anSign(t.cum_pnl) + '">' +
+          pnlCash(t.cum_pnl) + '</td>') + '</tr>';
     });
     html += '</tbody></table>';
 
@@ -7951,7 +7991,7 @@
     html += '<h4>Summary</h4><div class="an-tiles">' +
       anTile('Trades', s.count || 0) +
       anTile('Closed', s.closed || 0) +
-      anTile('Net P&amp;L', money(s.net_pnl), anSign(s.net_pnl),
+      anTile('Net P&amp;L', pnlCash(s.net_pnl), anSign(s.net_pnl),
            'realized, after the commission the settings charge') +
       anTile('Win rate', anPct(s.win_rate), '',
            (s.wins || 0) + ' won, ' + (s.losses || 0) + ' lost') +

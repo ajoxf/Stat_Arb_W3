@@ -617,6 +617,40 @@ def test_the_analysis_covers_the_round_turn_just_traded(desk, round_turn):
     assert body['drawdown']['trades'] == 1
 
 
+def test_the_printable_report_covers_the_same_trade(desk, round_turn):
+    """/report: the Analysis record as a printable page - the logo, the
+    headline returns and the trade journal - and the trader's own logo
+    in place of the Nexus mark once one is put beside config.json."""
+    import os
+    app = create_app(desk.paths['status'], desk.paths['commands'],
+                     desk.paths['results'], desk.paths['config'],
+                     desk.paths['db'])
+    app.config.update(TESTING=True)
+    client = app.test_client()
+    response = client.get('/report?days=1')
+    assert response.status_code == 200
+    page = response.get_data(as_text=True)
+    assert 'Trading Report' in page and 'class="mark"' in page
+    for heading in ('Net P&amp;L', 'Return on capital', 'Return on margin',
+                    'Win rate', 'Max drawdown', 'Equity curve',
+                    'Trade journal', 'Print / Save as PDF'):
+        assert heading in page, heading
+    assert '1 closed' in page and 'Last day' in page
+    hidden = client.get('/report?days=1&pnl=hide').get_data(as_text=True)
+    assert '<th>Net P&amp;L</th>' not in hidden
+    assert 'href="/report?days=1&amp;pnl=show"' in hidden
+    logo = os.path.join(os.path.dirname(desk.paths['config']),
+                        'report_logo.png')
+    with open(logo, 'wb') as f:
+        f.write(b'\x89PNG\r\n\x1a\nlogo')
+    try:
+        page = client.get('/report?days=1').get_data(as_text=True)
+        assert 'src="data:image/png;base64,' in page
+        assert 'class="mark"' not in page
+    finally:
+        os.remove(logo)
+
+
 def test_the_analysis_tab_is_on_the_screen(desk, browser_page, round_turn):
     page = browser_page
     page.evaluate("""() => {
@@ -635,6 +669,19 @@ def test_the_analysis_tab_is_on_the_screen(desk, browser_page, round_turn):
                     'Trade journal'):
         assert heading in text, heading
     assert '1 closed' in text
+    # Net P&L masked, then left out, from the bar - and the report link
+    # carries the choice.
+    page.select_option('.monitor .an-pnl', 'mask')
+    page.wait_for_function(
+        "() => document.querySelector('.monitor .pane').textContent"
+        ".includes('\u2022\u2022\u2022\u2022\u2022')", timeout=8000)
+    assert 'pnl=mask' in page.get_attribute('.monitor .an-report', 'href')
+    page.select_option('.monitor .an-pnl', 'hide')
+    page.wait_for_function(
+        "() => !Array.from(document.querySelector('.monitor .an-table')"
+        ".querySelectorAll('th'))"
+        ".some(th => th.textContent === 'Running')", timeout=8000)
+    page.select_option('.monitor .an-pnl', 'show')
     # The tab button is there for the trader to find.
     assert page.locator('.monitor .tabs button[data-tab="analysis"]').count() == 1
     assert page.errors == []

@@ -231,3 +231,6 @@
 .monitor .sz-field select { font: 11px var(--font); }
 .monitor .sz-reset { font: 11px var(--font); padding: 1px 8px; cursor: pointer; }
 .monitor table.sz-table td small { color: #6b7280; }
+.monitor .an-report { margin-left: 10px; padding: 1px 10px; border: 1px solid #808080;
+  background: #fff; color: #16324f; font-weight: 600; text-decoration: none; }
+.monitor .an-report:hover { background: #16324f; color: #fff; }
