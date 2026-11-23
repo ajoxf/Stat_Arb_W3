@@ -1921,11 +1921,11 @@
   }
 
   function sizingRow(capital, cfg, mk) {
-    /* One capital level, worked through. Target and stop are measured
-     * from break-even (the desk's own way), so a win nets the target and
-     * a stop costs the stop, maker fees included. What maker pricing
-     * does NOT cover is the taker share: every fill that crosses pays
-     * (taker - maker) on its leg, and that comes off every trade. */
+    /* One capital level, worked through. The target is the profit AFTER
+     * every cost and the stop the whole loss, costs included, so the P&L
+     * is just wins x target - losses x stop. The maker / taker mix sets
+     * the fees, and so how far the spread must move: target + fees to
+     * win, stop - fees before the stop. */
     var lev = cfg.lev || mk.lev;
     var margin = capital * (100 - cfg.freePct) / 100;
     var position = margin * lev;
@@ -1940,21 +1940,20 @@
     var perTradeVolume = position * 2;
     var fees = perTradeVolume * ((1 - takerShare) * tier[2] +
                                  takerShare * tier[3]) / 1e4;
-    var takerExtra = perTradeVolume * takerShare * (tier[3] - tier[2]) / 1e4;
     var target = cfg.target / 100 *
       (cfg.targetBase === 'capital' ? capital : margin);
     var stop = cfg.stop / 100 * (cfg.stopBase === 'margin' ? margin : capital);
     var w = cfg.win / 100;
-    var perTrade = w * (target - takerExtra) - (1 - w) * (stop + takerExtra);
-    var breakEven = (target + stop) > 0
-      ? (stop + takerExtra) / (target + stop) * 100 : null;
+    var perTrade = w * target - (1 - w) * stop;
+    var breakEven = (target + stop) > 0 ? stop / (target + stop) * 100 : null;
     return {capital: capital, margin: margin, free: capital - margin,
             position: position, point: point, volume: volume, tier: tier,
-            fees: fees, takerExtra: takerExtra, target: target, stop: stop,
-            lossPerStop: stop + takerExtra, perTrade: perTrade,
+            fees: fees, target: target, stop: stop,
+            lossPerStop: stop, perTrade: perTrade,
             month: perTrade * perMonth, breakEven: breakEven,
-            targetPts: point ? target / point : null,
-            stopPts: point ? stop / point : null};
+            targetPts: point ? (target + fees) / point : null,
+            stopPts: point ? Math.max(stop - fees, 0) / point : null,
+            feePts: point ? fees / point : null};
   }
 
   function sizingPane() {
@@ -2016,10 +2015,12 @@
     // example; each row has its own figures below.
     var ex = sizingRow(100e3, cfg, mk);
     html += '<div class="sz-sum">At $100k capital: target <b>+' +
-      usd(ex.target) + '</b> (' + (ex.targetPts || 0).toFixed(1) +
-      ' pts), stop <b>−' + usd(ex.stop) + '</b> (' +
-      (ex.stopPts || 0).toFixed(1) + ' pts), taker cost <b>' +
-      usd(ex.takerExtra) + '</b> a trade · break-even win rate <b>' +
+      usd(ex.target) + '</b> net, stop <b>−' + usd(ex.stop) +
+      '</b> all in, fees <b>' + usd(ex.fees) + '</b> a trade (' +
+      (ex.feePts || 0).toFixed(1) + ' pts) → the spread moves <b>' +
+      (ex.targetPts || 0).toFixed(1) + ' pts</b> to the target, <b>' +
+      (ex.stopPts || 0).toFixed(1) + ' pts</b> to the stop' +
+      ' · break-even win rate <b>' +
       (ex.breakEven === null ? DASH : ex.breakEven.toFixed(1) + '%') +
       '</b> · at ' + cfg.win + '%: <b class="' +
       (ex.month >= 0 ? 'up' : 'down') + '">' + pct(ex.month / 1e3, 1)
@@ -2033,13 +2034,14 @@
     });
     html += '<div class="sz-wrap"><table class="sz-table"><thead>' +
       '<tr><th rowspan="2">Sr</th><th colspan="5">Size</th>' +
-      '<th colspan="2">Per trade (net)</th><th colspan="5">Volume and ' +
+      '<th colspan="4">Per trade (after all costs)</th><th colspan="5">Volume and ' +
       'fees</th><th colspan="3">Month at ' + cfg.win + '% wins</th>' +
       '<th colspan="7">Drawdown if this share of the ' + perMonth +
       ' trades lose, back to back</th></tr><tr>' +
       '<th>Capital in hand</th><th>Margin / trade</th><th>Free</th>' +
       '<th>Position (both legs)</th><th>$ / point</th>' +
-      '<th>Target</th><th>Stop</th>' +
+      '<th>Target</th><th>Stop</th><th>Target move (pts)</th>' +
+      '<th>Stop move (pts)</th>' +
       '<th>30-day volume</th><th>AED tier</th><th>Maker / Taker (bp)</th>' +
       '<th>Fees / trade</th><th>Break-even win</th>' +
       '<th>Net P&amp;L</th><th>Return on capital</th>' +
@@ -2057,7 +2059,9 @@
         k(r.margin) + '</td><td>' + k(r.free) + '</td><td>$' +
         (r.position / 1e6).toFixed(2) + 'M</td><td>' + usd(r.point) +
         '</td><td>+' + usd(r.target) + '</td><td>−' + usd(r.stop) +
-        '</td><td>$' + Math.round(r.volume / 1e6).toLocaleString('en-US') +
+        '</td><td>' + (r.targetPts || 0).toFixed(1) + '</td><td class="' +
+        (r.fees >= r.stop ? 'down' : '') + '">' +
+        (r.stopPts || 0).toFixed(1) + '</td><td>$' + Math.round(r.volume / 1e6).toLocaleString('en-US') +
         'M</td><td>' + r.tier[0] + '</td><td>' + r.tier[2] + ' / ' +
         r.tier[3] + '</td><td>' + usd(r.fees) + '</td><td class="' + beCls +
         '">' + (r.breakEven === null ? DASH : r.breakEven.toFixed(1) + '%') +
@@ -2071,12 +2075,13 @@
         }).join('') + '</tr>';
     });
     html += '</tbody></table></div><div class="sz-notes">' +
-      '<b>Target / Stop</b> are measured from break-even, as the desk sets ' +
-      'them: a win nets the target and a stop costs the stop, maker fees ' +
-      'included. <b>Taker fills</b> pay (taker − maker) on their leg, ' +
-      'which comes off every trade, win or loss, and adds to every stop. ' +
-      '<b>Break-even win</b> = (stop + taker cost) ÷ (target + stop); ' +
-      'red where it is above the chosen win rate. <b>$ / point:</b> P&amp;L ' +
+      '<b>Target</b> is the profit after every cost; <b>Stop</b> is the ' +
+      'whole loss, costs included. <b>Fees</b> follow the maker / taker ' +
+      'mix at the row’s VIP tier; they set how far the spread must ' +
+      'move: target + fees to win, stop − fees before the stop. ' +
+      '<b>Break-even win</b> = stop ÷ (target + stop). <b>Stop move ' +
+      'in red:</b> the fees alone use up the stop. ' +
+      '<b>$ / point:</b> P&amp;L ' +
       'for one point of spread (−20 → −19). <b>Volume</b> = ' +
       'position × 2 × trades; VIP 5 ≥ $588M, VIP 6 ≥ ' +
       '$980M a month. <b>Not included:</b> slippage on stops, funding.' +
@@ -6107,8 +6112,8 @@
       state.monitorTab === 'sizing'
       ? 'A planning table, worked out here from the live prices, beta and ' +
         'leverage of the ETH vs BTC ladder and OKX\u2019s UAE (AED) ' +
-        'futures fee schedule. Target and stop are measured from ' +
-        'break-even, as the desk sets them. Nothing here sends an order.'
+        'futures fee schedule. Target is the profit after every cost; ' +
+        'stop is the whole loss. Nothing here sends an order.'
       : state.monitorTab === 'analysis'
       ? 'Built from what is recorded: closed positions, the Algo\u2019s ' +
         'own audit trail and the trackers. Nothing here sends an order. ' +

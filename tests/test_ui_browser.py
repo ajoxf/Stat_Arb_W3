@@ -7388,7 +7388,7 @@ def test_the_sizing_tab_is_the_sheet_live_with_a_win_rate_toggle(page):
     assert hundred.nth(1).text_content() == '$100k'
     assert hundred.nth(6).text_content() == '+$900'
     assert hundred.nth(7).text_content() == '−$1,500'
-    assert hundred.nth(13).text_content() == '+$5.4k'
+    assert hundred.nth(15).text_content() == '+$5.4k'
     # 70%: 0.7 x 0.9 - 0.3 x 1.5 = +0.18% a trade, +16.2% a month.
     page.click('.monitor .sz-win[data-win="70"]')
     page.wait_for_function(
@@ -7414,10 +7414,20 @@ def test_the_sizing_tab_is_the_sheet_live_with_a_win_rate_toggle(page):
     # trade, +24.3% a month.
     typed('stopBase', 'margin', '+24.3% of capital')
     typed('stopBase', 'capital', '+5.4% of capital')
-    # Half the fills taker at VIP 3 (2.5 / 9 bp): 6.5 bp extra on half of
-    # $2.4M = $780 a trade, off every win and onto every stop.
-    typed('makerPct', '50', 'taker cost $780')
-    assert '\u221264.8% of capital' in page.text_content('.monitor .sz-sum')
+    # The target is net of every cost and the stop the whole loss, so the
+    # maker / taker mix leaves the P&L alone: it sets the fees (half taker
+    # at VIP 3: 5.75 bp on $2.4M = $1,380) and so how far the spread must
+    # move to reach each.
+    typed('makerPct', '50', 'fees $1,380')
+    summary = page.text_content('.monitor .sz-sum')
+    assert '+5.4% of capital' in summary
+    assert 'break-even win rate 62.5%' in summary
+    hundred = rows.nth(5).locator('td')
+    assert hundred.nth(13).text_content() == '$1,380'
+    # $346 a point: (900 + 1,380) / 346 = 6.6 pts to the target, (1,500 -
+    # 1,380) / 346 = 0.3 pts to the stop.
+    assert hundred.nth(8).text_content() == '6.6'
+    assert hundred.nth(9).text_content() == '0.3'
     # 30% free capital: $70k margin at 20x.
     typed('makerPct', '100', '+5.4% of capital')
     typed('freePct', '30', '+14.2% of capital')
