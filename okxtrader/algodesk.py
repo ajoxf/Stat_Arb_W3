@@ -171,6 +171,8 @@ class _Run:
         self.candles = bands.SpreadCandles(params['timeframe_min'] * 60.0,
                                            params['length'], anchor)
         self.signal = algo_module.AlgoSignal(params)
+        #: The arming last written down with the warm-up.
+        self.armed_saved = {'BUY': False, 'SELL': False}
         self.started_at = started_at
         self.history = {'state': 'pending', 'note': None, 'at': None,
                         'candles': 0}
@@ -440,10 +442,11 @@ class AlgoDesk:
         if self.store is None:
             return
         try:
-            saved = self.store.warmup(pair.key)
+            state = self.store.warmup_state(pair.key)
         except Exception as e:
             logging.error('could not read the warm-up: %s', e)
             return
+        saved = None if state is None else (state['live_sec'], state['at'])
         if saved is None:
             # Said, not silent: a missing line read as a missing feature.
             logging.info('[ALGO %s] warm-up starts: nothing saved from '
@@ -456,6 +459,17 @@ class AlgoDesk:
             logging.info('[ALGO %s] warm-up carried over: %.0f min watched, '
                          'back on %.0fs after the last live price',
                          pair.key, live_sec / 60.0, gap)
+            # THE ARMING comes back with it: a stretch armed before the
+            # restart, and coming back now, is still the Algo's entry. The
+            # first price after it disarms it as usual if the spread came
+            # back too far in the gap.
+            armed = state['armed']
+            if any(armed.values()):
+                run.signal._armed = dict(armed)
+                run.armed_saved = dict(armed)
+                logging.info('[ALGO %s] arming carried over: %s', pair.key,
+                             ', '.join(side for side, on in armed.items()
+                                       if on))
         else:
             logging.info('[ALGO %s] warm-up starts again: %.0f min since the '
                          'last live price it watched', pair.key, gap / 60.0)
@@ -463,12 +477,17 @@ class AlgoDesk:
     def _save_warmup(self, pair, run, now):
         if self.store is None:
             return
+        armed = dict(run.signal._armed)
+        # An arming that CHANGED is saved at once - a restart a second
+        # later must find it - the warm-up's seconds every few.
         if run.warmup_saved_at is not None \
-                and now - run.warmup_saved_at < WARMUP_SAVE_SEC:
+                and now - run.warmup_saved_at < WARMUP_SAVE_SEC \
+                and armed == run.armed_saved:
             return
         run.warmup_saved_at = now
+        run.armed_saved = armed
         try:
-            self.store.save_warmup(pair.key, run.live_sec, now)
+            self.store.save_warmup(pair.key, run.live_sec, now, armed)
         except Exception as e:               # never let a record stop a poll
             logging.error('could not save the warm-up: %s', e)
 

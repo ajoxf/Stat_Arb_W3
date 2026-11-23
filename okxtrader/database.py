@@ -443,6 +443,11 @@ class Store:
         # tab says a trade's exit "was not recorded" rather than
         # inventing a level for it.
         ('positions', 'exit_levels', 'TEXT'),
+        # JSON: which sides the live Algo was ARMED on when its warm-up
+        # was last saved - carried over a restart with the warm-up, so an
+        # update does not lose a stretch that is coming back. NULL on a
+        # row saved before it was kept: nothing armed.
+        ('algo_warmup', 'armed', 'TEXT'),
     )
 
     #: Rows to clear when a column is added for the first time, because
@@ -816,19 +821,36 @@ class Store:
                 f'bucket, close, source) VALUES (?,?,?,?,?,?)', rows)
         return len(rows)
 
-    def save_warmup(self, pair_key, live_sec, at):
+    def save_warmup(self, pair_key, live_sec, at, armed=None):
         with self._connect() as connection:
             connection.execute(
-                'INSERT OR REPLACE INTO algo_warmup (pair_key, live_sec, at) '
-                'VALUES (?,?,?)', (pair_key, float(live_sec), float(at)))
+                'INSERT OR REPLACE INTO algo_warmup (pair_key, live_sec, at, '
+                'armed) VALUES (?,?,?,?)',
+                (pair_key, float(live_sec), float(at),
+                 None if armed is None else json.dumps(armed)))
 
     def warmup(self, pair_key):
         """(live_sec, at) last saved for this ladder, or None."""
+        saved = self.warmup_state(pair_key)
+        return None if saved is None else (saved['live_sec'], saved['at'])
+
+    def warmup_state(self, pair_key):
+        """{'live_sec', 'at', 'armed'} last saved for this ladder, or
+        None. `armed`: {'SELL': bool, 'BUY': bool}, all False when the
+        row was saved before arming was kept."""
         with self._connect() as connection:
             row = connection.execute(
-                'SELECT live_sec, at FROM algo_warmup WHERE pair_key = ?',
-                (pair_key,)).fetchone()
-        return None if row is None else (row['live_sec'], row['at'])
+                'SELECT live_sec, at, armed FROM algo_warmup '
+                'WHERE pair_key = ?', (pair_key,)).fetchone()
+        if row is None:
+            return None
+        try:
+            armed = json.loads(row['armed']) if row['armed'] else {}
+        except (TypeError, ValueError):
+            armed = {}
+        return {'live_sec': row['live_sec'], 'at': row['at'],
+                'armed': {'SELL': bool(armed.get('SELL')),
+                          'BUY': bool(armed.get('BUY'))}}
 
     def clear_warmup(self, pair_key):
         with self._connect() as connection:

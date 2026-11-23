@@ -230,3 +230,54 @@ def test_switching_it_off_starts_it_again(config, pair, legs, tmp_path):
     second = restart_engine(config, legs, store, clock)
     second.set_algo(pair.key, 'NONE')
     assert store.warmup(pair.key) is None
+
+
+# -- the ARMING carries over with it ----------------------------------------
+
+def _armed_restart(config, legs, store, clock):
+    """A restart, read the moment the Algo is back on - before a price
+    has had a chance to arm or disarm anything."""
+    coordinator = Coordinator(config, legs, sleep=lambda s: None,
+                              clock=clock, store=store)
+    coordinator.start()
+    coordinator.poll_once()
+    assert coordinator.set_algo(pair_of(config).key, 'ALGO', mode='LIVE',
+                                confirmed=True)['ok']
+    return coordinator.algos._runs[pair_of(config).key].signal._armed
+
+
+def test_an_armed_side_is_still_armed_after_a_quick_restart(config, pair,
+                                                            legs, tmp_path):
+    """ETH vs BTC, 23 Nov: H to L armed at z +2.0, the desk restarted for
+    an update, z back to +1.6 - and nothing, because the arming was in
+    memory only. It is saved the moment it changes, and comes back with
+    the warm-up."""
+    store, clock, _sec = warmed(config, legs, tmp_path)
+    pair.algo_params['reentry_on'] = True
+    first = restart_engine(config, legs, store, clock)
+    first.algos._runs[pair.key].signal._armed = {'SELL': True, 'BUY': False}
+    tick(first, legs, clock, 5)
+    assert store.warmup_state(pair.key)['armed'] == {'SELL': True,
+                                                      'BUY': False}
+    clock.now += 120
+    assert _armed_restart(config, legs, store, clock) == {'SELL': True,
+                                                         'BUY': False}
+
+
+def test_the_CONTROL_after_a_long_gap_the_arming_is_gone(config, pair, legs,
+                                                         tmp_path):
+    store, clock, _sec = warmed(config, legs, tmp_path)
+    first = restart_engine(config, legs, store, clock)
+    first.algos._runs[pair.key].signal._armed = {'SELL': True, 'BUY': False}
+    tick(first, legs, clock, 5)
+    clock.now += 20 * 60
+    assert _armed_restart(config, legs, store, clock) == {'SELL': False,
+                                                         'BUY': False}
+
+
+def test_a_warm_up_saved_before_arming_was_kept_reads_as_unarmed(tmp_path):
+    from okxtrader.database import Store
+    store = Store(str(tmp_path / 'trader.db'))
+    store.save_warmup('K', 300.0, 1000.0)
+    assert store.warmup_state('K')['armed'] == {'SELL': False, 'BUY': False}
+    assert store.warmup('K') == (300.0, 1000.0)
