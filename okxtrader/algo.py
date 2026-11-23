@@ -243,6 +243,18 @@ DEFAULT_PARAMS = {
     'reversion_on': True,
     'time_stop_on': False,
     'time_stop_candles': 20,
+    # -- the ADD ------------------------------------------------------------
+    #: One more trade on the SAME side while the first is still on: the
+    #: spread ran on past the entry (ETH vs BTC, 23 Nov: short at -18.5,
+    #: a news spike to +4, back to -12), armed again and came back
+    #: inside the band. The add is taken on the normal re-entry signal -
+    #: the reversion, never the breakout - with every entry filter, and
+    #: only once the spread is `add_sigma` sigma beyond the trade it adds
+    #: to. It is its own trade: its own break-even, TP, stop and mean
+    #: exit, from its own fill. At most `max_adds` of them.
+    'add_on': True,
+    'add_sigma': 2.0,
+    'max_adds': 1,
 }
 
 #: The exit settings a SIDE can have its own value of. Blank (None) is
@@ -283,10 +295,10 @@ def for_side(params, side):
 
 _BOOLS = ('stop_z_on', 'reversion_on', 'time_stop_on', 'stop_loss_on',
           'progress_bar', 'edge_on', 'regime_on', 'prob_on', 'reentry_on',
-          'trend_on')
+          'trend_on', 'add_on')
 _INTS = ('timeframe_min', 'length', 'confirm_ticks', 'time_stop_candles',
          'max_trades_day', 'max_losses_row', 'regime_min_crossings',
-         'atr_period')
+         'atr_period', 'max_adds')
 
 #: How a stop or a target is sized.
 LEVEL_MODES = ('MARGIN', 'ATR')
@@ -376,6 +388,9 @@ def clean_params(raw):
     if out['algo_qty'] <= 0:
         out['algo_qty'] = DEFAULT_PARAMS['algo_qty']
     out['atr_period'] = max(2, out['atr_period'])
+    out['max_adds'] = max(0, out['max_adds'])
+    if out['add_sigma'] <= 0:
+        out['add_sigma'] = DEFAULT_PARAMS['add_sigma']
     for key in ('atr_stop_mult', 'atr_target_mult'):
         if out[key] <= 0:
             out[key] = DEFAULT_PARAMS[key]
@@ -431,6 +446,8 @@ def check_params(raw):
                             '100 % of the way back to the mean')
         elif key == 'trend_sigma' and number <= 0:
             problems.append('trend filter sigma must be above 0')
+        elif key == 'add_sigma' and number <= 0:
+            problems.append('add distance must be above 0 sigma')
         elif key == 'atr_period' and number < 2:
             problems.append('ATR period must be 2 candles or more')
         elif _side_base(key) is not None and number <= 0:
@@ -578,14 +595,64 @@ class AlgoSignal:
             body['cooldown_sec'] = self._cooldown_until - now
 
         if positions:
-            body['state'] = 'IN_POSITION'
-            self._entry_live = None
             if any(row['exit'] for row in body['positions']):
                 body['state'] = 'EXIT'
+                self._entry_live = None
+                return body
+            add = self._add_room(positions, body)
+            body['add'] = add
+            if add.get('side') is None:
+                body['state'] = 'IN_POSITION'
+                self._entry_live = None
+                return body
+            # THE ADD: the normal entry, on this side only, held back
+            # until the spread is far enough past the trade it adds to.
+            self._judge_entry(body, md, gates, only=add['side'],
+                              beyond=add)
+            if body['state'] != 'SIGNAL':
+                # Still a ladder IN a position: what the add waits on is
+                # said beside it, not instead of it.
+                add['waiting'] = body.pop('blocked', None) or (
+                    'confirming' if body['state'] == 'CONFIRMING'
+                    else None)
+                body.pop('blocked_side', None)
+                body.pop('blocked_z', None)
+                body['state'] = 'IN_POSITION'
+            else:
+                body['intents'][-1]['add'] = True
             return body
 
         self._judge_entry(body, md, gates)
         return body
+
+    def _add_room(self, positions, body):
+        """May the Algo ADD to what it holds, and where - {'side', 'beyond'
+        (the spread an add must reach), 'count'} - or {'why': ...}.
+
+        Only on the side every open position is on; only while fewer
+        than 1 + `max_adds` are open; and only `add_sigma` sigma past the
+        furthest entry (above it for a short, below it for a long)."""
+        p = self.params
+        if not p['add_on'] or p['max_adds'] < 1:
+            return {'why': 'adding is off'}
+        sides = {pos.get('side') for pos in positions}
+        if len(sides) != 1:
+            return {'why': 'positions on both sides'}
+        side = sides.pop()
+        if side not in DIRECTIONS.get(p['direction'], DIRECTIONS['BOTH']):
+            return {'why': 'this side does not enter here'}
+        adds = len(positions) - 1
+        if adds >= p['max_adds']:
+            return {'why': f'{adds} add(s) on - the most', 'count': adds}
+        entries = [float(pos['entry_spread']) for pos in positions
+                   if pos.get('entry_spread') is not None]
+        sigma = body.get('sigma')
+        if not entries or not sigma:
+            return {'why': 'no entry or sigma to measure from'}
+        sign = 1.0 if side == 'SELL' else -1.0
+        furthest = max(entries) if side == 'SELL' else min(entries)
+        return {'side': side, 'count': adds,
+                'beyond': furthest + sign * p['add_sigma'] * float(sigma)}
 
     # -- entry ------------------------------------------------------------
 
@@ -648,11 +715,15 @@ class AlgoSignal:
                 self._streak[side] += 1
         body['streak'] = dict(self._streak)
 
-    def _judge_entry(self, body, md, gates):
+    def _judge_entry(self, body, md, gates, only=None, beyond=None):
+        """`only`: the one side that may enter (an ADD); `beyond`: the
+        add's {'beyond': spread} it must be past."""
         p = self.params
         side = None
         allowed = DIRECTIONS.get(p['direction'], DIRECTIONS['BOTH'])
         for candidate in ('SELL', 'BUY'):
+            if only is not None and candidate != only:
+                continue
             if candidate not in allowed:
                 # This ladder only enters the other way. The stretch is
                 # still shown; it is just not an entry here.
@@ -660,6 +731,16 @@ class AlgoSignal:
             if self._streak[candidate] >= p['confirm_ticks']:
                 side = candidate
         blocked = self._entry_gate(body, md, gates, side)
+        if not blocked and side is not None and beyond is not None:
+            price = md.get('short_spread' if side == 'SELL'
+                           else 'long_spread')
+            line = beyond['beyond']
+            if price is None or (price < line if side == 'SELL'
+                                 else price > line):
+                past = '\u2265' if side == 'SELL' else '\u2264'
+                blocked = (f'add: the spread is not yet '
+                           f'{p["add_sigma"]:g} sigma past the entry '
+                           f'(needs {past} {line:.4f})')
         if side is None:
             self._entry_live = None
             if blocked:

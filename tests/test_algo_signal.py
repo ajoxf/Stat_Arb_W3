@@ -465,3 +465,74 @@ def test_a_mean_short_of_the_target_is_where_a_long_comes_off():
     under = [position(side='BUY', tp=mean + 2.0, be=mean + 1.0)]
     assert run(signal, market(mean + 0.001, mean + 0.05, 2),
                positions=under)['positions'][0]['exit'] is None
+
+
+# -- the ADD: one more trade on the same side, on the re-entry -------------
+
+def test_an_add_goes_on_once_the_spread_is_two_sigma_past_the_entry():
+    """Short from 10.00; mean 10.00, sigma 0.1. A fresh SELL signal at
+    10.26 is 2.6 sigma past it: the add goes on, on the same side."""
+    signal = touch_signal()
+    held = [position(entry=10.00, tp=9.9, be=10.05)]
+    body = feed(signal, 10.26, 10.30, 3, positions=held)
+    assert body['state'] == 'SIGNAL' and body['signal'] == 'SELL'
+    [intent] = body['intents']
+    assert intent['action'] == 'ENTER' and intent['side'] == 'SELL'
+    assert intent['add'] is True and intent['spread'] == 10.26
+
+
+def test_no_add_short_of_the_distance_and_it_says_why():
+    """Short from 10.10: an add needs the bid at 10.30 or more."""
+    signal = touch_signal()
+    held = [position(entry=10.10, tp=9.9, be=10.15)]
+    body = feed(signal, 10.26, 10.30, 3, positions=held)
+    assert body['state'] == 'IN_POSITION' and body['intents'] == []
+    assert body['add']['beyond'] == pytest.approx(10.30)
+    assert 'sigma past the entry' in body['add']['waiting']
+    assert 'blocked_side' not in body              # not a blocked signal
+
+
+def test_one_add_at_most_and_never_the_other_side():
+    signal = touch_signal()
+    two = [position(entry=10.00, tp=9.9, be=10.05),
+           position(entry=10.26, tp=10.1, be=10.31, pid='POS-2')]
+    body = feed(signal, 10.40, 10.42, 3, positions=two,
+                gates=None)
+    assert body['state'] == 'IN_POSITION' and body['intents'] == []
+    assert 'the most' in body['add']['why']
+    # A long on: a SELL stretch is not an add to it.
+    signal = touch_signal()
+    long_ = [position(side='BUY', entry=10.00, tp=10.1, be=9.95)]
+    body = feed(signal, 10.26, 10.30, 3, positions=long_)
+    assert body['intents'] == []
+
+
+def test_adding_switched_off_holds_one_trade():
+    signal = touch_signal({'add_on': False})
+    held = [position(entry=10.00, tp=9.9, be=10.05)]
+    body = feed(signal, 10.26, 10.30, 3, positions=held)
+    assert body['state'] == 'IN_POSITION' and body['intents'] == []
+
+
+def test_the_add_is_taken_on_the_reentry_not_on_the_spike():
+    """ETH vs BTC, 23 Nov: short, then a spike far past the band. The
+    add is NOT sold into the spike; it arms there and is taken when the
+    spread comes back inside the band (2.5 armed, 0.5 back: z 2.0)."""
+    signal = algo.AlgoSignal({'max_entry_z': 0})
+    held = [position(entry=9.95, tp=9.85, be=10.0, sl=None)]
+    body = feed(signal, 10.45, 10.47, 3, positions=held)     # z +4.5
+    assert body['intents'] == [] and body['armed']['SELL']
+    body = feed(signal, 10.30, 10.32, 3, start=10, positions=held)
+    assert body['intents'] == []                    # still outside
+    body = feed(signal, 10.19, 10.21, 3, start=20, positions=held)
+    [intent] = body['intents']
+    assert intent['side'] == 'SELL' and intent['add'] is True
+    assert intent['spread'] == 10.19
+
+
+def test_add_settings_are_read_and_checked():
+    p = algo.clean_params({'add_on': 'false', 'add_sigma': '1.5',
+                           'max_adds': '2'})
+    assert (p['add_on'], p['add_sigma'], p['max_adds']) == (False, 1.5, 2)
+    assert algo.DEFAULT_PARAMS['add_on'] is True
+    assert algo.check_params({'add_sigma': 0})

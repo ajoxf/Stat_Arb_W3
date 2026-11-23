@@ -7231,9 +7231,20 @@ def test_windows_snap_edge_to_edge_and_the_layout_is_kept_on_the_desk(page):
     snapped = page.locator('.window.monitor').bounding_box()
     assert snapped['x'] == pytest.approx(ladder['x'] + ladder['width'] + 2,
                                          abs=1.5)
-    # Kept on the desk, a second after the change.
-    page.wait_for_timeout(1500)
-    saved = page.evaluate("""() => fetch('/api/layout').then(r => r.json())""")
+    # Kept on the desk, a second or so after the change: the save is
+    # throttled to once a second, so poll for it rather than sleeping a
+    # fixed time (a save from mid-drag can land first).
+    deadline = time.time() + 6.0
+    while True:
+        saved = page.evaluate("""() => fetch('/api/layout')
+            .then(r => r.json())""")
+        mon = (saved.get('layout') or {}).get('monitor:') or {}
+        if abs((mon.get('left') or -1e9) - snapped['x']) < 3 and \
+                'monitor:' in (saved['layout'].get('_open') or []):
+            break
+        if time.time() > deadline:
+            break
+        page.wait_for_timeout(250)
     if not saved['layout']:
         probe = page.evaluate("""() => fetch('/api/layout', {method: 'POST',
             headers: {'Content-Type': 'application/json'},
@@ -7507,3 +7518,44 @@ def test_the_spread_chart_draws_a_volume_profile_and_turns_it_off(page):
     page.evaluate("(key) => window.MT5Trader.closePanel('chart:' + key)",
                   key)
     assert page.errors == []
+
+
+def test_the_algo_box_shows_an_add_and_where_the_next_would_go(page):
+    """Holding one short: the line says where an add would go on. With
+    the add on: both sizes in the tile, and the add's own levels."""
+    open_ladder(page)
+    publisher = page.paths['publisher']
+    publisher.algo = 'ALGO'
+
+    def pos(pid, entry, net):
+        return {'position_id': pid, 'side': 'SELL', 'entry_spread': entry,
+                'closing_spread': 59.02, 'quantity': 1.0, 'tp': entry - 0.1,
+                'sl': None, 'break_even': entry - 0.02, 'net_pnl': net,
+                'exit': None}
+    publisher.algo_block = _algo_block(
+        state='IN_POSITION', signal=None, positions=[pos('P1', 59.0, -1.0)],
+        add={'side': 'SELL', 'beyond': 59.08, 'count': 0})
+    try:
+        publisher.publish()
+        page.wait_for_function(
+            "() => (document.querySelector('.window.algowin .aw-signal')"
+            " || {textContent: ''}).textContent.includes('on re-entry')",
+            timeout=WAIT)
+        text = page.text_content('.window.algowin .aw-signal')
+        assert 'add ≥ 59.08' in text
+        publisher.algo_block = _algo_block(
+            state='IN_POSITION', signal=None,
+            positions=[pos('P1', 59.0, -1.0), pos('P2', 59.09, 2.5)],
+            add={'why': '1 add(s) on - the most', 'count': 1})
+        publisher.publish()
+        page.wait_for_function(
+            "() => document.querySelector('.window.algowin .aw-signal')"
+            ".textContent.includes('Add 1')", timeout=WAIT)
+        text = page.text_content('.window.algowin .aw-signal')
+        assert 'SHORT 1.00 + 1.00' in text and '(+1 add)' in text
+        assert 'in @ 59.09' in text
+        assert page.errors == []
+    finally:
+        publisher.algo = 'NONE'
+        publisher.algo_block = None
+        publisher.publish()

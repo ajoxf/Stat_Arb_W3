@@ -755,6 +755,13 @@
           <label class="lsf check-row" title="Also signal EXIT when z crosses back through 0 while the position is at or above break-even after costs.">
             <span>Back to mean</span>
             <input type="checkbox" class="ls-az-revert-on"></label>
+          <label class="lsf check-row" title="ADD one more trade on the same side while the first is on: taken on the normal re-entry signal (armed at the entry z, entered coming back inside the band) - never into the spike itself - with every entry filter, and only once the spread is this many sigma past the entry it adds to. The add has its own TP, stop and mean exit.">
+            <span>Add at &sigma; past</span>
+            <input type="checkbox" class="ls-az-add-on">
+            <input class="ls-az-add-sigma" type="number" min="0.1" step="0.1"></label>
+          <label class="lsf" title="The most adds to one trade. 1: never more than two positions on the ladder.">
+            <span>Most adds</span>
+            <input class="ls-az-max-adds" type="number" min="0" step="1"></label>
           <label class="lsf" title="One Algo trade, in spreads: 1 = this ladder&#8217;s Leg A lots / Leg B lots. Its own number — the keypad does not change it.">
             <span>Algo qty</span>
             <input class="ls-az-qty" type="number" min="0.01" step="0.01"></label>

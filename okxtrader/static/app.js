@@ -1121,6 +1121,11 @@
       var at = place(node, snapped.left, snapped.top);
       layout[panelIdOf(node)].left = at.left;
       layout[panelIdOf(node)].top = at.top;
+      // Kept as it moves, not only on the drop: a release the page never
+      // hears (the pointer let go outside the browser) left the desk
+      // with a place from the middle of the drag. The desk's copy is
+      // throttled to once a second, so the last place always follows.
+      writeLayout();
     }
 
     function drop() {
@@ -3404,6 +3409,9 @@
     ['.ls-az-stop-on', 'stop_z_on', 'check'],
     ['.ls-az-stop', 'stop_z', 'number'],
     ['.ls-az-revert-on', 'reversion_on', 'check'],
+    ['.ls-az-add-on', 'add_on', 'check'],
+    ['.ls-az-add-sigma', 'add_sigma', 'number'],
+    ['.ls-az-max-adds', 'max_adds', 'number'],
     ['.ls-az-time-on', 'time_stop_on', 'check'],
     ['.ls-az-time', 'time_stop_candles', 'number']
   ];
@@ -4438,12 +4446,17 @@
     if (state === 'IN_POSITION') {
       var held = block.positions || [];
       var first = held[0] || {};
+      var add = block.add || {};
       return 'in ' + positionWords(first, digits) +
-        (held.length > 1 ? ' (+' + (held.length - 1) + ' more)' : '') +
+        (held.length > 1 ? ' (+' + (held.length - 1) + ' add)' : '') +
         ' — TP ' + levelWords(first.tp, first.tp_money, digits) + ' · SL ' +
         (first.sl === null || first.sl === undefined
           ? (((block.params || {}).stop_loss_on) ? '—' : 'off')
-          : levelWords(first.sl, first.sl_money, digits));
+          : levelWords(first.sl, first.sl_money, digits)) +
+        // Where an ADD would go on: the spread it must reach first.
+        (add.beyond === null || add.beyond === undefined ? ''
+          : ' · add ' + (add.side === 'SELL' ? '\u2265 ' : '\u2264 ') +
+            fmt(add.beyond, digits) + ' on re-entry');
     }
     if (state === 'BLOCKED') { return 'held: ' + (block.blocked || ''); }
     if (state === 'CONFIRMING') {
@@ -4766,6 +4779,27 @@
       fmt(rest, 2).replace(/\.?0+$/, '') + ' has no close order.</div>';
   }
 
+  function addsHtml(adds, block, params, digits) {
+    /* The ADDS, each its own trade: where it went on, its own levels,
+     * and what it is worth now. The first trade is the one above. */
+    return adds.map(function (p, i) {
+      return kv('Add ' + (i + 1), 'in @ ' + fmt(p.entry_spread, digits) +
+        ' \u00b7 ' + fmt(p.quantity, 2) + ' \u00b7 BE ' +
+        fmt(p.break_even, digits) + ' \u00b7 TP ' +
+        (p.tp === null || p.tp === undefined ? DASH
+          : levelWords(p.tp, p.tp_money, digits)) + ' \u00b7 SL ' +
+        (p.sl === null || p.sl === undefined
+          ? (params.stop_loss_on ? DASH : 'off')
+          : levelWords(p.sl, p.sl_money, digits)) +
+        meanExitWords(p, block.mean, params, digits) + ' \u00b7 net ' +
+        '<span class="' + (p.net_pnl === null || p.net_pnl === undefined
+          ? '' : (p.net_pnl >= 0 ? 'up' : 'down')) + '">' +
+        moneyOr(p.net_pnl) + '</span>', '',
+        'an ADD: its own trade, with its own break-even, target, stop ' +
+        'and mean exit, from its own fill');
+    }).join('');
+  }
+
   function meanExitWords(pos, mean, params, digits) {
     /* BACK TO MEAN, where it is on: the mean as a fourth level, and
      * which of the exits it is. The Algo takes it when the CLOSING price
@@ -4873,7 +4907,8 @@
     var first = held[0] || null;
     var position = first
       ? (first.side === 'BUY' ? 'LONG' : 'SHORT') + ' ' +
-        fmt(first.quantity, 2) : 'FLAT';
+        held.map(function (p) { return fmt(p.quantity, 2); }).join(' + ')
+      : 'FLAT';
     var html = '<div class="aw-head">Signal &amp; Position</div>' +
       '<div class="aw-tiles">' + tile('SELL') + tile('BUY') +
       '<div class="aw-pos ' + (first ? (first.side === 'BUY' ? 'long' : 'short')
@@ -4951,6 +4986,7 @@
            '', 'compare with the CLOSING price: the Sell spread for a LONG, '
            + 'the Buy spread for a SHORT. In brackets: the net P&L of the '
            + 'whole position closing there, after every cost') +
+        addsHtml(held.slice(1), block, params, digits) +
         fillsHtml(key, first, digits) + coverageHtml(first) +
         (params.progress_bar === false ? '' : progressHtml(first, digits));
     }
