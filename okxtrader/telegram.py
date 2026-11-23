@@ -309,21 +309,13 @@ def side_words(side):
     return {'SELL': 'H to L', 'BUY': 'L to H'}.get(side, side or '?')
 
 
-#: The widest a label column is padded to; a longer label pushes only
-#: its own line's value along.
-LABEL_WIDTH_MAX = 14
-
-
 def table(rows):
-    """Rows of (label, value): the label in bold code type, PADDED to the
-    widest label in this table, then the value in code type. Code type
-    is monospace, so every value starts in the same column - and it is
-    the larger type Telegram draws inline, not a monospace block's smaller
-    one. `None` is a blank line between groups. Values are raw text,
-    escaped here once."""
-    labels = [str(row[0]).strip() for row in rows if row is not None]
-    width = min(max((len(label) for label in labels), default=0),
-                LABEL_WIDTH_MAX)
+    """Rows of (label, value) the way Stat_Arb_W3 writes them: a bold
+    label, two spaces, the value in code type - which Telegram draws
+    larger and clearer than a monospace block, each number in its own
+    box. `None` is a blank line between groups. Values are raw text,
+    escaped here once. Not padded into columns: tried, and monospace
+    labels read worse than the bold ones."""
     lines = []
     for row in rows:
         if row is None:
@@ -331,8 +323,8 @@ def table(rows):
             continue
         label, value = row
         text = '—' if value is None or value == '' else str(value)
-        lines.append(f'<b><code>{esc(str(label).strip().ljust(width))}'
-                     f'</code></b> <code>{esc(text)}</code>')
+        lines.append(f'<b>{esc(str(label).strip())}</b>  '
+                     f'<code>{esc(text)}</code>')
     return '\n'.join(lines)
 
 

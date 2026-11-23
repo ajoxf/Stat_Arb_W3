@@ -7638,14 +7638,15 @@
       '<th>Leg A in</th><th>Leg B in</th>' +
       '<th>Held</th><th class="l">Exit</th><th>Net P&amp;L</th>' +
       '<th title="net P&amp;L \u00f7 the margin BOTH legs tied up at entry - ' +
-      'the base the TP % and SL % are set on">% on margin</th>' +
+      'the base the TP % and SL % are set on. NET: after every fee">' +
+      'Net % on margin</th>' +
       '<th title="net P&amp;L \u00f7 both legs\u2019 face value at entry">' +
-      '% of notional</th>' +
+      'Net % of notional</th>' +
       '<th title="The margin BOTH legs tied up at entry \u00f7 the capital ' +
       'managed (set above). Hover a cell for the money">Capital used</th>' +
       '<th title="Both legs\u2019 face value at entry \u00f7 the capital ' +
       'managed: 1.0x is a position as big as the capital">Exposure</th>' +
-      '<th title="net P&amp;L \u00f7 the capital managed">% on capital</th>' +
+      '<th title="net P&amp;L \u00f7 the capital managed">Net % on capital</th>' +
       '<th>Running</th>' +
       '</tr></thead><tbody>';
     if (!trips.length) {

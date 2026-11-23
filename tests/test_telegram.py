@@ -17,15 +17,6 @@ ME, STRANGER = 111, 999
 KEY = 'USOILZ6.c|UKOILZ26.p'
 
 
-
-def unalign(text):
-    """'<b><code>Label   </code></b> <code>v' -> '<b>Label</b>  <code>v'."""
-    import re as _re
-    if text is None:
-        return None
-    return _re.sub(r'<b><code>([^<]*?) *</code></b> <code>',
-                   r'<b>\1</b>  <code>', text)
-
 class FakeAPI:
     def __init__(self):
         self.calls = []
@@ -39,10 +30,7 @@ class FakeAPI:
         return {'message_id': len(self.calls)}
 
     def texts(self):
-        # Read as 'Label</b>  <code>value': the CONTENT these tests are
-        # about. The aligned layout itself has a test of its own
-        # (test_rows_line_their_values_up_in_one_column).
-        return [unalign(p.get('text')) for m, p in self.calls
+        return [p.get('text') for m, p in self.calls
                 if m in ('sendMessage', 'editMessageText')]
 
     def last(self):
@@ -165,19 +153,12 @@ def test_the_CONTROL_an_allowed_user_gets_the_menu(bot):
         set(bot.api.buttons())
 
 
-def test_rows_line_their_values_up_in_one_column():
-    """Every label in bold code type padded to the widest in the table,
-    then the value in code type: monospace, so the values start in one
-    column - the larger inline type, not a monospace block."""
+def test_rows_are_a_bold_label_and_a_value_in_code_type():
+    """Stat_Arb_W3's layout: every number in its own box."""
     assert tg.table([('Net P&L', '+$5.27'), None, ('Hold', '23m')]) == (
-        '<b><code>Net P&amp;L</code></b> <code>+$5.27</code>\n\n'
-        '<b><code>Hold   </code></b> <code>23m</code>')
-    assert tg.table([('Peak', None)]) == \
-        '<b><code>Peak</code></b> <code>—</code>'
-    # A label past the cap pushes only its own value along.
-    long = tg.table([('A very long label indeed', '1'), ('B', '2')])
-    assert '<b><code>B' + ' ' * (tg.LABEL_WIDTH_MAX - 1) + '</code></b>' \
-        in long
+        '<b>Net P&amp;L</b>  <code>+$5.27</code>\n\n'
+        '<b>Hold</b>  <code>23m</code>')
+    assert tg.table([('Peak', None)]) == '<b>Peak</b>  <code>—</code>'
 
 
 def test_no_monospace_block_anywhere():
@@ -433,9 +414,7 @@ def test_the_token_never_appears_in_an_error(caplog):
 
 
 def watch(bot):
-    told = bot.alert_once()
-    return [unalign(t) for t in told] if isinstance(told, list) else \
-        unalign(told)
+    return bot.alert_once()
 
 
 def failed_order(id_):
@@ -1016,7 +995,7 @@ def test_end_of_day_is_w3s_report_per_ladder():
     snapshot = {'pairs': {KEY: row(algo_block={
         'z_mid': -0.5, 'day': {'trades': 2, 'pnl': 4.1, 'losses_row': 0},
         'filters': {'regime': {'state': 'TRENDING'}}})}}
-    text = unalign(tg.AlertWatch._summary(snapshot, 1_800_000_000))
+    text = tg.AlertWatch._summary(snapshot, 1_800_000_000)
     assert text.startswith('<b>END OF DAY  ·  2027-01-15 08:00 UTC</b>')
     in_order(text, ['Trades', 'PnL</b>  <code>$+4.10', 'Equity',
                     'Unrealized', 'Position</b>  <code>flat',
@@ -1199,7 +1178,7 @@ def test_a_trade_exit_says_when_its_close_was_sent_and_how_long_it_took():
                            'spread_units': 0.175, 'quantity': 5,
                            'realized_pnl': 0.1, 'close_reason': 'x'},
               'entry_z': -1.5, 'exit_z': -0.05}
-    text = unalign(tg.trade_exit_text(record, 'ETH vs BTC'))
+    text = tg.trade_exit_text(record, 'ETH vs BTC')
     assert 'Latency  2250 ms' in text.replace('</b>', '').replace('<b>', '') \
         or '2250 ms' in text
     assert '-1.5000 -&gt; -0.0500' in text or '-1.5000 -> -0.0500' in text
