@@ -7440,3 +7440,20 @@ def test_the_sizing_tab_is_the_sheet_live_with_a_win_rate_toggle(page):
     assert page.errors == []
     page.evaluate("""() => { const s = window.MT5Trader.state;
         s.sizing = null; s.open = []; window.MT5Trader.render(); }""")
+
+
+def test_the_algo_levels_say_where_the_mean_exit_is(page):
+    """Back to mean on: the mean is a fourth level beside BE / TP / SL,
+    and says which exit it is for this position."""
+    words = page.evaluate("""() => {
+        const f = window.MT5Trader.meanExitWords, on = {reversion_on: true};
+        const long = {side: 'BUY', break_even: -21.3, tp: -17.7};
+        return [f(long, -18.1, on, 1), f(long, -22.0, on, 1),
+                f(long, -17.0, on, 1), f(long, -18.1, {}, 1),
+                f({side: 'SELL', break_even: -15.0, tp: -19.0}, -18.0, on, 1)];
+    }""")
+    assert 'Mean -18.1' in words[0] and 'exits here first' in words[0]
+    assert 'not past BE' in words[1]
+    assert 'past TP' in words[2]
+    assert words[3] == ''
+    assert 'exits here first' in words[4]

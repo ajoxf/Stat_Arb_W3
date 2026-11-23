@@ -4674,6 +4674,28 @@
       fmt(rest, 2).replace(/\.?0+$/, '') + ' has no close order.</div>';
   }
 
+  function meanExitWords(pos, mean, params, digits) {
+    /* BACK TO MEAN, where it is on: the mean as a fourth level, and
+     * which of the exits it is. The Algo takes it when the CLOSING price
+     * reaches the mean at or past break-even - so a mean short of the TP
+     * is where the trade comes off first, and a mean not yet past
+     * break-even is not an exit at all (the trade holds for TP or SL). */
+    if (!params.reversion_on) { return ''; }
+    if (mean === null || mean === undefined) { return ' \u00b7 Mean ' + DASH; }
+    var sign = pos.side === 'SELL' ? -1 : 1;
+    var be = pos.break_even, tp = pos.tp;
+    var note;
+    if (be !== null && be !== undefined && sign * (mean - be) < 0) {
+      note = 'not past BE: holds for TP / SL';
+    } else if (tp !== null && tp !== undefined && sign * (mean - tp) >= 0) {
+      note = 'past TP: TP first';
+    } else {
+      note = 'exits here first';
+    }
+    return ' \u00b7 <b>Mean ' + fmt(mean, digits) + '</b> <small>(' + note +
+      ')</small>';
+  }
+
   function renderAlgoWindow(key, row) {
     /* SIGNAL & POSITION, STATISTICS, FILTERS — the stat-arb dashboard's
      * three panels, for one ladder, from the engine's Algo block. */
@@ -4828,6 +4850,7 @@
            (first.sl === null || first.sl === undefined
              ? (params.stop_loss_on ? DASH : 'off')
              : levelWords(first.sl, first.sl_money, digits)) +
+           meanExitWords(first, block.mean, params, digits) +
            (first.stop_mode === 'ATR' || first.target_mode === 'ATR'
              ? ' <small>(ATR ' + fmt(first.entry_atr, digits) + ' at entry: ' +
                (first.target_mode === 'ATR' ? 'TP ' + (first.atr_target_mult || params.atr_target_mult) + '\u00d7' : 'TP %') +
@@ -9490,7 +9513,7 @@
     panelId: panelId, openPanel: openPanel, closePanel: closePanel,
     fmt: fmt, money: money, DASH: DASH,
     tidyWindows: tidyWindows, tileWindows: tileWindows, sound: sound,
-    sizingPane: sizingPane, sizingRow: sizingRow,
+    sizingPane: sizingPane, sizingRow: sizingRow, meanExitWords: meanExitWords,
     showFairWindow: showFairWindow, setAlgo: setAlgo,
     calcPosition: calcPosition,
     toastOutcome: toastOutcome

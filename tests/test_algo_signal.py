@@ -233,7 +233,7 @@ def test_a_close_starts_the_cooldown():
 
 
 def test_no_entry_signal_while_the_ladder_holds_a_position():
-    signal = touch_signal()
+    signal = touch_signal({'reversion_on': False})
     body = feed(signal, 9.72, 9.74, 3, positions=[position(tp=None)])
     assert body['state'] == 'IN_POSITION'
     assert not [i for i in body['intents'] if i['action'] == 'ENTER']
@@ -252,7 +252,7 @@ def test_exit_at_break_even_after_costs_plus_the_target():
 
 
 def test_a_long_exits_on_the_BID():
-    signal = touch_signal()
+    signal = touch_signal({'reversion_on': False})
     held = [position(side='BUY', tp=10.10, be=10.0)]
     assert run(signal, market(10.09, 10.20, 1),
                positions=held)['positions'][0]['exit'] is None
@@ -262,7 +262,7 @@ def test_a_long_exits_on_the_BID():
 
 def test_no_target_priced_means_no_profit_exit():
     """Unmeasured is not zero: break-even is not the target."""
-    signal = touch_signal()
+    signal = touch_signal({'reversion_on': False})
     body = run(signal, market(5.0, 5.01, 1), positions=[position(tp=None)])
     assert body['positions'][0]['exit'] is None and body['intents'] == []
 
@@ -321,7 +321,10 @@ def test_the_defaults_are_the_ones_the_desk_agreed():
             d['confirm_ticks']) == (2.5, 15, 20, 3)
     assert (d['max_entry_z'], d['cutoff_buffer_min'],
             d['cooldown_min']) == (3.5, 20, 5)
-    assert not (d['stop_z_on'] or d['reversion_on'] or d['time_stop_on'])
+    assert not (d['stop_z_on'] or d['time_stop_on'])
+    # Back to mean is ON: a mean short of the TP is where the trade
+    # comes off, in profit.
+    assert d['reversion_on'] is True
     assert math.isclose(d['stop_z'], 4.0)
     # The stop loss is ON, at the take-profit's own 2% of margin.
     assert d['stop_loss_on'] is True and d['stop_loss_pct'] == 2.0
@@ -440,3 +443,25 @@ def test_one_position_at_a_time_no_entry_while_holding():
     assert body['state'] == 'IN_POSITION' and body['intents'] == []
     body = feed(touch_signal(), 10.26, 10.30, 3)
     assert body['intents'][0]['action'] == 'ENTER'
+
+
+def test_a_mean_short_of_the_target_is_where_a_long_comes_off():
+    """ETH vs BTC, 23 Nov: long, the mean below the TP, the spread
+    touched the mean and turned. Back to mean (on by default) takes it
+    there - on the BID, and only at or past break-even."""
+    signal = touch_signal()
+    body = run(signal, market(10.0, 10.02, 1))
+    mean = body['mean']
+    held = [position(side='BUY', tp=mean + 1.0, be=mean - 1.0)]
+    # The bid short of the mean: holds.
+    assert run(signal, market(mean - 0.01, mean + 0.05, 2),
+               positions=held)['positions'][0]['exit'] is None
+    # The bid at the mean, past break-even, before the TP: out.
+    assert run(signal, market(mean + 0.001, mean + 0.05, 3),
+               positions=held)['positions'][0]['exit'] == 'MEAN_REVERSION'
+    # A mean not yet past break-even is no exit: TP or SL decide.
+    signal = touch_signal()
+    run(signal, market(10.0, 10.02, 1))
+    under = [position(side='BUY', tp=mean + 2.0, be=mean + 1.0)]
+    assert run(signal, market(mean + 0.001, mean + 0.05, 2),
+               positions=under)['positions'][0]['exit'] is None

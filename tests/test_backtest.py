@@ -235,7 +235,7 @@ def test_the_derived_rows_carry_their_outcome_and_their_money(config, pair,
     coordinator.backfill_signals(pair.key, days=30)
     closed = [r for r in store.signals(pair.key) if r['state'] == 'CLOSED']
     assert closed
-    assert all(r['outcome'] in ('TP', 'SL', 'EXPIRED') for r in closed)
+    assert all(r['outcome'] in ('TP', 'SL', 'EXPIRED', 'EXIT') for r in closed)
     assert any(r['net_pnl'] is not None for r in closed)
     assert all(r['entered_at'] is not None for r in closed)
 

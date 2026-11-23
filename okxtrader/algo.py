@@ -47,9 +47,8 @@ arithmetic:
   fill: the closing side reaching break-even after every cost plus the
   take-profit (% of margin) — the same TP the Exit panel shows — or
   falling to the STOP LOSS, break-even minus `stop_loss_pct` of margin
-  (on by default). Three more, each OFF unless the ladder turns it on:
-  a z-stop, a z mean reversion taken only in profit, and a time stop in
-  candles.
+  (on by default). Three more: a z-stop (off), a z mean reversion
+  taken only in profit (ON by default) and a time stop in candles (off).
 
 The switch is per ladder, held in memory, and OFF after every restart:
 an algo nobody turned on today is an algo nobody is watching.
@@ -234,10 +233,14 @@ DEFAULT_PARAMS = {
     #: than the floor (noise) or slower than the ceiling. 0 = that end off.
     'half_life_min_min': 0.0,
     'half_life_max_min': 0.0,
-    # The three optional exits — every one OFF until a ladder asks.
+    # The optional exits. BACK TO MEAN is ON: a mean that comes before
+    # the TP is where the reversion this desk trades has finished, and a
+    # spread that touched it and turned gave the profit back (ETH vs BTC,
+    # 23 Nov). Taken only at or past break-even. The z-stop and the time
+    # stop stay OFF until a ladder asks.
     'stop_z_on': False,
     'stop_z': 4.0,
-    'reversion_on': False,
+    'reversion_on': True,
     'time_stop_on': False,
     'time_stop_candles': 20,
 }

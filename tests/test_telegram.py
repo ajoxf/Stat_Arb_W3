@@ -352,7 +352,7 @@ def test_every_exit_switch_is_in_the_settings_menu(bot):
     trader has to be able to turn it off away from the desk."""
     open_settings(bot, 'Exits')
     labels = set(bot.api.buttons())
-    for label in ('Back to mean: OFF', 'Z-stop: OFF',
+    for label in ('Back to mean: ON', 'Z-stop: OFF',
                   'Z-stop at |z|: 4.0', 'Time stop: OFF',
                   'Time stop (candles): 20', 'Stop loss: ON'):
         assert label in labels, label
@@ -360,11 +360,11 @@ def test_every_exit_switch_is_in_the_settings_menu(bot):
 
 def test_back_to_mean_is_switched_and_saved(bot):
     open_settings(bot, 'Exits')
-    press(bot, 'Back to mean: OFF')
-    press(bot, 'ON')
+    press(bot, 'Back to mean: ON')
+    press(bot, 'OFF')
     press(bot, 'Confirm')
     assert bot.desk.saves == [(KEY, {'algo_params': {
-        'entry_z': 2.0, 'reversion_on': True}})]
+        'entry_z': 2.0, 'reversion_on': False}})]
 
 
 def test_a_pair_setting_is_saved_on_the_pair(bot):
