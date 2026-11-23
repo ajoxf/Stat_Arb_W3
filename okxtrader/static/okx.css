@@ -197,3 +197,7 @@
 /* An Algo window given a size - by Tidy, or by its corner - takes it:
  * the 420px cap is for the window as it first opens. */
 .window.algowin.sized { max-width: none; }
+
+/* M on the ladder: the Algo's mean while a position is on, in the
+ * chart's own mean orange. Visual only. */
+.ladder .price .lvl-tag.mean { background: #fd7e14; }

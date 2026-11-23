@@ -5374,6 +5374,15 @@
         }
       });
     });
+    // M: the Algo's mean (its band's middle) while a position is on -
+    // where the spread is expected to revert to. Visual only.
+    var heldNow = ((row.algo_block || {}).positions || []).length ||
+      (row.positions || []).length;
+    var meanNow = (row.algo_block || {}).mean;
+    if (heldNow && meanNow !== null && meanNow !== undefined &&
+        isFinite(meanNow)) {
+      levelMarks.push({tag: 'M', at: meanNow, cls: 'mean'});
+    }
     var half = (row.increment || 0.01) / 2;
 
     var out = [];

@@ -5635,12 +5635,15 @@ def test_a_position_is_marked_on_the_ladder_and_named_plainly(page):
             'closing_spread': levels[5], 'break_even': None,
             'tp': levels[7], 'sl': levels[2], 'exit': None}
     publisher.algo_block = _algo_block(state='IN_POSITION', signal=None,
-                                       positions=[held])
+                                       positions=[held], mean=levels[6])
     try:
         publisher.publish()
         page.wait_for_selector('.ladder .lvl-tag.tp', timeout=WAIT)
         assert page.locator('.ladder .lvl-tag.entry').count() == 1
         assert page.locator('.ladder .lvl-tag.sl').count() == 1
+        # M: the Algo's mean, on its row, while the position is on.
+        mean = page.locator('.ladder .lvl-tag.mean')
+        assert mean.count() == 1 and mean.text_content() == 'M'
         # Unmeasured is not marked: no break-even, no BE tag.
         assert page.locator('.ladder .lvl-tag.be').count() == 0
         page.wait_for_function(
@@ -5648,6 +5651,12 @@ def test_a_position_is_marked_on_the_ladder_and_named_plainly(page):
             " || {textContent: ''}).textContent.indexOf('SHORT 1') === 0",
             timeout=WAIT)
         assert 'YOUR' not in page.text_content('.window.algowin .aw-pos')
+        # Flat: no M - it is there to track a position, nothing else.
+        publisher.algo_block = _algo_block(mean=levels[6])
+        publisher.publish()
+        page.wait_for_selector('.ladder .lvl-tag.tp', state='detached',
+                               timeout=WAIT)
+        assert page.locator('.ladder .lvl-tag.mean').count() == 0
     finally:
         publisher.algo = 'NONE'
         publisher.algo_block = None
