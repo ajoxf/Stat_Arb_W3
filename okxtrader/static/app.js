@@ -2369,10 +2369,18 @@
           (w - right) + '" y1="' + pocY.toFixed(1) + '" y2="' +
           pocY.toFixed(1) + '" stroke="#2f6fb0" stroke-width="1" ' +
           'stroke-dasharray="2 3" opacity=".7"/>' +
-          '<text x="' + (w - right - widest - 4).toFixed(1) + '" y="' +
-          (pocY + 3).toFixed(1) +
-          '" text-anchor="end" font-size="10" fill="#2f6fb0">POC ' +
-          ((poc.lo + poc.hi) / 2).toFixed(2) + '</text></g>';
+          // ITS PRICE as a tag on the price axis - solid, like the live
+          // price's tag on the right - where no candle can sit on it.
+          (function () {
+            var text = 'POC ' + ((poc.lo + poc.hi) / 2).toFixed(2);
+            var tw = text.length * 6.2 + 8;
+            return '<rect class="cw-vp-tag" x="1" y="' +
+              (pocY - 8).toFixed(1) + '" width="' + tw.toFixed(1) +
+              '" height="16" rx="2" fill="#2f6fb0"/>' +
+              '<text x="5" y="' + (pocY + 4).toFixed(1) +
+              '" font-size="11" font-weight="700" fill="#fff">' + text +
+              '</text>';
+          }()) + '</g>';
       }
     }
     lines.forEach(function (line) {
