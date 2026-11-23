@@ -1891,8 +1891,10 @@
   var SZ_LOSS_SHARES = [5, 10, 15, 20, 25, 30, 35];
 
   function sizingSettings() {
-    var d = {win: 65, perDay: 3, targetPctMargin: 1.5, stopPctCapital: 1.5,
-             marginShare: 60};
+    /* Every assumption on the Sizing tab, the trader's to change. */
+    var d = {win: 65, perDay: 3, freePct: 40, lev: 0,
+             target: 1.5, targetBase: 'margin',
+             stop: 1.5, stopBase: 'capital', makerPct: 100};
     return Object.assign(d, state.sizing || {});
   }
 
@@ -1918,10 +1920,47 @@
             eth: 1720, btc: 61400};
   }
 
+  function sizingRow(capital, cfg, mk) {
+    /* One capital level, worked through. Target and stop are measured
+     * from break-even (the desk's own way), so a win nets the target and
+     * a stop costs the stop, maker fees included. What maker pricing
+     * does NOT cover is the taker share: every fill that crosses pays
+     * (taker - maker) on its leg, and that comes off every trade. */
+    var lev = cfg.lev || mk.lev;
+    var margin = capital * (100 - cfg.freePct) / 100;
+    var position = margin * lev;
+    var point = position / mk.per;
+    var perMonth = cfg.perDay * 30;
+    var volume = position * 2 * perMonth;
+    var tier = SZ_TIERS[0];
+    SZ_TIERS.forEach(function (t) {
+      if (volume >= t[1] * SZ_AED_USD) { tier = t; }
+    });
+    var takerShare = (100 - cfg.makerPct) / 100;
+    var perTradeVolume = position * 2;
+    var fees = perTradeVolume * ((1 - takerShare) * tier[2] +
+                                 takerShare * tier[3]) / 1e4;
+    var takerExtra = perTradeVolume * takerShare * (tier[3] - tier[2]) / 1e4;
+    var target = cfg.target / 100 *
+      (cfg.targetBase === 'capital' ? capital : margin);
+    var stop = cfg.stop / 100 * (cfg.stopBase === 'margin' ? margin : capital);
+    var w = cfg.win / 100;
+    var perTrade = w * (target - takerExtra) - (1 - w) * (stop + takerExtra);
+    var breakEven = (target + stop) > 0
+      ? (stop + takerExtra) / (target + stop) * 100 : null;
+    return {capital: capital, margin: margin, free: capital - margin,
+            position: position, point: point, volume: volume, tier: tier,
+            fees: fees, takerExtra: takerExtra, target: target, stop: stop,
+            lossPerStop: stop + takerExtra, perTrade: perTrade,
+            month: perTrade * perMonth, breakEven: breakEven,
+            targetPts: point ? target / point : null,
+            stopPts: point ? stop / point : null};
+  }
+
   function sizingPane() {
     var cfg = sizingSettings();
     var mk = sizingMarket();
-    var w = cfg.win / 100, perMonth = cfg.perDay * 30;
+    var perMonth = cfg.perDay * 30;
     function k(x) {
       var a = Math.abs(x);
       return (a < 100e3 && Math.round(a) % 1000 ? '$' + (a / 1e3).toFixed(1)
@@ -1930,97 +1969,118 @@
     function usd(x) {
       return '$' + Math.round(Math.abs(x)).toLocaleString('en-US');
     }
-    function signed(x, f) { return (x >= 0 ? '+' : '−') + f(x); }
+    function pct(x, d) {
+      return (x >= 0 ? '+' : '−') + Math.abs(x).toFixed(d === undefined
+        ? 1 : d) + '%';
+    }
     var wins = SZ_WINS.map(function (v) {
       return '<button type="button" class="sz-win' +
         (v === cfg.win ? ' on' : '') + '" data-win="' + v + '">' + v +
         '%</button>';
     }).join('');
-    function input(key, label, step) {
-      return '<label>' + label + ' <input class="sz-input" type="number" ' +
-        'min="0" step="' + step + '" data-key="' + key + '" value="' +
-        cfg[key] + '"></label>';
+    function input(key, label, step, unit) {
+      return '<label class="sz-field"><span>' + label + '</span><input ' +
+        'class="sz-input" id="sz-' + key + '" type="number" min="0" step="' +
+        step + '" data-key="' + key + '" value="' + cfg[key] + '">' +
+        (unit || '') + '</label>';
     }
-    // Per trade, as shares of capital: the rest is the same arithmetic.
-    var target = cfg.targetPctMargin / 100 * cfg.marginShare / 100;
-    var stop = cfg.stopPctCapital / 100;
-    var perTrade = w * target - (1 - w) * stop;
-    var breakEven = stop / (target + stop) * 100;
+    function base(key) {
+      return '<select class="sz-input" id="sz-' + key + '" data-key="' + key +
+        '" data-kind="text"><option value="margin"' +
+        (cfg[key] === 'margin' ? ' selected' : '') + '>of margin</option>' +
+        '<option value="capital"' + (cfg[key] === 'capital' ? ' selected'
+          : '') + '>of capital</option></select>';
+    }
+    var lev = cfg.lev || mk.lev;
+    var html = '<div class="sz">' +
+      '<div class="sz-bar"><span class="sz-label">Win rate</span>' + wins +
+      input('win', 'or', 0.5, '%') + '</div>' +
+      '<div class="sz-bar sz-fields">' +
+      input('freePct', 'Free capital', 5, '%') +
+      '<label class="sz-field"><span>Profit (target)</span><input ' +
+        'class="sz-input" id="sz-target" type="number" min="0" step="0.1" ' +
+        'data-key="target" value="' + cfg.target + '">%' + base('targetBase') +
+        '</label>' +
+      '<label class="sz-field"><span>Loss (stop)</span><input ' +
+        'class="sz-input" id="sz-stop" type="number" min="0" step="0.1" ' +
+        'data-key="stop" value="' + cfg.stop + '">%' + base('stopBase') +
+        '</label>' +
+      input('makerPct', 'Maker fills', 5, '% (taker ' +
+        (100 - cfg.makerPct) + '%)') +
+      input('perDay', 'Trades / day', 1) +
+      '<label class="sz-field"><span>Leverage</span><input class="sz-input" ' +
+        'id="sz-lev" type="number" min="1" step="1" data-key="lev" value="' +
+        (cfg.lev || '') + '" placeholder="' + mk.lev + '">x</label>' +
+      '<button type="button" class="sz-reset">Reset</button></div>';
+    // The summary, at $100k so every percentage reads against one
+    // example; each row has its own figures below.
+    var ex = sizingRow(100e3, cfg, mk);
+    html += '<div class="sz-sum">At $100k capital: target <b>+' +
+      usd(ex.target) + '</b> (' + (ex.targetPts || 0).toFixed(1) +
+      ' pts), stop <b>−' + usd(ex.stop) + '</b> (' +
+      (ex.stopPts || 0).toFixed(1) + ' pts), taker cost <b>' +
+      usd(ex.takerExtra) + '</b> a trade · break-even win rate <b>' +
+      (ex.breakEven === null ? DASH : ex.breakEven.toFixed(1) + '%') +
+      '</b> · at ' + cfg.win + '%: <b class="' +
+      (ex.month >= 0 ? 'up' : 'down') + '">' + pct(ex.month / 1e3, 1)
+        .replace('%', '') + 'k a month (' + pct(ex.month / ex.capital * 100) +
+      ' of capital)</b> · ' + perMonth + ' trades a month at ' + lev +
+      'x · ' + (mk.live ? 'live: ETH ' + mk.eth.toFixed(2) + ', BTC ' +
+        Math.round(mk.btc).toLocaleString('en-US')
+        : 'no live price yet: ETH 1,720, BTC 61,400') + '</div>';
     var losses = SZ_LOSS_SHARES.map(function (p) {
       return Math.ceil(perMonth * p / 100);
     });
-    var html = '<div class="sz">' +
-      '<div class="sz-bar"><span class="sz-label">Win rate</span>' + wins +
-      '<span class="sz-inputs">' + input('perDay', 'Trades / day', 1) +
-      input('targetPctMargin', 'Target % of margin', 0.1) +
-      input('stopPctCapital', 'Stop % of capital', 0.1) +
-      input('marginShare', 'In trade % of capital', 5) + '</span></div>' +
-      '<div class="sz-sum">Per trade: target <b>+' +
-      (target * 100).toFixed(2) + '%</b> of capital, stop <b>−' +
-      (stop * 100).toFixed(2) + '%</b> · break-even win rate <b>' +
-      breakEven.toFixed(1) + '%</b> · at ' + cfg.win + '%: <b class="' +
-      (perTrade >= 0 ? 'up' : 'down') + '">' +
-      signed(perTrade * perMonth * 100, function (v) {
-        return Math.abs(v).toFixed(1); }) + '% of capital a month</b> (' +
-      perMonth + ' trades) · ' + cfg.marginShare + '% of capital ' +
-      'as margin at ' + mk.lev + 'x · ' + (mk.live
-        ? 'live: ETH ' + mk.eth.toFixed(2) + ', BTC ' +
-          Math.round(mk.btc).toLocaleString('en-US')
-        : 'no live price yet: ETH 1,720, BTC 61,400') + '</div>' +
-      '<div class="sz-wrap"><table class="sz-table"><thead>' +
+    html += '<div class="sz-wrap"><table class="sz-table"><thead>' +
       '<tr><th rowspan="2">Sr</th><th colspan="5">Size</th>' +
-      '<th colspan="2">Per trade (net)</th><th colspan="3">Volume and fee ' +
-      'tier</th><th colspan="3">Month at ' + cfg.win + '% wins</th>' +
+      '<th colspan="2">Per trade (net)</th><th colspan="5">Volume and ' +
+      'fees</th><th colspan="3">Month at ' + cfg.win + '% wins</th>' +
       '<th colspan="7">Drawdown if this share of the ' + perMonth +
       ' trades lose, back to back</th></tr><tr>' +
       '<th>Capital in hand</th><th>Margin / trade</th><th>Free</th>' +
       '<th>Position (both legs)</th><th>$ / point</th>' +
       '<th>Target</th><th>Stop</th>' +
       '<th>30-day volume</th><th>AED tier</th><th>Maker / Taker (bp)</th>' +
+      '<th>Fees / trade</th><th>Break-even win</th>' +
       '<th>Net P&amp;L</th><th>Return on capital</th>' +
       '<th>Return on margin</th>' +
       SZ_LOSS_SHARES.map(function (p, i) {
-        return '<th>' + p + '%<br><small>' + losses[i] + ' losses · ' +
-          '−' + (losses[i] * stop * 100).toFixed(1) + '%</small></th>';
+        return '<th>' + p + '%<br><small>' + losses[i] + ' losses</small></th>';
       }).join('') + '</tr></thead><tbody>';
     var caps = [5e3, 10e3];
     for (var c = 25e3; c <= 500e3; c += 25e3) { caps.push(c); }
     caps.forEach(function (capital, i) {
-      var margin = capital * cfg.marginShare / 100;
-      var position = margin * mk.lev;
-      var point = position / mk.per;
-      var volume = position * 2 * perMonth;
-      var tier = SZ_TIERS[0];
-      SZ_TIERS.forEach(function (t) {
-        if (volume >= t[1] * SZ_AED_USD) { tier = t; }
-      });
-      var net = perTrade * capital * perMonth;
-      var cls = net >= 0 ? 'up' : 'down';
+      var r = sizingRow(capital, cfg, mk);
+      var cls = r.month >= 0 ? 'up' : 'down';
+      var beCls = r.breakEven !== null && r.breakEven > cfg.win ? 'down' : '';
       html += '<tr><td>' + (i + 1) + '</td><td>' + k(capital) + '</td><td>' +
-        k(margin) + '</td><td>' + k(capital - margin) + '</td><td>$' +
-        (position / 1e6).toFixed(2) + 'M</td><td>' + usd(point) +
-        '</td><td>+' + usd(target * capital) + '</td><td>−' +
-        usd(stop * capital) + '</td><td>$' +
-        Math.round(volume / 1e6).toLocaleString('en-US') + 'M</td><td>' +
-        tier[0] + '</td><td>' + tier[2] + ' / ' + tier[3] + '</td>' +
-        '<td class="' + cls + '">' + signed(net, k) + '</td>' +
-        '<td class="' + cls + '">' + signed(perTrade * perMonth * 100,
-          function (v) { return Math.abs(v).toFixed(1); }) + '%</td>' +
-        '<td class="' + cls + '">' + signed(perTrade * perMonth * 100 /
-          (cfg.marginShare / 100), function (v) {
-            return Math.abs(v).toFixed(1); }) + '%</td>' +
+        k(r.margin) + '</td><td>' + k(r.free) + '</td><td>$' +
+        (r.position / 1e6).toFixed(2) + 'M</td><td>' + usd(r.point) +
+        '</td><td>+' + usd(r.target) + '</td><td>−' + usd(r.stop) +
+        '</td><td>$' + Math.round(r.volume / 1e6).toLocaleString('en-US') +
+        'M</td><td>' + r.tier[0] + '</td><td>' + r.tier[2] + ' / ' +
+        r.tier[3] + '</td><td>' + usd(r.fees) + '</td><td class="' + beCls +
+        '">' + (r.breakEven === null ? DASH : r.breakEven.toFixed(1) + '%') +
+        '</td><td class="' + cls + '">' + (r.month >= 0 ? '+' : '−') +
+        k(r.month) + '</td><td class="' + cls + '">' +
+        pct(r.month / capital * 100) + '</td><td class="' + cls + '">' +
+        pct(r.margin ? r.month / r.margin * 100 : 0) + '</td>' +
         losses.map(function (n) {
-          return '<td>−' + k(n * stop * capital) + '</td>';
+          return '<td>−' + k(n * r.lossPerStop) + ' <small>(' +
+            (n * r.lossPerStop / capital * 100).toFixed(1) + '%)</small></td>';
         }).join('') + '</tr>';
     });
     html += '</tbody></table></div><div class="sz-notes">' +
-      '<b>$ / point:</b> P&amp;L for one point of spread (−20 → ' +
-      '−19). <b>Target / Stop:</b> from break-even, so a win nets the ' +
-      'target and a stop costs the stop; fees move break-even, not the ' +
-      'result. <b>Volume</b> = position × 2 (open + close) × ' +
-      'trades; VIP 5 ≥ $588M, VIP 6 ≥ $980M a month. ' +
-      '<b>Not included:</b> slippage on stops, taker fills on entries or ' +
-      'targets, funding.</div></div>';
+      '<b>Target / Stop</b> are measured from break-even, as the desk sets ' +
+      'them: a win nets the target and a stop costs the stop, maker fees ' +
+      'included. <b>Taker fills</b> pay (taker − maker) on their leg, ' +
+      'which comes off every trade, win or loss, and adds to every stop. ' +
+      '<b>Break-even win</b> = (stop + taker cost) ÷ (target + stop); ' +
+      'red where it is above the chosen win rate. <b>$ / point:</b> P&amp;L ' +
+      'for one point of spread (−20 → −19). <b>Volume</b> = ' +
+      'position × 2 × trades; VIP 5 ≥ $588M, VIP 6 ≥ ' +
+      '$980M a month. <b>Not included:</b> slippage on stops, funding.' +
+      '</div></div>';
     return html;
   }
 
@@ -5958,13 +6018,21 @@
           state.analysisBtDays = Number(e.target.value);
         }
         if (e.target.classList.contains('sz-input')) {
-          var v = parseFloat(e.target.value);
-          if (isFinite(v) && v > 0) {
-            var next = sizingSettings();
-            next[e.target.dataset.key] = v;
-            state.sizing = next;
-            render();
+          var next = sizingSettings();
+          var key = e.target.dataset.key;
+          if (e.target.dataset.kind === 'text') {
+            next[key] = e.target.value;
+          } else {
+            var v = parseFloat(e.target.value);
+            // Blank leverage = the ladder's own; anything else must read.
+            if (key === 'lev' && e.target.value === '') { v = 0; }
+            else if (!isFinite(v) || v < 0) { return; }
+            if ((key === 'win' || key === 'freePct' || key === 'makerPct') &&
+                v > 100) { v = 100; }
+            next[key] = v;
           }
+          state.sizing = next;
+          render();
         }
         // Changing the PAIR clears the two tickets: they belong to that
         // pair's accounts, and carrying them over would leave a choice
@@ -8404,6 +8472,11 @@
     }
     var button = e.target.closest('button');
     if (!button) { return; }
+    if (button.classList.contains('sz-reset')) {
+      state.sizing = null;
+      render();
+      return;
+    }
     if (button.classList.contains('sz-win')) {
       state.sizing = Object.assign(sizingSettings(),
                                    {win: parseFloat(button.dataset.win)});
@@ -9372,7 +9445,7 @@
     panelId: panelId, openPanel: openPanel, closePanel: closePanel,
     fmt: fmt, money: money, DASH: DASH,
     tidyWindows: tidyWindows, tileWindows: tileWindows, sound: sound,
-    sizingPane: sizingPane,
+    sizingPane: sizingPane, sizingRow: sizingRow,
     showFairWindow: showFairWindow, setAlgo: setAlgo,
     calcPosition: calcPosition,
     toastOutcome: toastOutcome

@@ -7383,26 +7383,50 @@ def test_the_sizing_tab_is_the_sheet_live_with_a_win_rate_toggle(page):
     # capital, 65% wins, 90 trades: +5.4% of capital a month.
     summary = page.text_content('.monitor .sz-sum')
     assert 'break-even win rate 62.5%' in summary
-    assert '+5.4% of capital a month' in summary
+    assert '+5.4% of capital' in summary
     hundred = rows.nth(5).locator('td')
     assert hundred.nth(1).text_content() == '$100k'
     assert hundred.nth(6).text_content() == '+$900'
     assert hundred.nth(7).text_content() == '−$1,500'
-    assert hundred.nth(11).text_content() == '+$5.4k'
+    assert hundred.nth(13).text_content() == '+$5.4k'
     # 70%: 0.7 x 0.9 - 0.3 x 1.5 = +0.18% a trade, +16.2% a month.
     page.click('.monitor .sz-win[data-win="70"]')
     page.wait_for_function(
         "() => document.querySelector('.monitor .sz-sum').textContent"
-        ".includes('+16.2% of capital a month')", timeout=WAIT)
+        ".includes('+16.2% of capital')", timeout=WAIT)
     assert 'on' in page.locator('.monitor .sz-win[data-win="70"]') \
         .get_attribute('class')
-    # A stop of 1% of capital: 0.7 x 0.9 - 0.3 x 1.0 = +0.33%, +29.7%.
-    box = page.locator('.monitor .sz-input[data-key="stopPctCapital"]')
-    box.fill('1')
-    box.press('Tab')
+
+    def typed(key, value, expect):
+        box = page.locator(f'.monitor .sz-input[data-key="{key}"]')
+        if box.evaluate('e => e.tagName') == 'SELECT':
+            box.select_option(value)
+        else:
+            box.fill(value)
+            box.press('Tab')
+        page.wait_for_function(
+            "t => document.querySelector('.monitor .sz-sum').textContent"
+            ".includes(t)", arg=expect, timeout=WAIT)
+
+    # A free win rate: 65 again, typed.
+    typed('win', '65', '+5.4% of capital')
+    # A stop of 1.5% of MARGIN ($900): 0.65 x 900 - 0.35 x 900 = $270 a
+    # trade, +24.3% a month.
+    typed('stopBase', 'margin', '+24.3% of capital')
+    typed('stopBase', 'capital', '+5.4% of capital')
+    # Half the fills taker at VIP 3 (2.5 / 9 bp): 6.5 bp extra on half of
+    # $2.4M = $780 a trade, off every win and onto every stop.
+    typed('makerPct', '50', 'taker cost $780')
+    assert '\u221264.8% of capital' in page.text_content('.monitor .sz-sum')
+    # 30% free capital: $70k margin at 20x.
+    typed('makerPct', '100', '+5.4% of capital')
+    typed('freePct', '30', '+14.2% of capital')
+    assert rows.nth(5).locator('td').nth(2).text_content() == '$70k'
+    # Reset returns every default.
+    page.click('.monitor .sz-reset')
     page.wait_for_function(
         "() => document.querySelector('.monitor .sz-sum').textContent"
-        ".includes('+29.7% of capital a month')", timeout=WAIT)
+        ".includes('break-even win rate 62.5%')", timeout=WAIT)
     assert page.errors == []
     page.evaluate("""() => { const s = window.MT5Trader.state;
         s.sizing = null; s.open = []; window.MT5Trader.render(); }""")

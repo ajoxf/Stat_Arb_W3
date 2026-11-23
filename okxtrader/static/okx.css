@@ -225,3 +225,9 @@
 .monitor table.sz-table td.up { color: #2e9e4f; }
 .monitor table.sz-table td.down { color: #c0392b; }
 .monitor .sz-notes { font-size: 10.5px; margin-top: 6px; color: #444; }
+.monitor .sz-fields { gap: 4px 14px; }
+.monitor .sz-field { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; }
+.monitor .sz-field input { width: 58px; font: 11px var(--font); }
+.monitor .sz-field select { font: 11px var(--font); }
+.monitor .sz-reset { font: 11px var(--font); padding: 1px 8px; cursor: pointer; }
+.monitor table.sz-table td small { color: #6b7280; }
