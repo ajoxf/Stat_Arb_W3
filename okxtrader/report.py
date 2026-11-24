@@ -397,6 +397,143 @@ the desk’s own record of fills; past results do not promise future ones.
 </main></body></html>"""
 
 
+
+#: Who a report is for. The TRADER's report is the desk's whole record;
+#: the CLIENT's shows returns only - no ladder, instrument, side, size,
+#: trade or count of trades, nothing that says what was traded or how
+#: often.
+AUDIENCES = ('trader', 'client')
+
+
+def _periods(trips, days, now):
+    """Closed P&L summed by day (a month or less) or by month, oldest
+    first: [(label, pnl)]. Only the sums leave here - never a trade."""
+    monthly = days <= 0 or days > 31
+    fmt, label = ('%Y-%m', '%b %Y') if monthly else ('%Y-%m-%d',
+                                                     '%a %d %b %Y')
+    out = {}
+    for t in trips:
+        if t.get('pnl') is None or t.get('closed_at') is None:
+            continue
+        at = time.localtime(t['closed_at'])
+        key = time.strftime(fmt, at)
+        if key not in out:
+            out[key] = [time.strftime(label, at), 0.0]
+        out[key][1] += t['pnl']
+    return monthly, [tuple(out[k]) for k in sorted(out)]
+
+
+def render_client(body, days=7.0, now=None, logo='', desk_name='Nexus',
+                  pnl='show', link=None):
+    """The CLIENT's report: what the capital returned over the period,
+    and how far it fell on the way. Nothing about what was traded, or
+    how many times. `pnl` hides or masks the money as on the trader's
+    report; the percentages stay."""
+    pnl = pnl if pnl in PNL_MODES else 'show'
+    hide = pnl == 'hide'
+
+    def cash(x, sign=True):
+        return money(x, sign) if pnl == 'show' else MASK
+    now = time.time() if now is None else now
+    s = body.get('summary') or {}
+    d = body.get('drawdown') or {}
+    trips = list(reversed(body.get('journal') or []))
+    capital = s.get('capital') or 0.0
+
+    def on_cap(x):
+        return None if x is None or not capital else x / capital * 100.0
+    monthly, periods = _periods(trips, days, now)
+    best = max(periods, key=lambda p: p[1]) if periods else None
+    worst = min(periods, key=lambda p: p[1]) if periods else None
+    unit = 'month' if monthly else 'day'
+
+    def tile(label, value, cls='', note=''):
+        return (f'<div class="tile"><div class="tl">{label}</div>'
+                f'<div class="tv {cls}">{value}</div>'
+                f'<div class="tn">{note}</div></div>')
+    dd_pct = d.get('max_pct_capital')
+    tiles = ''.join([
+        tile('Return on capital', pct(s.get('return_on_capital')),
+             tone(s.get('return_on_capital')),
+             'after trading costs' if capital else 'capital not set'),
+        '' if hide else
+        tile('Net P&amp;L', cash(s.get('net_pnl')), tone(s.get('net_pnl')),
+             'after trading costs'),
+        tile('Max drawdown', DASH if not d.get('max')
+             else pct(-dd_pct) if dd_pct is not None
+             else cash(-d['max']), 'down' if d.get('max') else '',
+             'worst fall from a peak' + (
+                 f', {cash(-d["max"])}' if d.get('max') and dd_pct is not None
+                 and pnl == 'show' else '')),
+        tile(f'Best {unit}', DASH if best is None else
+             pct(on_cap(best[1])) if capital else cash(best[1]),
+             tone(best and best[1]), _e(best[0]) if best else ''),
+        tile(f'Worst {unit}', DASH if worst is None else
+             pct(on_cap(worst[1])) if capital else cash(worst[1]),
+             tone(worst and worst[1]), _e(worst[0]) if worst else ''),
+    ])
+
+    rows, running = [], 0.0
+    for label, value in periods:
+        running += value
+        rows.append(
+            f'<tr><td class="l">{_e(label)}</td>' +
+            ('' if hide else
+             f'<td class="{tone(value)}">{cash(value)}</td>') +
+            f'<td class="{tone(value)}">{pct(on_cap(value))}</td>'
+            f'<td class="{tone(running)}"><b>{pct(on_cap(running))}</b></td>'
+            + ('' if hide else
+               f'<td class="{tone(running)}">{cash(running)}</td>') +
+            '</tr>')
+    table = ('<table class="returns"><thead><tr>'
+             f'<th class="l">{"Month" if monthly else "Day"}</th>' +
+             ('' if hide else '<th>Net P&amp;L</th>') +
+             '<th>Return</th><th>Cumulative return</th>' +
+             ('' if hide else '<th>Cumulative P&amp;L</th>') +
+             '</tr></thead><tbody>' +
+             (''.join(rows) or '<tr><td colspan="5">No result in this '
+                               'period.</td></tr>') + '</tbody></table>')
+    modes = ''.join(
+        f'<a class="{"on" if m == pnl else ""}" href="{_e(link(m))}">'
+        f'{m.title()}</a>' for m in PNL_MODES) if link else ''
+    start = None if days <= 0 else now - days * 86400.0
+    span = '' if start is None else (
+        time.strftime('%d %b %Y', time.localtime(start)) + ' – ' +
+        time.strftime('%d %b %Y', time.localtime(now)))
+    meta = [('Period', period_text(days) + (f' · {span}' if span else '')),
+            ('Capital managed', (money(capital, sign=False)
+                                 if pnl == 'show' else 'not shown')
+             if capital else 'not set'),
+            ('Prepared', time.strftime('%d %b %Y, %H:%M',
+                                       time.localtime(now)))]
+    meta_html = ''.join(f'<div><span>{k}</span>{_e(v)}</div>'
+                        for k, v in meta)
+    css = CSS.replace('Trading Report', 'Performance Report')
+    return f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{_e(desk_name)} — Performance Report</title>
+<style>{css}</style></head>
+<body>
+<div class="toolbar"><button onclick="window.print()">Print / Save as PDF</button>
+{f'<span class="modes">Net P&amp;L: {modes}</span>' if modes else ''}
+<span>Client report: returns only, no trade details. A4 landscape.</span></div>
+<main>
+<header class="head">
+  <div class="brand">{logo}<div><div class="desk">{_e(desk_name)}</div>
+  <h1>Performance Report</h1><div class="sub">Returns on the capital
+  managed</div></div></div>
+  <div class="meta">{meta_html}</div>
+</header>
+<section class="tiles client">{tiles}</section>
+<section class="panel"><h2>Returns by {unit}</h2>{table}</section>
+<footer class="notes"><b>Return</b> is the net result after trading
+costs, divided by the capital managed. <b>Cumulative return</b> adds
+each {unit}'s return. <b>Max drawdown</b>: the worst fall of the
+running result from a peak, closed results only. Funding is not
+included. Past results do not promise future ones.</footer>
+</main></body></html>"""
+
 CSS = """
 @page { size: A4 landscape; margin: 9mm 9mm 11mm;
   @bottom-left { content: "Nexus \\2014  Trading Report"; font: 8px Segoe UI, Arial, sans-serif; color: #6b7280; }
@@ -450,6 +587,10 @@ th { background: var(--navy); color: #fff; font-weight: 600; font-size: 10.5px; 
 td.l, th.l { text-align: left; }
 .split { margin-bottom: 8px; font-size: 11px; }
 .journal { font-size: 10.5px; }
+.returns { font-size: 12px; max-width: 760px; }
+.returns td, .returns th { padding: 5px 10px; }
+.tiles.client { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
+.tiles.client .tv { font-size: 22px; }
 .journal tbody tr:nth-child(even) td { background: var(--band); }
 .journal thead { display: table-header-group; }
 .journal tr { break-inside: avoid; }

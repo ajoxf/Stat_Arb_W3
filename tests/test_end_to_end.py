@@ -639,6 +639,16 @@ def test_the_printable_report_covers_the_same_trade(desk, round_turn):
     hidden = client.get('/report?days=1&pnl=hide').get_data(as_text=True)
     assert '<th>Net P&amp;L</th>' not in hidden
     assert 'href="/report?days=1&amp;pnl=show"' in hidden
+    # The CLIENT's report: returns only - the ladder, the journal and
+    # the count of trades are not on it. (The trader's page above, the
+    # control, carries them.)
+    mine = client.get('/report?view=client&days=1').get_data(as_text=True)
+    assert 'Performance Report' in mine and 'Return on capital' in mine
+    assert 'Returns by day' in mine and 'Max drawdown' in mine
+    assert 'Funding is not' in mine
+    for detail in ('Trade journal', 'Equity curve', 'Breakdown', '1 closed',
+                   'OKX', 'Win rate'):
+        assert detail not in mine, detail
     logo = os.path.join(os.path.dirname(desk.paths['config']),
                         'report_logo.png')
     with open(logo, 'wb') as f:
@@ -677,7 +687,12 @@ def test_the_analysis_tab_is_on_the_screen(desk, browser_page, round_turn):
     page.wait_for_function(
         "() => document.querySelector('.monitor .pane').textContent"
         ".includes('\u2022\u2022\u2022\u2022\u2022')", timeout=8000)
-    assert 'pnl=mask' in page.get_attribute('.monitor .an-report', 'href')
+    trader = page.get_attribute('.monitor .an-report-trader', 'href')
+    client = page.get_attribute('.monitor .an-report-client', 'href')
+    assert 'pnl=mask' in trader and 'view=trader' in trader
+    assert 'pnl=mask' in client and 'view=client' in client
+    assert page.text_content('.monitor .an-report-trader') == 'Trader report'
+    assert page.text_content('.monitor .an-report-client') == 'Client report'
     page.select_option('.monitor .an-pnl', 'hide')
     page.wait_for_function(
         "() => !Array.from(document.querySelector('.monitor .an-table')"
