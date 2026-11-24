@@ -7393,9 +7393,15 @@ def test_the_sizing_tab_is_the_sheet_live_with_a_win_rate_toggle(page):
         window.MT5Trader.render(); }""")
     page.wait_for_selector('.monitor table.sz-table', timeout=WAIT)
     rows = page.locator('.monitor table.sz-table tbody tr')
-    assert rows.count() == 22
+    assert rows.count() == 54
+    caps = [rows.nth(i).locator('td').nth(1).text_content()
+            for i in range(54)]
+    # $25k steps to $200k, $50k steps to $500k, $250k steps to $10M.
+    assert caps[:4] == ['$5k', '$10k', '$25k', '$50k']
+    assert caps[9:12] == ['$200k', '$250k', '$300k']
+    assert caps[15:19] == ['$500k', '$750k', '$1M', '$1.25M']
     assert rows.first.locator('td').nth(1).text_content() == '$5k'
-    assert rows.last.locator('td').nth(1).text_content() == '$500k'
+    assert rows.last.locator('td').nth(1).text_content() == '$10M'
     # The defaults: target 1.5% of margin (0.9% of capital), stop 1.5% of
     # capital, 65% wins, 90 trades: +5.4% of capital a month.
     summary = page.text_content('.monitor .sz-sum')

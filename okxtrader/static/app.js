@@ -1989,6 +1989,10 @@
     var perMonth = cfg.perDay * 30;
     function k(x) {
       var a = Math.abs(x);
+      // A million and up in M: "$1.25M", not "$1,250k".
+      if (a >= 1e6) {
+        return '$' + String(parseFloat((a / 1e6).toFixed(2))) + 'M';
+      }
       return (a < 100e3 && Math.round(a) % 1000 ? '$' + (a / 1e3).toFixed(1)
         : '$' + Math.round(a / 1e3).toLocaleString('en-US')) + 'k';
     }
@@ -2076,8 +2080,12 @@
       SZ_LOSS_SHARES.map(function (p, i) {
         return '<th>' + p + '%<br><small>' + losses[i] + ' losses</small></th>';
       }).join('') + '</tr></thead><tbody>';
+    // Capital in hand: $5k, $10k, then $25k steps to $200k, $50k steps
+    // to $500k and $250k steps to $10M.
     var caps = [5e3, 10e3];
-    for (var c = 25e3; c <= 500e3; c += 25e3) { caps.push(c); }
+    for (var c = 25e3; c <= 200e3; c += 25e3) { caps.push(c); }
+    for (c = 250e3; c <= 500e3; c += 50e3) { caps.push(c); }
+    for (c = 750e3; c <= 10e6; c += 250e3) { caps.push(c); }
     caps.forEach(function (capital, i) {
       var r = sizingRow(capital, cfg, mk);
       var cls = r.month >= 0 ? 'up' : 'down';
@@ -2088,8 +2096,10 @@
         '</td><td>+' + usd(r.target) + '</td><td>−' + usd(r.stop) +
         '</td><td>' + (r.targetPts || 0).toFixed(1) + '</td><td class="' +
         (r.fees >= r.stop ? 'down' : '') + '">' +
-        (r.stopPts || 0).toFixed(1) + '</td><td>$' + Math.round(r.volume / 1e6).toLocaleString('en-US') +
-        'M</td><td>' + r.tier[0] + '</td><td>' + r.tier[2] + ' / ' +
+        (r.stopPts || 0).toFixed(1) + '</td><td>' + (r.volume >= 1e9
+          ? '$' + (r.volume / 1e9).toFixed(2) + 'B'
+          : '$' + Math.round(r.volume / 1e6).toLocaleString('en-US') + 'M') +
+        '</td><td>' + r.tier[0] + '</td><td>' + r.tier[2] + ' / ' +
         r.tier[3] + '</td><td>' + usd(r.fees) + '</td><td class="' + beCls +
         '">' + (r.breakEven === null ? DASH : r.breakEven.toFixed(1) + '%') +
         '</td><td class="' + cls + '">' + (r.month >= 0 ? '+' : '−') +
