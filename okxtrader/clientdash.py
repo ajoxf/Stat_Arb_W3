@@ -206,11 +206,11 @@ def render(data, preview=False, logout=True, desk_name='Nexus'):
              'money deposited', tone(s['return_pct'])),
         tile('This month', money(s['pnl_month'], True),
              pct(s['return_month_pct']), tone(s['pnl_month'])),
-        tile(f'Profit share · {share_pct:g}%', money(s['share_total']),
+        tile(f'Manager payout · {share_pct:g}%', money(s['share_total']),
              f'{money(s["share_due"])} due · '
              f'{money(s["share_accruing"])} accruing this month'),
         tile('Your net P&amp;L', money(s['client_net_pnl'], True),
-             'after the profit share', tone(s['client_net_pnl']))])
+             'after the manager\u2019s payout', tone(s['client_net_pnl']))])
     # MONTHLY RETURNS.
     rows = ''.join(
         f'<tr><td class="l">{_e(m["label"])}</td><td>{money(m["opening"])}'
@@ -242,20 +242,19 @@ def render(data, preview=False, logout=True, desk_name='Nexus'):
         return '<span class="pill none">none</span>'
     share_rows = ''.join(
         f'<tr><td class="l">{_e(m["label"])}</td><td class="{tone(m["pnl"])}">'
-        f'{money(m["pnl"], True)}</td><td>{money(m["hwm"])}</td>'
-        f'<td>{money(m["above_hwm"])}</td><td>{share_pct:g}%</td>'
+        f'{money(m["pnl"], True)}</td><td>{share_pct:g}%</td>'
         f'<td>{money(m["share"])}</td><td class="{tone(m["client_net"])}">'
         f'{money(m["client_net"], True)}</td><td>{status(m)}</td></tr>'
         for m in reversed(months)) or (
-        '<tr><td class="l" colspan="8">Nothing recorded yet.</td></tr>')
+        '<tr><td class="l" colspan="6">Nothing recorded yet.</td></tr>')
     shares = (
         '<div class="panel"><table><thead><tr><th class="l">Month</th>'
-        '<th>P&amp;L</th><th>High-water mark</th><th>Profit above it</th>'
-        '<th>Share</th><th>Profit share</th><th>Your net</th><th>Payout</th>'
+        '<th>P&amp;L</th><th>Share</th><th>Payout to the fund manager</th>'
+        '<th>Your net</th><th>Payout</th>'
         '</tr></thead><tbody>' + share_rows +
         f'</tbody><tfoot><tr><td class="l">Total</td>'
         f'<td class="{tone(s["pnl"])}">{money(s["pnl"], True)}</td>'
-        f'<td>{money(s["hwm"])}</td><td></td><td></td>'
+        f'<td></td>'
         f'<td>{money(s["share_total"])}</td>'
         f'<td class="{tone(s["client_net_pnl"])}">'
         f'{money(s["client_net_pnl"], True)}</td><td></td></tr></tfoot>'
@@ -298,16 +297,15 @@ def render(data, preview=False, logout=True, desk_name='Nexus'):
 <div class="tiles">{account}</div>{warn}
 <h2>Performance</h2><div class="tiles">{perf}</div>
 <h2>Monthly returns</h2>{chart}{monthly}
-<h2>Profit share &amp; payout <small>- {share_pct:g}% of profit above the
-high-water mark</small></h2>{shares}
+<h2>Profit share &amp; payout <small>- {share_pct:g}% of each month's profit,
+paid to your fund manager</small></h2>{shares}
 <h2>Deposits &amp; withdrawals</h2>{flows}
 <div class="notes"><b>P&amp;L</b> is from trades that have closed, after
 trading fees; positions still open are in the balance and shown as Open
 P&amp;L. <b>Return</b> for a month is its P&amp;L on what was in the
 account at its start plus what came in during it. <b>Profit share</b> is
-{share_pct:g}% of cumulative profit above the high-water mark - the best
-month-end so far - so a loss is won back before any share is due again.
-A month's share is <b>due</b> once the month has ended and
+the fund manager's payout: {share_pct:g}% of each month's profit; a month
+that loses pays none. A month's share is <b>due</b> once the month has ended and
 <b>accruing</b> while it runs. Deposits and withdrawals are read from
 your OKX account's own funding history. Past results do not promise
 future ones.</div>

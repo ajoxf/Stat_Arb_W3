@@ -1,5 +1,6 @@
-"""The client's book: money in and out, P&L by month, and the profit
-share with a high-water mark."""
+"""The client's book: money in and out, P&L by month, and the fund
+manager's profit share - a % of each month's profit, the manager's
+payout."""
 
 import calendar
 
@@ -40,27 +41,25 @@ def test_months_deposits_withdrawals_pnl_and_returns():
     assert b['flows'][0]['amount'] == -2000.0          # newest first
 
 
-def test_the_profit_share_has_a_high_water_mark():
-    """+1,000, then -400, then +600: the share is on the 1,000, nothing
-    on the 400 won back, and on the 200 above the old best."""
+def test_the_profit_share_is_a_share_of_each_months_profit():
+    """+1,000, then -400, then +600: 20 % of each profitable month - 200
+    and 120 - and nothing on the month that lost. No high-water mark:
+    nothing carries from one month to the next."""
     closed = [{'closed_at': at(2026, 8), 'pnl': 1000.0},
               {'closed_at': at(2026, 9), 'pnl': -400.0},
               {'closed_at': at(2026, 10), 'pnl': 600.0}]
     b = cb.book([{'at': at(2026, 8, 1), 'amount': 10000.0}], closed,
                 share_pct=20, now=at(2026, 11))
     aug, sep, oct_, nov = b['months']
-    assert (aug['above_hwm'], aug['share'], aug['client_net']) == \
-        (1000.0, 200.0, 800.0)
-    assert (sep['hwm'], sep['share'], sep['client_net']) == (1000.0, 0.0,
-                                                              -400.0)
-    assert (oct_['hwm'], oct_['above_hwm'], oct_['share']) == \
-        (1000.0, 200.0, 40.0)
+    assert (aug['share'], aug['client_net']) == (200.0, 800.0)
+    assert (sep['share'], sep['client_net']) == (0.0, -400.0)
+    assert (oct_['share'], oct_['client_net']) == (120.0, 480.0)
+    assert 'hwm' not in oct_
     assert aug['status'] == 'due' and sep['status'] == '-'
     assert nov['status'] == 'accruing' and nov['share'] == 0.0
     s = b['summary']
-    assert s['share_total'] == 240.0 and s['share_due'] == 240.0
-    assert s['client_net_pnl'] == 1200.0 - 240.0
-    assert s['hwm'] == 1200.0
+    assert s['share_total'] == 320.0 and s['share_due'] == 320.0
+    assert s['client_net_pnl'] == 1200.0 - 320.0
 
 
 def test_this_months_share_is_accruing_not_due():

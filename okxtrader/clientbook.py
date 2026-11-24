@@ -1,12 +1,10 @@
 """THE CLIENT'S BOOK: what a managed account's owner is shown.
 
 Money in and out (deposits, withdrawals - from OKX's own funding ledger
-and any the trader records by hand), the balance OKX holds now, the P&L
-of the copies, month by month, and the PROFIT SHARE: the manager's
-agreed percentage of new profit, with a HIGH-WATER MARK - a share is
-only earned on cumulative profit above the best month-end the account
-has ever had, so a client never pays twice for the same gain after a
-loss is won back.
+for the sub-account), the balance OKX holds now, the P&L of the copies,
+month by month, and the PROFIT SHARE: the fund manager's agreed
+percentage of each month's profit - the manager's payout. A month that
+lost earns no share, and nothing is carried from one month to the next.
 
 Pure arithmetic on recorded rows: nothing here reads OKX or a file, so
 the desk's view of a client and the client's own dashboard are the same
@@ -54,10 +52,10 @@ def book(flows=(), closed=(), share_pct=0.0, balance=None, now=None):
 
     Returns {'summary', 'months' (oldest first), 'flows' (newest
     first), 'share_pct'}. Each month: opening (net money in plus the P&L
-    before it), deposits, withdrawals, P&L, return %, the high-water mark
-    it was measured against, the profit the share is taken on, the share,
-    the client's net, and whether that share is due (a finished month) or
-    still accruing (this month).
+    before it), deposits, withdrawals, P&L, return %, the manager's profit
+    share (the payout - share_pct of the month's profit, nothing on a
+    month that lost), the client's net, and whether the payout is due (a
+    finished month) or still accruing (this month).
     """
     now = time.time() if now is None else now
     share = max(0.0, float(share_pct or 0.0)) / 100.0
@@ -70,11 +68,10 @@ def book(flows=(), closed=(), share_pct=0.0, balance=None, now=None):
     stamps = [f['at'] for f in flows] + [c['closed_at'] for c in closed]
     this_month = month_key(now)
     months = []
-    hwm = 0.0
     if stamps:
         keys = _months(month_key(min(stamps)), max(this_month,
                                                    month_key(max(stamps))))
-        invested = cum_pnl = hwm = 0.0
+        invested = cum_pnl = 0.0
         for key in keys:
             dep = sum(f['amount'] for f in flows
                       if month_key(f['at']) == key and f['amount'] > 0)
@@ -88,22 +85,19 @@ def book(flows=(), closed=(), share_pct=0.0, balance=None, now=None):
             base = opening + dep
             cum_pnl += pnl
             invested += dep - wd
-            # THE HIGH-WATER MARK: the share is on cumulative profit above
-            # the best month-end before this one, never below it.
-            above = max(0.0, cum_pnl - hwm)
-            fee = round(above * share, 2)
+            # THE PAYOUT: the manager's share of THIS month's profit; a
+            # month that lost pays none.
+            fee = round(max(0.0, pnl) * share, 2)
             months.append({
                 'month': key, 'label': month_label(key),
                 'opening': round(opening, 2), 'deposits': round(dep, 2),
                 'withdrawals': round(wd, 2), 'pnl': round(pnl, 2),
                 'return_pct': (round(100.0 * pnl / base, 3)
                                if base > 0 else None),
-                'hwm': round(hwm, 2), 'above_hwm': round(above, 2),
                 'share': fee, 'client_net': round(pnl - fee, 2),
                 'closing': round(invested + cum_pnl, 2),
                 'status': ('accruing' if key == this_month else
                            'due' if fee > 0 else '-')})
-            hwm = max(hwm, cum_pnl)
     deposited = sum(f['amount'] for f in flows if f['amount'] > 0)
     withdrawn = -sum(f['amount'] for f in flows if f['amount'] < 0)
     total_pnl = sum(c['pnl'] for c in closed)
@@ -135,8 +129,7 @@ def book(flows=(), closed=(), share_pct=0.0, balance=None, now=None):
         'share_pct': round(share * 100.0, 4),
         'share_total': round(shares, 2), 'share_due': round(due, 2),
         'share_accruing': round(accruing, 2),
-        'client_net_pnl': round(total_pnl - shares, 2),
-        'hwm': round(hwm, 2)}
+        'client_net_pnl': round(total_pnl - shares, 2)}
     return {'summary': summary, 'months': months,
             'flows': [dict(f) for f in reversed(flows)],
             'share_pct': summary['share_pct']}

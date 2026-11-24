@@ -136,8 +136,8 @@
         a.maker_timeout_sec, '1', 'how long a maker leg rests: on entry ' +
         'the copy is skipped if unfilled; on exit the rest crosses', '30')) +
       field('Profit share %', number('profit_share_pct', a.profit_share_pct,
-        '0.5', 'your share of the client\u2019s profit above its high-' +
-        'water mark, worked out month by month', 'none')) +
+        '0.5', 'your payout as fund manager: this % of each month\u2019s ' +
+        'profit (a losing month pays none)', 'none')) +
       field('Following', '<select data-f="enabled"><option value="1"' +
         (a.enabled !== false ? ' selected' : '') + '>Yes</option>' +
         '<option value="0"' + (a.enabled === false ? ' selected' : '') +
