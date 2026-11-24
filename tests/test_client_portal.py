@@ -61,7 +61,8 @@ def test_a_client_signs_in_and_sees_their_own_dashboard(desk):
     page = client.get('/').get_data(as_text=True)
     assert 'client_a' in page and 'Client dashboard' in page
     assert '$10,912.40' in page and '$9,300.00' in page    # balance, margin
-    assert 'Monthly returns' in page and 'Profit share' in page
+    assert 'Monthly returns' in page and 'Profit payout' in page
+    assert 'Profit share' not in page
     assert 'Transfer in from the main account' in page
     # Nothing about what was traded.
     for word in ('SWAP', 'BTC', 'ETH', 'ladder', 'Leg'):

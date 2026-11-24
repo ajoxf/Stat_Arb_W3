@@ -1,7 +1,7 @@
 """THE CLIENT'S DASHBOARD: one managed account, as its owner sees it.
 
 The balance and margin OKX holds, the money in and out, the P&L month by
-month, the profit share and what is due, and nothing about what was
+month, the profit payout and what is due, and nothing about what was
 traded - no ladder, instrument, side, size or trade.
 
 `gather` reads what is recorded (config.json, the mirror's record, the
@@ -206,11 +206,11 @@ def render(data, preview=False, logout=True, desk_name='Nexus'):
              'money deposited', tone(s['return_pct'])),
         tile('This month', money(s['pnl_month'], True),
              pct(s['return_month_pct']), tone(s['pnl_month'])),
-        tile(f'Manager payout · {share_pct:g}%', money(s['share_total']),
+        tile(f'Profit payout · {share_pct:g}%', money(s['share_total']),
              f'{money(s["share_due"])} due · '
              f'{money(s["share_accruing"])} accruing this month'),
         tile('Your net P&amp;L', money(s['client_net_pnl'], True),
-             'after the manager\u2019s payout', tone(s['client_net_pnl']))])
+             'after the profit payout', tone(s['client_net_pnl']))])
     # MONTHLY RETURNS.
     rows = ''.join(
         f'<tr><td class="l">{_e(m["label"])}</td><td>{money(m["opening"])}'
@@ -233,7 +233,7 @@ def render(data, preview=False, logout=True, desk_name='Nexus'):
     chart = (f'<div class="panel chart">{bars(months)}</div>'
              if months else '')
 
-    # PROFIT SHARE AND PAYOUT.
+    # THE PROFIT PAYOUT.
     def status(m):
         if m['status'] == 'due':
             return '<span class="pill due">due</span>'
@@ -249,8 +249,8 @@ def render(data, preview=False, logout=True, desk_name='Nexus'):
         '<tr><td class="l" colspan="6">Nothing recorded yet.</td></tr>')
     shares = (
         '<div class="panel"><table><thead><tr><th class="l">Month</th>'
-        '<th>P&amp;L</th><th>Share</th><th>Payout to the fund manager</th>'
-        '<th>Your net</th><th>Payout</th>'
+        '<th>P&amp;L</th><th>Profit payout %</th><th>Profit payout</th>'
+        '<th>Your net</th><th>Status</th>'
         '</tr></thead><tbody>' + share_rows +
         f'</tbody><tfoot><tr><td class="l">Total</td>'
         f'<td class="{tone(s["pnl"])}">{money(s["pnl"], True)}</td>'
@@ -297,15 +297,15 @@ def render(data, preview=False, logout=True, desk_name='Nexus'):
 <div class="tiles">{account}</div>{warn}
 <h2>Performance</h2><div class="tiles">{perf}</div>
 <h2>Monthly returns</h2>{chart}{monthly}
-<h2>Profit share &amp; payout <small>- {share_pct:g}% of each month's profit,
-paid to your fund manager</small></h2>{shares}
+<h2>Profit payout <small>- {share_pct:g}% of each month's profit, paid to
+your fund manager</small></h2>{shares}
 <h2>Deposits &amp; withdrawals</h2>{flows}
 <div class="notes"><b>P&amp;L</b> is from trades that have closed, after
 trading fees; positions still open are in the balance and shown as Open
 P&amp;L. <b>Return</b> for a month is its P&amp;L on what was in the
-account at its start plus what came in during it. <b>Profit share</b> is
-the fund manager's payout: {share_pct:g}% of each month's profit; a month
-that loses pays none. A month's share is <b>due</b> once the month has ended and
+account at its start plus what came in during it. <b>Profit payout</b> is
+paid to your fund manager: {share_pct:g}% of each month's profit; a month
+that loses pays none. A month's payout is <b>due</b> once the month has ended and
 <b>accruing</b> while it runs. Deposits and withdrawals are read from
 your OKX account's own funding history. Past results do not promise
 future ones.</div>

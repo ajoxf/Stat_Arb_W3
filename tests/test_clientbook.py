@@ -1,5 +1,5 @@
 """The client's book: money in and out, P&L by month, and the fund
-manager's profit share - a % of each month's profit, the manager's
+manager's profit payout - a % of each month's profit, the manager's
 payout."""
 
 import calendar

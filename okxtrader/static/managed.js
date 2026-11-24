@@ -135,7 +135,7 @@
       field('Maker wait (s)', number('maker_timeout_sec',
         a.maker_timeout_sec, '1', 'how long a maker leg rests: on entry ' +
         'the copy is skipped if unfilled; on exit the rest crosses', '30')) +
-      field('Profit share %', number('profit_share_pct', a.profit_share_pct,
+      field('Profit payout %', number('profit_share_pct', a.profit_share_pct,
         '0.5', 'your payout as fund manager: this % of each month\u2019s ' +
         'profit (a losing month pays none)', 'none')) +
       field('Following', '<select data-f="enabled"><option value="1"' +
@@ -188,7 +188,7 @@
   function loginHtml(a) {
     /* The client's own sign-in to their dashboard. */
     return '<div class="ma-sub">Client login <small>(their own dashboard: ' +
-      'balance, money in and out, monthly P&amp;L, profit share \u2014 ' +
+      'balance, money in and out, monthly P&amp;L, profit payout \u2014 ' +
       'never a trade)</small></div><div class="ma-grid ma-login">' +
       field('Username', '<input type="text" class="ma-user" ' +
         'autocomplete="off" value="' + escape(a.login || '') + '" ' +
