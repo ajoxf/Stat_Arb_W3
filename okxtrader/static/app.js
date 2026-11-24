@@ -8180,6 +8180,17 @@
         'not a setting.' : '') + '</p>';
   }
 
+  function reportLink(view, label, title) {
+    /* THE PRINTABLE REPORTS: this period (and, for the trader, this
+     * ladder) on a page of its own laid out for A4. */
+    return ' <a class="an-report an-report-' + view + '" target="_blank" ' +
+      'rel="noopener" href="/report?view=' + view + '&days=' +
+      state.analysisDays + (view === 'trader' && state.analysisPair ?
+        '&pair=' + encodeURIComponent(state.analysisPair) : '') +
+      '&pnl=' + encodeURIComponent(state.analysisPnl || 'show') +
+      '" title="' + title + '">' + label + '</a>';
+  }
+
   function analysisPane() {
     var a = state.analysis;
     var pairs = state.snapshot.pairs || {};
@@ -8216,14 +8227,13 @@
           (state.analysisPnl === o[0] ? ' selected' : '') + '>' + o[1] +
           '</option>';
       }).join('') + '</select></label>' +
-      // THE PRINTABLE REPORT: this period and ladder, on a page of its
-      // own laid out for A4 and Print / Save as PDF.
-      ' <a class="an-report" target="_blank" rel="noopener" href="/report?days=' +
-      state.analysisDays + (state.analysisPair ? '&pair=' +
-        encodeURIComponent(state.analysisPair) : '') +
-      '&pnl=' + encodeURIComponent(state.analysisPnl || 'show') +
-      '" title="This period and ladder as a printable report, with the ' +
-      'logo on top">Print report</a></div>';
+      // THE PRINTABLE REPORTS: the trader's whole record, and the
+      // client's returns only.
+      reportLink('trader', 'Trader report', 'Every trade: ladders, ' +
+        'sides, sizes and the journal - for the desk') +
+      reportLink('client', 'Client report', 'Returns only - no ladder, ' +
+        'instrument or count of trades - to share with a client') +
+      '</div>';
     if (a === null) {
       return html + '<p class="hint">reading the record\u2026</p></div>';
     }
