@@ -107,6 +107,19 @@ class Follower:
         self.base_url = base_url
         self._broker = broker
         self.last_error = None
+        #: Taken off the config while it still held a copy: closes only.
+        self.removed = False
+        self.key_print = self._key_print()
+
+    def _key_print(self):
+        """A fingerprint of this follower's API key as the environment
+        holds it now - so a NEW key reconnects it, and nothing else does.
+        Never the key itself."""
+        import hashlib
+        from .config import okx_env_keys
+        values = '|'.join(os.environ.get(k, '')
+                          for k in okx_env_keys(f'mirror_{self.name}'))
+        return hashlib.sha256(values.encode('utf-8')).hexdigest()[:16]
 
     def follows(self, pair_key):
         return self.pairs is None or pair_key in self.pairs
@@ -134,6 +147,7 @@ class Follower:
                 'max_trades_day': self.max_trades_day,
                 'execution': self.execution,
                 'maker_timeout_sec': self.maker_timeout_sec,
+                'removed': self.removed,
                 'last_error': self.last_error}
 
 
@@ -162,6 +176,9 @@ class Mirror:
         self.closed = {}
         #: Followers halted from the screen: {name: {'at', 'why'}}.
         self.halted = {}
+        #: Copying switched off on the Managed Accounts screen: no NEW
+        #: copy; every copy on still closes with its trade.
+        self.paused = False
         self.sleep = sleep
         #: ONE QUEUE AND ONE THREAD PER FOLLOWER: fifteen accounts trade
         #: side by side, not one after another (the last would trade a
@@ -182,31 +199,91 @@ class Mirror:
         section = (raw or {}).get('mirror') or {}
         if not section.get('enabled', False):
             return None
-        followers = []
-        for row in section.get('followers') or ():
-            try:
-                multiple = float(row.get('multiple'))
-            except (TypeError, ValueError):
-                logging.error('MIRROR: follower %r has no multiple - left '
-                              'out', row.get('name'))
-                continue
-            if not row.get('name') or multiple <= 0:
-                logging.error('MIRROR: follower %r needs a name and a '
-                              'multiple above 0 - left out', row)
-                continue
-            followers.append(Follower(
-                row['name'], multiple, enabled=row.get('enabled', True),
-                demo=row.get('demo', True), pairs=row.get('pairs'),
-                base_url=row.get('base_url'),
-                capital=row.get('capital'), max_margin=row.get('max_margin'),
-                daily_loss_limit=row.get('daily_loss_limit'),
-                max_trades_day=row.get('max_trades_day'),
-                execution=row.get('execution'),
-                maker_timeout_sec=row.get('maker_timeout_sec')))
+        followers = [f for f in (cls.follower_of(row) for row in
+                                 section.get('followers') or ()) if f]
         if not followers:
             return None
         return cls(followers, state_path,
                    open_window_sec=section.get('open_window_sec'), **kw)
+
+    @staticmethod
+    def follower_of(row):
+        """One `followers` row of config.json as a Follower, or None (said
+        in the log) when it has no name or no multiple above 0."""
+        try:
+            multiple = float(row.get('multiple'))
+        except (TypeError, ValueError):
+            logging.error('MIRROR: follower %r has no multiple - left out',
+                          row.get('name'))
+            return None
+        if not row.get('name') or multiple <= 0:
+            logging.error('MIRROR: follower %r needs a name and a multiple '
+                          'above 0 - left out', row)
+            return None
+        return Follower(
+            row['name'], multiple, enabled=row.get('enabled', True),
+            demo=row.get('demo', True), pairs=row.get('pairs'),
+            base_url=row.get('base_url'),
+            capital=row.get('capital'), max_margin=row.get('max_margin'),
+            daily_loss_limit=row.get('daily_loss_limit'),
+            max_trades_day=row.get('max_trades_day'),
+            execution=row.get('execution'),
+            maker_timeout_sec=row.get('maker_timeout_sec'))
+
+    #: What a change on the Managed Accounts screen may change in place.
+    LIVE_FIELDS = ('multiple', 'enabled', 'capital', 'max_margin',
+                   'daily_loss_limit', 'max_trades_day', 'execution',
+                   'maker_timeout_sec', 'pairs')
+
+    def reconfigure(self, section):
+        """config.json's `mirror` section CHANGED (the Managed Accounts
+        screen saved it): take it now, without a restart. Settings change
+        in place; an account reconnects only when its key, demo/live or
+        host changed; a new account is added; one taken off while it
+        holds a copy closes only, and goes once it holds none. Switched
+        off, the mirror takes no new copy - and still closes them all."""
+        section = section or {}
+        with self._lock:
+            self.paused = not section.get('enabled', False)
+            if section.get('open_window_sec'):
+                self.open_window_sec = float(section['open_window_sec'])
+            seen = set()
+            for row in section.get('followers') or ():
+                fresh = self.follower_of(row)
+                if fresh is None:
+                    continue
+                seen.add(fresh.name)
+                old = self.followers.get(fresh.name)
+                if old is None:
+                    self.followers[fresh.name] = fresh
+                    logging.info('MIRROR: %s added, x%g', fresh.name,
+                                 fresh.multiple)
+                    continue
+                if (old.demo, old.base_url, old.key_print) != \
+                        (fresh.demo, fresh.base_url, fresh.key_print):
+                    # Its account changed: the next order connects anew.
+                    old._broker = None
+                    logging.info('MIRROR: %s reconnects (key or account '
+                                 'changed)', old.name)
+                old.demo, old.base_url = fresh.demo, fresh.base_url
+                old.key_print = fresh.key_print
+                for name in self.LIVE_FIELDS:
+                    setattr(old, name, getattr(fresh, name))
+                old.removed = False
+            for name, follower in list(self.followers.items()):
+                if name in seen:
+                    continue
+                if self._holds(name):
+                    follower.enabled = False
+                    follower.removed = True
+                else:
+                    del self.followers[name]
+            self._save()
+
+    def _holds(self, name):
+        live = (OPEN, 'PENDING', 'CLOSING', CLOSE_FAILED)
+        return any((r['followers'].get(name) or {}).get('status') in live
+                   for r in self.records.values())
 
     # -- the record ---------------------------------------------------------
 
@@ -284,7 +361,11 @@ class Mirror:
                     if not follower.follows(pos['pair_key']):
                         continue
                     blocked = self._blocked(follower, now)
-                    if not follower.enabled:
+                    if self.paused:
+                        record['followers'][follower.name] = {
+                            'status': SKIPPED,
+                            'why': 'copying is switched off'}
+                    elif not follower.enabled:
                         record['followers'][follower.name] = {
                             'status': SKIPPED, 'why': 'follower switched off'}
                     elif blocked:
@@ -482,6 +563,10 @@ class Mirror:
             self._save()
         if reclose:
             self._run(('close', pid, name))
+        with self._lock:
+            # A follower taken off the config goes once it holds nothing.
+            if follower.removed and not self._holds(name):
+                self.followers.pop(name, None)
 
     # -- the orders ---------------------------------------------------------
 
@@ -853,7 +938,7 @@ class Mirror:
                         counts.get(fr.get('status'), 0) + 1
                 trades.append(dict(position_id=pid, counts=counts,
                                    **json.loads(json.dumps(rec))))
-            return {'on': True, 'at': now,
+            return {'on': True, 'at': now, 'paused': self.paused,
                     'open_window_sec': self.open_window_sec,
                     'followers': followers,
                     'summary': {

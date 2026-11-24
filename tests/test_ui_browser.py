@@ -7680,3 +7680,35 @@ def test_the_mirror_tab_shows_only_when_the_mirror_is_on(page):
     assert 'class="down">$95 / $100' in one
     page.evaluate("""() => { const s = window.MT5Trader.state;
         s.open = []; window.MT5Trader.render(); }""")
+
+
+def test_managed_accounts_are_set_up_from_their_own_window(page):
+    """Managed accounts, from the bottom bar: add one with its multiple and
+    API key, and it is listed - key saved, never shown back."""
+    page.errors.clear()
+    page.click('#open-managed')
+    page.wait_for_selector('.window.managed .ma-top', timeout=WAIT)
+    win = page.locator('.window.managed')
+    win.locator('[data-act="add"]').click()
+    form = win.locator('.ma-card.new .ma-form')
+    form.locator('[data-f="name"]').fill('client_ui')
+    form.locator('[data-f="multiple"]').fill('0.5')
+    form.locator('[data-f="capital"]').fill('10000')
+    form.locator('[data-f="max_margin"]').fill('800')
+    form.locator('[data-f="api_key"]').fill('ui-key-1')
+    form.locator('[data-f="secret"]').fill('ui-secret-1')
+    form.locator('[data-f="passphrase"]').fill('ui-pass-1')
+    form.locator('[data-act="save"]').click()
+    page.wait_for_function(
+        "() => document.querySelector('.window.managed .ma-body')"
+        ".textContent.includes('client_ui')", timeout=WAIT)
+    text = win.text_content()
+    assert 'key ✓' in text and '×0.50' in text and '$10,000' in text
+    assert 'ui-key-1' not in page.content()         # never shown back
+    # Opened to edit: the key fields are empty, saying it is saved.
+    placeholder = win.locator('.ma-card.open [data-f="api_key"]') \
+        .get_attribute('placeholder')
+    assert 'saved' in placeholder
+    assert page.errors == []
+    page.evaluate("() => window.MT5Trader.closePanel("
+                  "window.MT5Trader.panelId('managed'))")

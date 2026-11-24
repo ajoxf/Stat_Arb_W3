@@ -452,6 +452,7 @@
     return node.classList.contains('market-grid') ? panelId('grid')
       : node.classList.contains('monitor') ? panelId('monitor')
         : node.classList.contains('settings') ? panelId('settings')
+        : node.classList.contains('managed') ? panelId('managed')
           : node.classList.contains('chartwin')
             ? panelId('chart', node.dataset.pair)
           : node.classList.contains('calcwin')
@@ -754,7 +755,7 @@
   //: then scrolls sideways past every ladder to reach the one they
   //: wanted. They float over the ladders instead, in view, and can be
   //: dragged and resized like anything else.
-  var FLOATING_BY_DEFAULT = ['grid:', 'monitor:', 'settings:'];
+  var FLOATING_BY_DEFAULT = ['grid:', 'monitor:', 'settings:', 'managed:'];
 
   function floatByDefault(node, id) {
     var desktop = desktopBox();
@@ -2072,6 +2073,11 @@
       tile('need attention', high.length, high.length ? 'alarm' : 'ok',
            'an account still holding a copy whose trade has closed') +
       tile('updated', mirrorAgo(mr.at)) + '</div>';
+    if (mr.paused) {
+      html += '<div class="mr-attn"><div class="bad"><b>Copying is ' +
+        'switched OFF</b> (Managed accounts) \u2014 no new copies; every ' +
+        'copy on still closes with its trade.</div></div>';
+    }
     // 2. WHAT NEEDS A PERSON.
     if (high.length || low.length) {
       html += '<div class="mr-attn">' + high.concat(low).slice(0, 12)
@@ -2140,7 +2146,9 @@
       'Trades</th><th class="l">Last error</th><th>Actions</th></tr>' +
       '</thead><tbody>' + shown.map(function (f) {
         var alarm = high.some(function (a) { return a.follower === f.name; });
-        var status = f.halted
+        var status = f.removed
+          ? '<span class="mr-pill skip">removed \u2014 closes only</span>'
+          : f.halted
           ? '<span class="mr-pill alarm" title="' + escapeHtml(
               f.halted.why || '') + '">HALTED</span>'
           : !f.enabled ? '<span class="mr-pill skip">off — closes only' +
@@ -9621,6 +9629,9 @@
     if (wanted[panelId('settings')] && window.MT5Settings) {
       window.MT5Settings.render();
     }
+    if (wanted[panelId('managed')] && window.MT5Managed) {
+      window.MT5Managed.render();
+    }
 
     // Remove the panels that are no longer open.
     Array.prototype.forEach.call(document.querySelectorAll('.window'),
@@ -9835,7 +9846,8 @@
           : parts[0] === 'chart' ? pairName + ' · Chart'
           : parts[0] === 'calc' ? pairName + ' · Calc'
             : parts[0] === 'grid' ? 'Market Grid'
-              : parts[0] === 'settings' ? 'Exchanges' : 'Positions';
+              : parts[0] === 'settings' ? 'Exchanges'
+              : parts[0] === 'managed' ? 'Managed accounts' : 'Positions';
       var badge = '';
       if (parts[0] === 'ladder') {
         var row = state.snapshot.pairs[parts.slice(1).join(':')] || {};
@@ -10068,6 +10080,9 @@
     });
     el('open-settings').addEventListener('click', function () {
       openPanel(panelId('settings'));
+    });
+    el('open-managed').addEventListener('click', function () {
+      openPanel(panelId('managed'));
     });
     el('kill').addEventListener('click', function () {
       ask('Cancel everything, on every ladder?',

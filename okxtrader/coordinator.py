@@ -602,6 +602,56 @@ class Coordinator:
             self._feed_mirror()
             return snapshot
 
+    #: How often config.json is looked at for a Managed Accounts change.
+    MIRROR_WATCH_SEC = 3.0
+
+    def _watch_mirror_config(self):
+        """The Managed Accounts screen saved: take it now, no restart.
+
+        Looks at config.json's stamp every few seconds; when it changed,
+        re-reads the followers' keys from .env and hands the `mirror`
+        section over - starting the mirror if it was not running, or
+        changing it in place if it was (`Mirror.reconfigure`). Never
+        fatal: the desk trades on whatever was last good."""
+        path = getattr(self.config, 'path', None)
+        if not path:
+            return
+        now = time.monotonic()
+        if now - getattr(self, '_mirror_watch_at', 0.0) < \
+                self.MIRROR_WATCH_SEC:
+            return
+        self._mirror_watch_at = now
+        try:
+            stat = os.stat(path)
+        except OSError:
+            return
+        stamp = (stat.st_mtime_ns, stat.st_size)
+        if getattr(self, '_mirror_stamp', None) is None:
+            self._mirror_stamp = stamp            # the start's own read
+            return
+        if stamp == self._mirror_stamp:
+            return
+        self._mirror_stamp = stamp
+        try:
+            raw = config_module.load_raw(path)
+            section = raw.get('mirror') or {}
+            env = os.path.join(os.path.dirname(os.path.abspath(path)),
+                               '.env')
+            if config_module.load_dotenv is not None and os.path.exists(env):
+                # The followers' keys, as the screen just wrote them.
+                config_module.load_dotenv(env, override=True)
+            mirror = getattr(self, 'mirror', None)
+            if mirror is None:
+                if section.get('enabled'):
+                    self._start_mirror()
+            else:
+                mirror.reconfigure(section)
+                logging.info('MIRROR: settings taken from the screen (%s)',
+                             'copying' if not mirror.paused else 'switched '
+                             'off - copies on still close')
+        except Exception as e:
+            logging.error('MIRROR: could not take the new settings: %s', e)
+
     #: The words a MAKER exit closes under (`algo_exit`: the profit
     #: target and back to the mean rest at their level).
     def _close_style(self, position_id):
@@ -623,6 +673,7 @@ class Coordinator:
     def _feed_mirror(self):
         """The Algo's open positions, to the mirror - if there is one.
         Never fatal, never waits: the orders go out on its own thread."""
+        self._watch_mirror_config()
         mirror = getattr(self, 'mirror', None)
         if mirror is None:
             return

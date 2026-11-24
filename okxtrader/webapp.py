@@ -272,6 +272,7 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
         """
         newest = 0.0
         for name in ('static/app.js', 'static/settings.js',
+                     'static/managed.js',
                      'static/ladder.css', 'static/okx.css',
                      'templates/index.html'):
             path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -635,6 +636,195 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
         response.headers['Content-Type'] = 'text/html; charset=utf-8'
         response.headers['Cache-Control'] = 'no-store'
         return response
+
+    # -- MANAGED ACCOUNTS: the mirror's followers, set up from the screen --
+
+    MIRROR_NUMBERS = ('multiple', 'capital', 'max_margin',
+                      'daily_loss_limit', 'max_trades_day',
+                      'maker_timeout_sec')
+
+    def mirror_section(raw):
+        section = raw.setdefault('mirror', {})
+        section.setdefault('enabled', False)
+        section.setdefault('open_window_sec', 60)
+        section.setdefault('followers', [])
+        return section
+
+    def follower_keys(name):
+        """The .env names a follower's key is kept under - the ones the
+        engine's mirror reads (OKX_API_KEY_MIRROR_<NAME> and so on)."""
+        return cfg.okx_env_keys(f'mirror_{name}')
+
+    def follower_row(row):
+        """A follower for the screen: its settings, and only WHETHER each
+        part of its key is saved - never a value."""
+        keys = follower_keys(row.get('name'))
+        return dict({k: row.get(k) for k in (
+            'name', 'demo', 'enabled', 'execution', 'pairs', 'base_url')
+            + MIRROR_NUMBERS},
+            key_set=bool(os.environ.get(keys[0])),
+            secret_set=bool(os.environ.get(keys[1])),
+            passphrase_set=bool(os.environ.get(keys[2])),
+            key_env=keys[0])
+
+    @app.get('/api/mirror/accounts')
+    def api_mirror_accounts():
+        raw = cfg.load_raw(config_path)
+        section = raw.get('mirror') or {}
+        mirror_now = (status() or {}).get('mirror') or {}
+        holding = {f.get('name'): f.get('holding') or 0
+                   for f in mirror_now.get('followers') or ()}
+        return jsonify({
+            'ok': True, 'enabled': bool(section.get('enabled')),
+            'open_window_sec': section.get('open_window_sec', 60),
+            'followers': [dict(follower_row(r),
+                               holding=holding.get(r.get('name'), 0))
+                          for r in section.get('followers') or ()],
+            'pairs': [{'key': key, 'name': (pair or {}).get('name') or key}
+                      for key, pair in (raw.get('pairs') or {}).items()]})
+
+    @app.post('/api/mirror/settings')
+    def api_mirror_settings():
+        payload = request.get_json(silent=True) or {}
+        raw = cfg.load_raw(config_path)
+        section = mirror_section(raw)
+        if 'enabled' in payload:
+            section['enabled'] = bool(payload['enabled'])
+        if 'open_window_sec' in payload:
+            try:
+                window = float(payload['open_window_sec'])
+            except (TypeError, ValueError):
+                window = -1
+            if window <= 0:
+                return jsonify({'ok': False, 'error': 'the copy window must '
+                                'be a number of seconds above 0'}), 400
+            section['open_window_sec'] = window
+        cfg.save_raw(config_path, raw)
+        return jsonify({'ok': True, 'enabled': section['enabled'],
+                        'open_window_sec': section['open_window_sec']})
+
+    @app.post('/api/mirror/accounts/<path:name>')
+    def api_save_mirror_account(name):
+        """Add or change one managed account: its settings to config.json,
+        the three parts of its API key to .env - never to the config, a
+        log line or an answer. The engine picks it up within seconds,
+        without a restart (a restart would switch the Algo off)."""
+        payload = request.get_json(silent=True) or {}
+        name = (name or '').strip()
+        if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9 _-]{0,39}', name):
+            return jsonify({'ok': False, 'error': 'a name is letters, digits, '
+                            'spaces, - or _ (40 at most)'}), 400
+        raw = cfg.load_raw(config_path)
+        section = mirror_section(raw)
+        rows = section['followers']
+        row = next((r for r in rows if str(r.get('name')) == name), None)
+        if payload.get('new') and row is not None:
+            return jsonify({'ok': False, 'error': f'there is already a managed '
+                            f'account called {name}'}), 409
+        if row is None:
+            row = {'name': name, 'enabled': True, 'demo': True,
+                   'execution': 'MIRROR'}
+            rows.append(row)
+        problems = []
+        for field in MIRROR_NUMBERS:
+            if field not in payload:
+                continue
+            value = payload[field]
+            if value in (None, ''):
+                row.pop(field, None)
+                continue
+            try:
+                number = float(value)
+            except (TypeError, ValueError):
+                problems.append(f'{field.replace("_", " ")}: not a number')
+                continue
+            if number < 0 or (field == 'multiple' and number <= 0):
+                problems.append(f'{field.replace("_", " ")} must be above 0'
+                                if field == 'multiple' else
+                                f'{field.replace("_", " ")} cannot be negative')
+                continue
+            row[field] = int(number) if field == 'max_trades_day' else number
+        if not row.get('multiple'):
+            problems.append('multiple: how much of each trade this account '
+                            'takes, above 0 (0.5 = half)')
+        for field in ('demo', 'enabled'):
+            if field in payload:
+                row[field] = bool(payload[field])
+        if 'execution' in payload:
+            execution = str(payload['execution'] or 'MIRROR').upper()
+            if execution not in ('MIRROR', 'TAKER'):
+                problems.append('execution: MIRROR or TAKER')
+            else:
+                row['execution'] = execution
+        if 'pairs' in payload:
+            pairs = payload['pairs']
+            if isinstance(pairs, str):
+                pairs = [p.strip() for p in pairs.split(',') if p.strip()]
+            row['pairs'] = list(pairs or []) or None
+            if not row['pairs']:
+                row.pop('pairs')
+        if problems:
+            return jsonify({'ok': False, 'error': '; '.join(problems)}), 400
+        env_path = os.path.join(os.path.dirname(
+            os.path.abspath(config_path)) or '.', '.env')
+        for field, env in zip(('api_key', 'secret', 'passphrase'),
+                              follower_keys(name)):
+            value = (payload.get(field) or '').strip()
+            if value:
+                cfg.write_env_value(env_path, env, value)
+        cfg.save_raw(config_path, raw)
+        return jsonify({'ok': True, 'account': follower_row(row),
+                        'note': 'saved - the engine picks it up in a few '
+                                'seconds, no restart'})
+
+    @app.delete('/api/mirror/accounts/<path:name>')
+    def api_delete_mirror_account(name):
+        """Remove a managed account - never while it holds a copy: its
+        copies must close first (Close copies on the Mirror tab), or a
+        position would be left with nobody watching it."""
+        raw = cfg.load_raw(config_path)
+        section = mirror_section(raw)
+        rows = section['followers']
+        if not any(str(r.get('name')) == name for r in rows):
+            return jsonify({'ok': False,
+                            'error': f'no managed account {name}'}), 404
+        mirror_now = (status() or {}).get('mirror') or {}
+        held = next((f.get('holding') or 0 for f in mirror_now.get(
+            'followers') or () if f.get('name') == name), 0)
+        if held:
+            return jsonify({'ok': False, 'error': f'{name} still holds '
+                            f'{held} copy(ies) - close them first (Close '
+                            f'copies on the Mirror tab), then remove it'}), 409
+        section['followers'] = [r for r in rows if str(r.get('name')) != name]
+        cfg.save_raw(config_path, raw)
+        env_path = os.path.join(os.path.dirname(
+            os.path.abspath(config_path)) or '.', '.env')
+        for env in follower_keys(name):
+            if os.environ.get(env):
+                cfg.write_env_value(env_path, env, '')
+        return jsonify({'ok': True, 'removed': name})
+
+    @app.get('/api/mirror/accounts/<path:name>/test')
+    def api_test_mirror_account(name):
+        """Can this managed account TRADE? The same checks as an
+        Exchanges account: OKX reachable, the key accepted and allowed to
+        trade, the account set up the way the desk trades."""
+        raw = cfg.load_raw(config_path)
+        row = next((r for r in (raw.get('mirror') or {}).get('followers')
+                    or () if str(r.get('name')) == name), None)
+        if row is None:
+            return jsonify({'ok': False,
+                            'error': f'no managed account {name}'}), 404
+        okx = cfg.AccountConfig(f'mirror_{name}', demo=row.get('demo', True),
+                                base_url=row.get('base_url'))
+        if not okx.has_api_key and not okx.base_url:
+            return jsonify({'ok': False, 'account': name, 'checks': [],
+                            'problems': ['no API key saved for this account '
+                                         'yet'], 'connected': False})
+        result = okx_checklist(name, okx).result()
+        return jsonify(dict(result, account=name, connected=result['ok'],
+                            problems=[c['message'] for c in result['checks']
+                                      if c['status'] == 'FAIL']))
 
     @app.get('/mirror/report')
     def mirror_report():

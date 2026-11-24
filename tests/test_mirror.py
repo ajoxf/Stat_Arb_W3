@@ -625,3 +625,141 @@ def test_the_mirror_buttons_reach_the_engine_as_a_command(tmp_path):
                                 'payload': {'follower': 'c1',
                                             'action': 'HALT'}})
     assert result['ok'] and desk.asked == [('c1', 'HALT')]
+
+
+# -- MANAGED ACCOUNTS: set up from the screen, taken live ---------------------
+
+def managed_app(tmp_path, status=None):
+    from okxtrader.webapp import create_app
+    (tmp_path / 'status.json').write_text(json.dumps(status or {}))
+    (tmp_path / 'config.json').write_text(json.dumps(
+        {'accounts': {}, 'pairs': {'ethbtc': {'name': 'ETH vs BTC'}}}))
+    app = create_app(str(tmp_path / 'status.json'), str(tmp_path / 'c.jsonl'),
+                     str(tmp_path / 'r.json'), str(tmp_path / 'config.json'),
+                     str(tmp_path / 'db.sqlite'))
+    app.config.update(TESTING=True)
+    return app.test_client()
+
+
+def test_a_managed_account_is_added_from_the_screen_keys_to_env_only(
+        tmp_path, monkeypatch):
+    for key in ('OKX_API_KEY_MIRROR_CLIENT_A', 'OKX_SECRET_KEY_MIRROR_CLIENT_A',
+                'OKX_PASSPHRASE_MIRROR_CLIENT_A'):
+        monkeypatch.delenv(key, raising=False)
+    client = managed_app(tmp_path)
+    answer = client.post('/api/mirror/accounts/client a', json={
+        'new': True, 'multiple': '0.5', 'capital': '10000',
+        'max_margin': '1000', 'daily_loss_limit': '150',
+        'max_trades_day': '10', 'execution': 'MIRROR', 'demo': True,
+        'enabled': True, 'pairs': ['ethbtc'], 'api_key': 'k-123',
+        'secret': 's-456', 'passphrase': 'p-789'}).get_json()
+    assert answer['ok'], answer
+    raw = json.loads((tmp_path / 'config.json').read_text())
+    [row] = raw['mirror']['followers']
+    assert row['multiple'] == 0.5 and row['max_trades_day'] == 10
+    assert row['pairs'] == ['ethbtc']
+    text = (tmp_path / 'config.json').read_text()
+    assert 'k-123' not in text and 's-456' not in text        # not here
+    env = (tmp_path / '.env').read_text()
+    assert 'OKX_API_KEY_MIRROR_CLIENT_A="k-123"' in env       # here
+    listed = client.get('/api/mirror/accounts').get_json()
+    [shown] = listed['followers']
+    assert shown['key_set'] and shown['secret_set'] and shown['passphrase_set']
+    assert 'k-123' not in json.dumps(listed)                  # never echoed
+    assert listed['pairs'] == [{'key': 'ethbtc', 'name': 'ETH vs BTC'}]
+    # Saved again with the key fields blank: the key is KEPT.
+    client.post('/api/mirror/accounts/client a', json={'multiple': 0.75})
+    assert 'k-123' in (tmp_path / '.env').read_text()
+    # A second account of the same name is refused.
+    assert client.post('/api/mirror/accounts/client a', json={
+        'new': True, 'multiple': 1}).status_code == 409
+
+
+def test_bad_input_is_refused_in_words(tmp_path):
+    client = managed_app(tmp_path)
+    r = client.post('/api/mirror/accounts/x', json={'new': True,
+                                                    'multiple': '0'})
+    assert r.status_code == 400 and 'multiple' in r.get_json()['error']
+    r = client.post('/api/mirror/accounts/x', json={'multiple': 1,
+                                                    'max_margin': 'lots'})
+    assert 'not a number' in r.get_json()['error']
+    r = client.post('/api/mirror/accounts/bad%2Fname', json={'multiple': 1})
+    assert r.status_code == 400
+    r = client.post('/api/mirror/settings', json={'open_window_sec': 0})
+    assert r.status_code == 400
+
+
+def test_copying_is_switched_on_and_off_from_the_screen(tmp_path):
+    client = managed_app(tmp_path)
+    assert client.post('/api/mirror/settings', json={
+        'enabled': True, 'open_window_sec': 45}).get_json()['ok']
+    raw = json.loads((tmp_path / 'config.json').read_text())
+    assert raw['mirror']['enabled'] is True
+    assert raw['mirror']['open_window_sec'] == 45
+
+
+def test_an_account_holding_copies_cannot_be_removed(tmp_path):
+    client = managed_app(tmp_path, status={'mirror': {'followers': [
+        {'name': 'c1', 'holding': 2}]}})
+    client.post('/api/mirror/accounts/c1', json={'new': True, 'multiple': 1})
+    r = client.delete('/api/mirror/accounts/c1')
+    assert r.status_code == 409 and 'still holds 2' in r.get_json()['error']
+    (tmp_path / 'b').mkdir()
+    client2 = managed_app(tmp_path / 'b')          # nothing held here
+    client2.post('/api/mirror/accounts/c2', json={'new': True,
+                                                   'multiple': 1})
+    assert client2.delete('/api/mirror/accounts/c2').get_json()['ok']
+
+
+def test_test_connection_says_when_there_is_no_key(tmp_path, monkeypatch):
+    monkeypatch.delenv('OKX_API_KEY_MIRROR_C9', raising=False)
+    client = managed_app(tmp_path)
+    client.post('/api/mirror/accounts/c9', json={'new': True, 'multiple': 1})
+    body = client.get('/api/mirror/accounts/c9/test').get_json()
+    assert body['connected'] is False
+    assert 'no API key' in body['problems'][0]
+
+
+def test_a_change_on_the_screen_is_taken_in_place(tmp_path, monkeypatch):
+    acct, other = Account(), Account()
+    one = m.Follower('c1', 1.0, broker=acct)
+    mirror = quiet_mirror(tmp_path, one)
+    mirror.observe([trade('P1', opened_at=86400.0 * 100 + 40)])
+    # New settings for c1, a new account c2, copying still on.
+    mirror.reconfigure({'enabled': True, 'open_window_sec': 30,
+                        'followers': [{'name': 'c1', 'multiple': 2,
+                                       'max_trades_day': 5},
+                                      {'name': 'c2', 'multiple': 1}]})
+    assert mirror.followers['c1'] is one                    # same object
+    assert one.multiple == 2 and one.max_trades_day == 5
+    assert one._broker is acct                              # not reconnected
+    assert 'c2' in mirror.followers and mirror.open_window_sec == 30
+    # A new KEY for c1: it reconnects on its next order.
+    monkeypatch.setenv('OKX_API_KEY_MIRROR_C1', 'a-new-key')
+    mirror.reconfigure({'enabled': True, 'followers': [
+        {'name': 'c1', 'multiple': 2}, {'name': 'c2', 'multiple': 1}]})
+    assert one._broker is None
+    one._broker = acct
+    mirror.followers['c2']._broker = other
+    # c1 taken off while it holds P1: closes only, then goes.
+    mirror.reconfigure({'enabled': True, 'followers': [
+        {'name': 'c2', 'multiple': 1}]})
+    assert one.removed and not one.enabled
+    mirror.observe([trade('P1', opened_at=86400.0 * 100 + 40)])
+    mirror.observe([])
+    assert 'c1' not in mirror.followers
+    assert mirror.closed['c1'][0]['pnl'] is not None
+
+
+def test_switched_off_no_new_copy_but_what_is_on_still_closes(tmp_path):
+    acct = Account()
+    mirror = quiet_mirror(tmp_path, m.Follower('c1', 1.0, broker=acct))
+    mirror.observe([trade('P1', opened_at=86400.0 * 100 + 40)])
+    mirror.reconfigure({'enabled': False, 'followers': [
+        {'name': 'c1', 'multiple': 1}]})
+    assert mirror.snapshot()['paused'] is True
+    mirror.observe([trade('P1', opened_at=86400.0 * 100 + 40),
+                    trade('P2', opened_at=86400.0 * 100 + 45)])
+    assert 'switched off' in mirror.records['P2']['followers']['c1']['why']
+    mirror.observe([])
+    assert mirror.records['P1']['followers']['c1']['status'] == m.CLOSED

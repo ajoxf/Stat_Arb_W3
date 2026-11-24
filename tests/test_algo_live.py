@@ -536,3 +536,34 @@ def test_the_mirror_starts_from_config_json_and_connects_only_when_needed(
     assert follower._broker is None
     assert coordinator.snapshot()['mirror']['followers'][0]['name'] == \
         'client one'
+
+
+def test_the_engine_takes_managed_accounts_from_the_screen_without_a_restart(
+        ready, tmp_path):
+    """Saved on the Managed Accounts screen: the engine starts (or changes)
+    the mirror within seconds - no restart, which would switch the Algo
+    off."""
+    import json as json_module
+    config, pair, legs = ready
+    path = tmp_path / 'config.json'
+    path.write_text(json_module.dumps({'accounts': {}, 'pairs': {}}))
+    config.path = str(path)
+    coordinator = engine(config, legs)
+    assert coordinator.mirror is None
+    coordinator.poll_once()                       # the watcher's first look
+    path.write_text(json_module.dumps({'accounts': {}, 'pairs': {},
+        'mirror': {'enabled': True, 'followers': [
+            {'name': 'c1', 'multiple': 0.5}]}}))
+    coordinator._mirror_watch_at = 0.0
+    coordinator.poll_once()
+    assert coordinator.mirror is not None
+    assert coordinator.mirror.followers['c1'].multiple == 0.5
+    # Changed again: in place.
+    follower = coordinator.mirror.followers['c1']
+    path.write_text(json_module.dumps({'accounts': {}, 'pairs': {},
+        'mirror': {'enabled': False, 'followers': [
+            {'name': 'c1', 'multiple': 2}]}}) + ' ')
+    coordinator._mirror_watch_at = 0.0
+    coordinator.poll_once()
+    assert coordinator.mirror.followers['c1'] is follower
+    assert follower.multiple == 2 and coordinator.mirror.paused
