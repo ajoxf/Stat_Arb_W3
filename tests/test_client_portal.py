@@ -138,3 +138,50 @@ def test_the_desk_preview_is_the_same_page_the_client_sees(desk):
     assert s['pnl'] == pytest.approx(912.4)
     assert s['balance'] == 10912.4 and s['available'] == 9300.0
     assert s['share_pct'] == 20.0
+
+
+def test_payouts_are_marked_paid_from_the_desk_and_the_client_sees_it(
+        desk):
+    """Managed accounts -> Profit payouts -> Mark paid: the month is paid
+    (when, how much, the reference) on the desk and on the client's own
+    dashboard; a month still running, or one that owes nothing, cannot be
+    marked; Undo puts it back to due."""
+    from okxtrader.webapp import create_app
+    folder, portal, _clock = desk
+    app = create_app(str(folder / 'status.json'), str(folder / 'c.jsonl'),
+                     str(folder / 'r.json'), str(folder / 'config.json'),
+                     str(folder / 'db.sqlite'))
+    app.config.update(TESTING=True)
+    manager = app.test_client()
+    months = manager.get('/api/mirror/accounts/client_a/payouts').get_json()
+    by = {m['month']: m for m in months['months']}
+    assert by['2026-09']['share'] == pytest.approx(102.46)   # 20% of 512.30
+    assert by['2026-10']['share'] == 0.0                      # a loss
+    r = manager.post('/api/mirror/accounts/client_a/payouts/2026-09',
+                     json={'note': 'Bank TX 4471'})
+    assert r.get_json()['ok'], r.get_json()
+    assert r.get_json()['paid']['amount'] == pytest.approx(102.46)
+    # Refused: a month that owes nothing, and one that has not ended.
+    assert manager.post('/api/mirror/accounts/client_a/payouts/2026-10',
+                        json={}).status_code == 409
+    current = time_month()
+    assert manager.post(f'/api/mirror/accounts/client_a/payouts/{current}',
+                        json={}).status_code in (404, 409)
+    after = manager.get('/api/mirror/accounts/client_a/payouts').get_json()
+    assert after['paid'] == pytest.approx(102.46)
+    # The client sees it paid on their own dashboard.
+    sign_in(portal, 'client.a', 'correct horse 1')
+    page = portal.get('/').get_data(as_text=True)
+    assert 'pill paid' in page
+    # Undo: back to due.
+    assert manager.delete('/api/mirror/accounts/client_a/payouts/2026-09') \
+        .get_json()['ok']
+    again = manager.get('/api/mirror/accounts/client_a/payouts').get_json()
+    assert {m['month']: m['status'] for m in again['months']}['2026-09'] \
+        == 'due'
+
+
+def time_month():
+    import time
+    t = time.gmtime()
+    return f'{t.tm_year:04d}-{t.tm_mon:02d}'

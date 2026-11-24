@@ -355,3 +355,6 @@
 .window.managed table.ma-flows .l { text-align: left; }
 .window.managed .up { color: #127a3a; } .window.managed .down { color: #b42318; }
 .window.managed a.ma-btn { text-decoration: none; display: inline-block; }
+.window.managed table.ma-payouts { max-width: 760px; }
+.window.managed table.ma-payouts td { vertical-align: middle; }
+.window.managed .ma-ref { font-family: inherit; font-size: 11px; width: 160px; padding: 1px 4px; }

@@ -16,7 +16,7 @@
 
   var UI = window.MT5Trader;
   var local = {data: null, open: {}, tests: {}, adding: false,
-               busy: false, error: null};
+               busy: false, error: null, payouts: {}};
 
   function escape(value) {
     return String(value === null || value === undefined ? '' : value)
@@ -177,8 +177,54 @@
           'dashboard this client sees when they log in">Client dashboard' +
           '</a>' +
           '<button class="ma-btn danger" data-act="remove">Remove</button>') +
-      '</div>' + (isNew ? '' : testHtml(a.name) + moneyHtml(a)) +
-      '</div>';
+      '</div>' + (isNew ? '' : testHtml(a.name) + moneyHtml(a) +
+        payoutsHtml(a.name)) + '</div>';
+  }
+
+  function payoutsHtml(name) {
+    /* PROFIT PAYOUTS: month by month, marked paid here - the client's
+     * dashboard shows each as accruing, due or paid. */
+    var p = local.payouts[name];
+    var head = '<div class="ma-sub">Profit payouts <small>(your payout ' +
+      'as fund manager \u2014 mark a month paid once it is)</small></div>';
+    if (!p) { return head + '<div class="ma-hint">reading\u2026</div>'; }
+    if (p.error) { return head + '<div class="ma-hint">' +
+      escape(p.error) + '</div>'; }
+    var rows = (p.months || []).filter(function (m) {
+      return m.share || m.status === 'paid';
+    }).map(function (m) {
+      var action = m.status === 'due'
+        ? '<input type="text" class="ma-ref" placeholder="reference ' +
+          '(optional)" maxlength="200"> <button class="ma-btn" ' +
+          'data-act="paid" data-month="' + m.month + '">Mark paid</button>'
+        : m.status === 'paid'
+        ? '<span class="ma-hint">' + escape((m.paid || {}).note || '') +
+          '</span> <button class="ma-btn" data-act="unpaid" data-month="' +
+          m.month + '">Undo</button>'
+        : '<span class="ma-hint">month not ended</span>';
+      return '<tr><td class="l">' + escape(m.label) + '</td><td class="' +
+        (m.pnl >= 0 ? 'up' : 'down') + '">' + UI.money(m.pnl) + '</td>' +
+        '<td>' + UI.money(m.share) + '</td><td><span class="ma-pill ' +
+        (m.status === 'paid' ? 'ok' : m.status === 'due' ? 'bad' : '') +
+        '">' + (m.status === 'paid' ? 'paid ' + new Date(
+          (m.paid || {}).at * 1000).toLocaleDateString() : m.status) +
+        '</span></td><td class="l">' + action + '</td></tr>';
+    }).join('');
+    return head + '<div class="ma-money"><div><span>Paid</span><b>' +
+      usd(p.paid) + '</b></div><div><span>Due</span><b>' + usd(p.due) +
+      '</b></div><div><span>Accruing this month</span><b>' + usd(p.accruing) +
+      '</b></div></div>' + (rows ? '<table class="ma-flows ma-payouts">' +
+        '<thead><tr><th class="l">Month</th><th>P&amp;L</th><th>Payout' +
+        '</th><th>Status</th><th class="l"></th></tr></thead><tbody>' + rows +
+        '</tbody></table>' : '<div class="ma-hint">No payout yet.</div>');
+  }
+
+  function loadPayouts(name) {
+    return api('/api/mirror/accounts/' + encodeURIComponent(name) +
+               '/payouts').then(function (r) {
+      local.payouts[name] = r.ok ? r.body : {error: r.body.error};
+      draw();
+    });
   }
 
   function usd(x) {
@@ -369,6 +415,20 @@
     if (act === 'edit') {
       local.open[name] = !local.open[name];
       draw();
+      if (local.open[name]) { loadPayouts(name); }
+      return;
+    }
+    if (act === 'paid' || act === 'unpaid') {
+      var month = target.dataset.month;
+      var ref = target.parentNode.querySelector('.ma-ref');
+      post('/api/mirror/accounts/' + encodeURIComponent(name) + '/payouts/' +
+           encodeURIComponent(month), act === 'paid'
+             ? {note: ref ? ref.value : ''} : undefined,
+           act === 'paid' ? 'POST' : 'DELETE').then(function (r) {
+        UI.toast(r.ok ? (act === 'paid' ? month + ' payout marked paid'
+          : month + ' payout back to due') : r.body.error, r.ok ? 'ok' : '');
+        loadPayouts(name);
+      });
       return;
     }
     if (act === 'save') {

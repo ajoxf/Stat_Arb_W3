@@ -18,6 +18,14 @@ from . import clientbook
 from . import config as cfg
 
 DASH = '—'
+#: The payouts the manager has marked paid, beside config.json:
+#: {account: {month ('2026-10'): {'at', 'amount', 'note'}}}.
+PAYOUTS_FILE = 'client_payouts.json'
+
+
+def payouts_path(config_path):
+    return os.path.join(os.path.dirname(os.path.abspath(config_path)),
+                        PAYOUTS_FILE)
 
 
 def _e(text):
@@ -79,7 +87,9 @@ def gather(name, config_path, state_path, now=None):
         share = float(row.get('profit_share_pct') or 0.0)
     except (TypeError, ValueError):
         share = 0.0
-    result = clientbook.book(flows, closed, share, cash.get('balance'), now)
+    paid = read_json(payouts_path(config_path), {}).get(name) or {}
+    result = clientbook.book(flows, closed, share, cash.get('balance'), now,
+                             paid=paid)
     result.update(name=name, read_error=cash.get('error'),
                   read_at=cash.get('read_at'), now=now)
     return result
@@ -116,6 +126,7 @@ tfoot td{font-weight:650;border-top:2px solid var(--line);background:var(--band)
 .pill{display:inline-block;padding:1px 9px;border-radius:10px;font-size:11px;font-weight:600}
 .pill.due{background:#fff1db;color:#92400e}.pill.acc{background:#e6f0fb;color:#1e4f8a}
 .pill.none{background:#eef1f4;color:var(--mute)}
+.pill.paid{background:#dcf3e5;color:#0f5132}
 .chart{padding:14px 16px 4px}.chart svg{width:100%;height:190px;display:block}
 .notes{font-size:12px;color:var(--mute);margin:26px 0 40px;line-height:1.6}
 .warn{background:#fff7f6;border:1px solid #f0b4ad;color:#8a1c12;padding:8px 12px;border-radius:6px;
@@ -207,8 +218,9 @@ def render(data, preview=False, logout=True, desk_name='Nexus'):
         tile('This month', money(s['pnl_month'], True),
              pct(s['return_month_pct']), tone(s['pnl_month'])),
         tile(f'Profit payout · {share_pct:g}%', money(s['share_total']),
-             f'{money(s["share_due"])} due · '
-             f'{money(s["share_accruing"])} accruing this month'),
+             f'{money(s.get("share_paid"))} paid \u00b7 '
+             f'{money(s["share_due"])} due \u00b7 '
+             f'{money(s["share_accruing"])} accruing'),
         tile('Your net P&amp;L', money(s['client_net_pnl'], True),
              'after the profit payout', tone(s['client_net_pnl']))])
     # MONTHLY RETURNS.
@@ -235,6 +247,9 @@ def render(data, preview=False, logout=True, desk_name='Nexus'):
 
     # THE PROFIT PAYOUT.
     def status(m):
+        if m['status'] == 'paid':
+            return (f'<span class="pill paid">paid '
+                    f'{_e(day((m.get("paid") or {}).get("at")))}</span>')
         if m['status'] == 'due':
             return '<span class="pill due">due</span>'
         if m['status'] == 'accruing':
@@ -305,7 +320,8 @@ trading fees; positions still open are in the balance and shown as Open
 P&amp;L. <b>Return</b> for a month is its P&amp;L on what was in the
 account at its start plus what came in during it. <b>Profit payout</b> is
 paid to your fund manager: {share_pct:g}% of each month's profit; a month
-that loses pays none. A month's payout is <b>due</b> once the month has ended and
+that loses pays none. A month's payout is <b>due</b> once the month has
+ended, <b>paid</b> once your manager has recorded it, and
 <b>accruing</b> while it runs. Deposits and withdrawals are read from
 your OKX account's own funding history. Past results do not promise
 future ones.</div>

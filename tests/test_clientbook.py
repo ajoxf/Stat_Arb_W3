@@ -76,3 +76,18 @@ def test_nothing_recorded_is_an_empty_book_not_zeros_invented():
     b = cb.book(now=at(2026, 11))
     assert b['months'] == [] and b['summary']['balance'] is None
     assert b['summary']['return_pct'] is None
+
+
+def test_a_payout_marked_paid_is_paid_not_due():
+    closed = [{'closed_at': at(2026, 8), 'pnl': 1000.0},
+              {'closed_at': at(2026, 9), 'pnl': 500.0}]
+    paid = {'2026-08': {'at': at(2026, 9, 3), 'amount': 200.0,
+                        'note': 'TX-1'}}
+    b = cb.book([{'at': at(2026, 8, 1), 'amount': 10000.0}], closed,
+                share_pct=20, now=at(2026, 10), paid=paid)
+    aug, sep, _oct = b['months']
+    assert aug['status'] == 'paid' and aug['paid']['note'] == 'TX-1'
+    assert sep['status'] == 'due'
+    s = b['summary']
+    assert (s['share_paid'], s['share_due'], s['share_total']) == \
+        (200.0, 100.0, 300.0)

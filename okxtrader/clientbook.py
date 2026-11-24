@@ -42,13 +42,16 @@ def _months(first, last):
             y, m = y + 1, 1
 
 
-def book(flows=(), closed=(), share_pct=0.0, balance=None, now=None):
+def book(flows=(), closed=(), share_pct=0.0, balance=None, now=None,
+         paid=None):
     """The client's whole book.
 
     `flows`: [{'at', 'amount' (+ in, - out), 'kind', 'note', 'source'}].
     `closed`: the copies, [{'closed_at', 'pnl'}].
     `share_pct`: the manager's profit share, e.g. 20 for 20 %.
     `balance`: {'equity', 'at'} as OKX last said, or None.
+    `paid`: the payouts the manager has marked paid, {month key
+    ('2026-10'): {'at', 'amount', 'note'}}.
 
     Returns {'summary', 'months' (oldest first), 'flows' (newest
     first), 'share_pct'}. Each month: opening (net money in plus the P&L
@@ -96,7 +99,9 @@ def book(flows=(), closed=(), share_pct=0.0, balance=None, now=None):
                                if base > 0 else None),
                 'share': fee, 'client_net': round(pnl - fee, 2),
                 'closing': round(invested + cum_pnl, 2),
-                'status': ('accruing' if key == this_month else
+                'paid': (paid or {}).get(key),
+                'status': ('paid' if (paid or {}).get(key) and fee > 0 else
+                           'accruing' if key == this_month else
                            'due' if fee > 0 else '-')})
     deposited = sum(f['amount'] for f in flows if f['amount'] > 0)
     withdrawn = -sum(f['amount'] for f in flows if f['amount'] < 0)
@@ -104,6 +109,7 @@ def book(flows=(), closed=(), share_pct=0.0, balance=None, now=None):
     shares = sum(m['share'] for m in months)
     due = sum(m['share'] for m in months if m['status'] == 'due')
     accruing = sum(m['share'] for m in months if m['status'] == 'accruing')
+    paid_total = sum(m['share'] for m in months if m['status'] == 'paid')
     net_in = deposited - withdrawn
     current = months[-1] if months and months[-1]['month'] == this_month \
         else None
@@ -129,6 +135,7 @@ def book(flows=(), closed=(), share_pct=0.0, balance=None, now=None):
         'share_pct': round(share * 100.0, 4),
         'share_total': round(shares, 2), 'share_due': round(due, 2),
         'share_accruing': round(accruing, 2),
+        'share_paid': round(paid_total, 2),
         'client_net_pnl': round(total_pnl - shares, 2)}
     return {'summary': summary, 'months': months,
             'flows': [dict(f) for f in reversed(flows)],

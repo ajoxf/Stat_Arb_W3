@@ -834,6 +834,75 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
         return jsonify({'ok': True, 'login': (payload.get('username') or '')
                         .strip().lower()})
 
+    def payout_state():
+        return os.path.join(os.path.dirname(os.path.abspath(status_path)),
+                            'mirror_state.json')
+
+    @app.get('/api/mirror/accounts/<path:name>/payouts')
+    def api_mirror_payouts(name):
+        """This client's profit payouts, month by month: the payout, and
+        whether it is accruing, due or paid (and when)."""
+        from . import clientdash
+        data = clientdash.gather(name, config_path, payout_state())
+        if data is None:
+            return jsonify({'ok': False,
+                            'error': f'no managed account {name}'}), 404
+        s = data['summary']
+        return jsonify({'ok': True, 'account': name,
+                        'share_pct': data['share_pct'],
+                        'paid': s.get('share_paid'), 'due': s['share_due'],
+                        'accruing': s['share_accruing'],
+                        'months': [{k: m.get(k) for k in (
+                            'month', 'label', 'pnl', 'share', 'status',
+                            'paid')} for m in reversed(data['months'])]})
+
+    @app.post('/api/mirror/accounts/<path:name>/payouts/<month>')
+    def api_mark_payout_paid(name, month):
+        """MARK A MONTH'S PAYOUT PAID: the amount as it stands now, the
+        date, and the manager's note (a transfer reference). Only a month
+        that has ENDED and owes a payout can be marked."""
+        from . import clientdash
+        data = clientdash.gather(name, config_path, payout_state())
+        if data is None:
+            return jsonify({'ok': False,
+                            'error': f'no managed account {name}'}), 404
+        row = next((m for m in data['months'] if m['month'] == month), None)
+        if row is None:
+            return jsonify({'ok': False,
+                            'error': f'no month {month} for {name}'}), 404
+        if row['status'] == 'accruing':
+            return jsonify({'ok': False, 'error': f'{row["label"]} has not '
+                            f'ended - its payout is still accruing'}), 409
+        if not row['share']:
+            return jsonify({'ok': False, 'error': f'{row["label"]} owes no '
+                            f'payout'}), 409
+        payload = request.get_json(silent=True) or {}
+        path = clientdash.payouts_path(config_path)
+        book = clientdash.read_json(path, {})
+        book.setdefault(name, {})[month] = {
+            'at': time.time(), 'amount': row['share'],
+            'note': str(payload.get('note') or '').strip()[:200]}
+        tmp = f'{path}.{os.getpid()}.tmp'
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(book, f)
+        os.replace(tmp, path)
+        return jsonify({'ok': True, 'account': name, 'month': month,
+                        'paid': book[name][month]})
+
+    @app.delete('/api/mirror/accounts/<path:name>/payouts/<month>')
+    def api_unmark_payout(name, month):
+        from . import clientdash
+        path = clientdash.payouts_path(config_path)
+        book = clientdash.read_json(path, {})
+        if (book.get(name) or {}).pop(month, None) is None:
+            return jsonify({'ok': False, 'error': f'{month} is not marked '
+                            f'paid for {name}'}), 404
+        tmp = f'{path}.{os.getpid()}.tmp'
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(book, f)
+        os.replace(tmp, path)
+        return jsonify({'ok': True, 'account': name, 'month': month})
+
     @app.get('/mirror/client/<path:name>')
     def mirror_client_preview(name):
         """The client's dashboard as THEY see it, for the manager - the
