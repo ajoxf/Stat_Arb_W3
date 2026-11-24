@@ -2080,11 +2080,11 @@
       SZ_LOSS_SHARES.map(function (p, i) {
         return '<th>' + p + '%<br><small>' + losses[i] + ' losses</small></th>';
       }).join('') + '</tr></thead><tbody>';
-    // Capital in hand: $5k, $10k, then $25k steps to $200k, $50k steps
+    // Capital in hand: $5k, $10k, then $25k steps to $200k, $100k steps
     // to $500k and $250k steps to $10M.
     var caps = [5e3, 10e3];
     for (var c = 25e3; c <= 200e3; c += 25e3) { caps.push(c); }
-    for (c = 250e3; c <= 500e3; c += 50e3) { caps.push(c); }
+    for (c = 300e3; c <= 500e3; c += 100e3) { caps.push(c); }
     for (c = 750e3; c <= 10e6; c += 250e3) { caps.push(c); }
     caps.forEach(function (capital, i) {
       var r = sizingRow(capital, cfg, mk);
