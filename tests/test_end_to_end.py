@@ -665,6 +665,7 @@ def test_the_analysis_tab_is_on_the_screen(desk, browser_page, round_turn):
         ".includes('Trade journal')", timeout=8000)
     text = page.text_content('.monitor .pane')
     assert 'Deepest open drawdown' in text
+    assert 'where a stop costs least' in text
     for heading in ('Summary', 'Drawdown', 'Take / hold calibration',
                     'What if held?', 'Backtest', 'Signals',
                     'Trade journal'):

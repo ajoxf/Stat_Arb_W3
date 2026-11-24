@@ -569,6 +569,71 @@ def excursion_rows(positions):
     return sorted(rows, key=lambda r: -(r['closed_at'] or 0))
 
 
+#: The stops the winners' worst points are tried against, in % of the
+#: margin both legs tied up (the base the desk's SL % is set on).
+STOP_STUDY_PCTS = (0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 5.0, 7.5, 10.0)
+
+
+def stop_study(positions, capital=0.0, levels=STOP_STUDY_PCTS):
+    """WHERE A STOP WOULD HAVE COST LEAST, from the trades themselves.
+
+    Every closed trade with its worst point (MAE) and its margin: how far
+    it went against, as a % of its margin and in spread points. Then,
+    for each stop level, what it would have done to THESE trades: a
+    trade that went that far against would have been stopped there -
+    net -(level x its margin) - instead of closing where it did. That
+    cuts the winners that dipped that far and caps the losers.
+
+    The stop is assumed filled AT its level and nothing after it is
+    changed: a real stop in a spike fills worse, so the savings are a
+    best case and the cost of cutting winners is exact.
+    """
+    capital = float(capital or 0.0)
+    trades = []
+    for row in positions or ():
+        pnl = _pnl(row)
+        trough = row.get('trough_pnl')
+        margin = returns(row, pnl)['margin'] if pnl is not None else None
+        if row.get('closed_at') is None or pnl is None or trough is None \
+                or not margin:
+            continue
+        mae = max(0.0, -float(trough))
+        units = row.get('spread_units')
+        trades.append({'pnl': pnl, 'margin': float(margin), 'mae': mae,
+                       'mae_pct': 100.0 * mae / float(margin),
+                       'mae_points': (mae / float(units) if units else None)})
+    winners = [t for t in trades if t['pnl'] > 0]
+    losers = [t for t in trades if t['pnl'] <= 0]
+
+    def spread_of(values):
+        values = sorted(values)
+        if not values:
+            return None
+        return {'median': round(percentile(values, 50), 2),
+                'p75': round(percentile(values, 75), 2),
+                'p90': round(percentile(values, 90), 2),
+                'max': round(values[-1], 2)}
+    rows = []
+    for level in levels:
+        hit = [t for t in trades if t['mae_pct'] >= level]
+        change = sum(-level / 100.0 * t['margin'] - t['pnl'] for t in hit)
+        rows.append({
+            'pct_margin': level,
+            'winners_cut': sum(1 for t in hit if t['pnl'] > 0),
+            'losers_stopped': sum(1 for t in hit if t['pnl'] <= 0),
+            'net_change': round(change, 2),
+            'net_change_pct_capital': (round(100.0 * change / capital, 2)
+                                       if capital > 0 else None)})
+    return {'trades': len(trades), 'winners': len(winners),
+            'losers': len(losers),
+            'winners_mae_pct': spread_of([t['mae_pct'] for t in winners]),
+            'winners_mae_points': spread_of(
+                [t['mae_points'] for t in winners
+                 if t['mae_points'] is not None]),
+            'losers_mae_pct': spread_of([t['mae_pct'] for t in losers]),
+            'levels': rows}
+
+
 def percentile(values, pct):
     """Linear-interpolated percentile of a sorted list, or None."""
     if not values:
@@ -704,6 +769,7 @@ def report(positions, events=(), shadows=(), excursions=None, now=0.0,
     entry_z, exit_z = algo_z(events)
     return {'summary': summary(positions, capital),
             'drawdown': drawdown(positions, capital),
+            'stop_study': stop_study(positions, capital),
             'excursion': excursion_rows(positions),
             'calibration': calibration(positions),
             'shadow': shadow_summary(shadows),

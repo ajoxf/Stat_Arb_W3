@@ -2059,8 +2059,10 @@ class Coordinator:
             if self.algos.mode(pair.key) != algo_module.LIVE:
                 # SIGNALS: the trader's fills on one side are ONE
                 # position to read and to exit - one average, one
-                # target, one stop, one alert. LIVE is never combined:
-                # it holds one trade, and closes the one it opened.
+                # target, one stop, one alert. LIVE is not folded into
+                # one row - it closes each fill by its own ticket - but
+                # its trade and add share the averaged levels
+                # (`_average_algo_adds`).
                 rows = combined.combine(rows, self._closes_working(pair))
             return self.algos.observe(pair, md, rows,
                                       self._algo_gates(pair, md))
@@ -2205,6 +2207,48 @@ class Coordinator:
                          'stop_points': stop,
                          'spread_units': units,
                          **self._leg_marks(position, md)})
+        return self._average_algo_adds(rows)
+
+    @staticmethod
+    def _average_algo_adds(rows):
+        """THE ADD IS AVERAGED: when the Algo holds two or more fills on
+        one side (the trade and its add), every one of them is judged
+        against the COMBINED break-even, take-profit and stop - the
+        weighted average `combined.combine` works out, exact because each
+        fill's P&L is linear in the closing price. So they come off
+        together, at the average's levels, each closed by its own ticket
+        as before; the take-profit re-check and the maker close read the
+        same rows, so they hold the same level.
+
+        Each fill keeps its own entry; `averaged` carries the average
+        entry, the total size and how many fills, for the screen. Manual
+        fills are not touched here."""
+        algo_rows = [r for r in rows if r.get('source') == ALGO_SOURCE]
+        for side in ('BUY', 'SELL'):
+            group = [r for r in algo_rows if r.get('side') == side]
+            if len(group) < 2:
+                continue
+            [whole] = combined.combine(group)
+            be, tp, sl = whole['break_even'], whole['tp'], whole['sl']
+            sign = 1.0 if side == 'BUY' else -1.0
+            for row in group:
+                units = row.get('spread_units')
+
+                def worth(level, units=units):
+                    if level is None or be is None or not units:
+                        return None
+                    return round(sign * (level - be) * units, 2)
+                row.update({
+                    'break_even': be, 'tp': tp, 'sl': sl,
+                    'tp_money': worth(tp), 'sl_money': worth(sl),
+                    'stop_points': (None if sl is None or be is None
+                                    else abs(sl - be)),
+                    'averaged': {'entry': whole['entry_spread'],
+                                 'quantity': whole['quantity'],
+                                 'fills': len(group),
+                                 'tp_money': whole['tp_money'],
+                                 'sl_money': whole['sl_money'],
+                                 'net_pnl': whole['net_pnl']}})
         return rows
 
     def entry_margin(self, pair, position):

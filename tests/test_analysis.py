@@ -544,3 +544,33 @@ def test_the_deepest_open_drawdown_counts_each_trade_at_its_worst():
     # No trough recorded: unmeasured, never zero.
     bare = [{'closed_at': 1.0, 'realized_pnl': -5.0}]
     assert analysis.drawdown(bare)['open_max'] is None
+
+
+def test_the_stop_study_weighs_winners_cut_against_losers_stopped():
+    """Three winners that dipped 0.5%, 1% and 3% of their margin, and one
+    loser that went to 10% and closed at -5%. A 2% stop cuts the 3%
+    winner and stops the loser at -2% instead of -5%."""
+    from okxtrader import analysis
+
+    def trade(pnl, trough, i):
+        return {'position_id': f'T{i}', 'closed_at': float(i),
+                'realized_pnl': pnl, 'trough_pnl': trough,
+                'entry_margin': 100.0, 'quantity': 1.0,
+                'spread_units': 10.0}
+    rows = [trade(2.0, -0.5, 1), trade(2.0, -1.0, 2), trade(2.0, -3.0, 3),
+            trade(-5.0, -10.0, 4)]
+    st = analysis.stop_study(rows, capital=1000)
+    assert (st['trades'], st['winners'], st['losers']) == (4, 3, 1)
+    assert st['winners_mae_pct']['median'] == 1.0
+    assert st['winners_mae_pct']['max'] == 3.0
+    assert st['winners_mae_points']['max'] == 0.3       # $3 / $10 a point
+    at2 = next(r for r in st['levels'] if r['pct_margin'] == 2.0)
+    assert (at2['winners_cut'], at2['losers_stopped']) == (1, 1)
+    # Winner: -2 instead of +2 (-4); loser: -2 instead of -5 (+3).
+    assert at2['net_change'] == -1.0
+    assert at2['net_change_pct_capital'] == -0.1
+    at5 = next(r for r in st['levels'] if r['pct_margin'] == 5.0)
+    assert (at5['winners_cut'], at5['losers_stopped'], at5['net_change']) \
+        == (0, 1, 0.0)
+    # Nothing measured: nothing claimed.
+    assert analysis.stop_study([])['trades'] == 0

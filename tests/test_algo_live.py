@@ -403,3 +403,40 @@ def test_an_add_goes_on_at_its_own_size(ready):
                                     'z': 2.6, 'add': True}, 0.0)
     assert not answer['ok'] and 'add size' in answer['reason']
     assert len(fake.entered) == 3
+
+
+def test_the_trade_and_its_add_share_one_averaged_set_of_levels(ready):
+    """Short at one price, an add further out: both fills are judged
+    against ONE break-even and target - the weighted average - so they
+    come off together, each by its own ticket."""
+    config, pair, legs = ready
+    pair.algo_params = dict(QUIET, cooldown_min=0)
+    pair.tp_target_pct_of_margin = 2.0
+    coordinator = engine(config, legs)
+    live(coordinator, pair)
+    quote_b(legs, STRETCH)
+    coordinator.poll_once()                          # the trade
+    [first] = coordinator.book.positions(pair.key)
+    side = first.side
+    md = coordinator.market.get(pair.key)
+    alone = {r['position_id']: r
+             for r in coordinator._algo_positions(pair, md)}
+    assert 'averaged' not in alone[first.position_id]
+    # The add, further out.
+    quote_b(legs, (4353.00, 4353.10))
+    coordinator.poll_once()
+    answer = coordinator.algo_enter(pair, side, first.quantity)
+    assert answer['ok'], answer
+    md = coordinator.market.get(pair.key)
+    rows = coordinator._algo_positions(pair, md)
+    assert len(rows) == 2
+    a, b = rows
+    assert a['break_even'] == b['break_even'] and a['tp'] == b['tp']
+    assert a['entry_spread'] != b['entry_spread']    # each keeps its fill
+    assert a['averaged']['fills'] == 2
+    assert a['averaged']['quantity'] == pytest.approx(2 * first.quantity)
+    lo, hi = sorted([a['entry_spread'], b['entry_spread']])
+    assert lo < a['averaged']['entry'] < hi
+    # One target worth the sum of what each fill makes there.
+    assert a['averaged']['tp_money'] == pytest.approx(
+        a['tp_money'] + b['tp_money'], abs=0.02)

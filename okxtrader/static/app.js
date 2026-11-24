@@ -4793,9 +4793,18 @@
   }
 
   function addsHtml(adds, block, params, digits) {
-    /* The ADDS, each its own trade: where it went on, its own levels,
-     * and what it is worth now. The first trade is the one above. */
+    /* The ADDS: where each went on and what it is worth now. Averaged
+     * with the trade (the usual case), its levels are the shared ones
+     * above, so only its fill is said here. */
     return adds.map(function (p, i) {
+      if (p.averaged) {
+        return kv('Add ' + (i + 1), 'in @ ' + fmt(p.entry_spread, digits) +
+          ' \u00b7 ' + fmt(p.quantity, 2) + ' \u00b7 net ' +
+          '<span class="' + (p.net_pnl === null || p.net_pnl === undefined
+            ? '' : (p.net_pnl >= 0 ? 'up' : 'down')) + '">' +
+          moneyOr(p.net_pnl) + '</span> \u00b7 averaged: shares the ' +
+          'levels above', '', 'an ADD, averaged with the trade');
+      }
       return kv('Add ' + (i + 1), 'in @ ' + fmt(p.entry_spread, digits) +
         ' \u00b7 ' + fmt(p.quantity, 2) + ' \u00b7 BE ' +
         fmt(p.break_even, digits) + ' \u00b7 TP ' +
@@ -4984,12 +4993,23 @@
            sizeDollars(row, first.quantity), '',
            'both legs\u2019 value at the mid now, for this size') +
         '</div>' +
+        // AVERAGED with an add: one break-even, target and stop for
+        // the whole, and what each is worth to the whole.
+        (first.averaged ? kv('Average', fmt(first.averaged.entry, digits) +
+           ' \u00b7 ' + fmt(first.averaged.quantity, 2) + ' spread(s) in ' +
+           first.averaged.fills + ' fills \u00b7 net ' +
+           moneyOr(first.averaged.net_pnl), '',
+           'the trade and its add, averaged: they share one break-even, ' +
+           'target and stop, and come off together') : '') +
         kv('Levels', 'BE ' + fmt(first.break_even, digits) + ' · TP ' +
            (first.tp === null || first.tp === undefined ? DASH
-             : levelWords(first.tp, first.tp_money, digits)) + ' · SL ' +
+             : levelWords(first.tp, first.averaged
+                 ? first.averaged.tp_money : first.tp_money, digits)) +
+           ' · SL ' +
            (first.sl === null || first.sl === undefined
              ? (params.stop_loss_on ? DASH : 'off')
-             : levelWords(first.sl, first.sl_money, digits)) +
+             : levelWords(first.sl, first.averaged
+                 ? first.averaged.sl_money : first.sl_money, digits)) +
            meanExitWords(first, block.mean, params, digits) +
            (first.stop_mode === 'ATR' || first.target_mode === 'ATR'
              ? ' <small>(ATR ' + fmt(first.entry_atr, digits) + ' at entry: ' +
@@ -7990,6 +8010,62 @@
     return html;
   }
 
+  function stopStudyHtml(st) {
+    /* WINNERS' WORST POINTS, and what a stop at each level would have
+     * done to these trades: the winners it would have cut, the losers it
+     * would have stopped, and the net in money and on capital. */
+    var html = '<h4>Winners\u2019 worst points &amp; where a stop costs ' +
+      'least <small>\u2014 from each trade\u2019s worst point while ' +
+      'open</small></h4>';
+    if (!st.trades) {
+      return html + '<p class="hint">No closed trade with its worst point ' +
+        'and margin yet.</p>';
+    }
+    var wp = st.winners_mae_pct || {}, wpts = st.winners_mae_points || {};
+    var lp = st.losers_mae_pct || {};
+    function pct(v) { return v === null || v === undefined ? DASH
+      : fmt(v, 2) + '%'; }
+    function pts(v) { return v === null || v === undefined ? ''
+      : ' <small>(' + fmt(v, 2) + ' pts)</small>'; }
+    html += '<div class="an-tiles">' +
+      anTile('Winners', st.winners || 0, 'up',
+             (st.losers || 0) + ' loser(s) beside them') +
+      anTile('Half the winners dipped', pct(wp.median) + pts(wpts.median), '',
+             'the median worst point of a WINNING trade, as a % of its ' +
+             'margin (and in spread points)') +
+      anTile('3 in 4 dipped less than', pct(wp.p75) + pts(wpts.p75)) +
+      anTile('9 in 10 dipped less than', pct(wp.p90) + pts(wpts.p90)) +
+      anTile('Deepest winner', pct(wp.max) + pts(wpts.max), 'down',
+             'the furthest a trade went against and still closed a winner') +
+      anTile('Losers, median worst', pct(lp.median), 'down') + '</div>';
+    html += '<table class="an-table"><thead><tr>' +
+      '<th title="A stop at this % of the margin both legs tied up - the ' +
+      'base SL % of margin is set on">Stop at (% of margin)</th>' +
+      '<th title="Winners that went this far against before winning: the ' +
+      'stop would have closed them at a loss">Winners it would cut</th>' +
+      '<th title="Losers that went this far: closed at the stop instead">' +
+      'Losers it would stop</th>' +
+      '<th title="Every trade that reached the stop, closed there instead ' +
+      'of where it did: positive = the stop would have made money">' +
+      'Net effect</th><th>On capital</th></tr></thead><tbody>';
+    (st.levels || []).forEach(function (r) {
+      html += '<tr><td>' + fmt(r.pct_margin, 1) + '%</td><td>' +
+        r.winners_cut + '</td><td>' + r.losers_stopped + '</td>' +
+        '<td class="' + anSign(r.net_change) + '">' +
+        (r.net_change > 0 ? '+' : '') + money(r.net_change) + '</td><td class="' +
+        anSign(r.net_change_pct_capital) + '">' +
+        (r.net_change_pct_capital === null ||
+         r.net_change_pct_capital === undefined ? DASH
+          : pctSigned(r.net_change_pct_capital, 2)) + '</td></tr>';
+    });
+    return html + '</tbody></table><p class="hint">Read across: the ' +
+      'cheapest stop is the one that cuts few winners and still stops the ' +
+      'deep losers. Assumes the stop fills at its level - in a spike it ' +
+      'fills worse, so a positive net is a best case.' +
+      (st.trades < 20 ? ' Only ' + st.trades + ' trade(s) so far: a hint, ' +
+        'not a setting.' : '') + '</p>';
+  }
+
   function analysisPane() {
     var a = state.analysis;
     var pairs = state.snapshot.pairs || {};
@@ -8247,6 +8323,7 @@
         '<td>' + anMin(r.peak_min) + '</td></tr>';
     });
     html += '</tbody></table>';
+    html += stopStudyHtml(a.stop_study || {});
 
     // 3. Take / hold calibration.
     var c = a.calibration || {};
