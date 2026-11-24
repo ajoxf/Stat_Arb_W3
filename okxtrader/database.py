@@ -848,9 +848,18 @@ class Store:
             armed = json.loads(row['armed']) if row['armed'] else {}
         except (TypeError, ValueError):
             armed = {}
+        extreme = armed.get('extreme') or {}
+
+        def number(value):
+            try:
+                return None if value is None else float(value)
+            except (TypeError, ValueError):
+                return None
         return {'live_sec': row['live_sec'], 'at': row['at'],
                 'armed': {'SELL': bool(armed.get('SELL')),
-                          'BUY': bool(armed.get('BUY'))}}
+                          'BUY': bool(armed.get('BUY'))},
+                'extreme': {'SELL': number(extreme.get('SELL')),
+                            'BUY': number(extreme.get('BUY'))}}
 
     def clear_warmup(self, pair_key):
         with self._connect() as connection:

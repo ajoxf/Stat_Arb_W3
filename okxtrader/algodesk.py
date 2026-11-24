@@ -464,6 +464,9 @@ class AlgoDesk:
             # first price after it disarms it as usual if the spread came
             # back too far in the gap.
             armed = state['armed']
+            extreme = state.get('extreme') or {}
+            run.signal._extreme = {'BUY': extreme.get('BUY'),
+                                   'SELL': extreme.get('SELL')}
             if any(armed.values()):
                 run.signal._armed = dict(armed)
                 run.armed_saved = dict(armed)
@@ -477,12 +480,16 @@ class AlgoDesk:
     def _save_warmup(self, pair, run, now):
         if self.store is None:
             return
-        armed = dict(run.signal._armed)
+        # The arming, and how far each held side has gone (the add's
+        # yardstick) - both carried over a restart.
+        armed = dict(run.signal._armed,
+                     extreme=dict(run.signal._extreme))
         # An arming that CHANGED is saved at once - a restart a second
         # later must find it - the warm-up's seconds every few.
         if run.warmup_saved_at is not None \
                 and now - run.warmup_saved_at < WARMUP_SAVE_SEC \
-                and armed == run.armed_saved:
+                and {k: armed[k] for k in ('BUY', 'SELL')} == \
+                {k: run.armed_saved.get(k) for k in ('BUY', 'SELL')}:
             return
         run.warmup_saved_at = now
         run.armed_saved = armed

@@ -4572,9 +4572,17 @@
           : levelWords(first.sl, first.sl_money, digits)) +
         // Where an ADD would go on: the spread it must reach first.
         (add.beyond === null || add.beyond === undefined ? ''
+          // The add waits for the spread to have GONE past the line (the
+          // furthest so far, beside it), then takes the re-entry.
           : ' · add ' + addSizeWords(block.params || {}) +
-            (add.side === 'SELL' ? '\u2265 ' : '\u2264 ') +
-            fmt(add.beyond, digits) + ' on re-entry');
+            (add.reached ? 'on re-entry (went ' +
+              fmt(add.extreme, digits) + ', past ' + fmt(add.beyond, digits) +
+              ')'
+              : 'once past ' + (add.side === 'SELL' ? '\u2265 ' : '\u2264 ') +
+                fmt(add.beyond, digits) +
+                (add.extreme === null || add.extreme === undefined ? ''
+                  : ' (furthest ' + fmt(add.extreme, digits) + ')') +
+                ', then on re-entry'));
     }
     if (state === 'BLOCKED') { return 'held: ' + (block.blocked || ''); }
     if (state === 'CONFIRMING') {

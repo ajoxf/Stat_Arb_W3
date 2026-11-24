@@ -545,6 +545,11 @@ class AlgoSignal:
         #: Re-entry: which sides have stretched to the entry z and are
         #: waiting for the spread to come back inside.
         self._armed = {'BUY': False, 'SELL': False}
+        #: The ADD's yardstick: how far the spread has gone past the
+        #: entry while a side is held - the LOWEST offer while long, the
+        #: HIGHEST bid while short (the price an add would trade at).
+        #: None while that side is flat.
+        self._extreme = {'BUY': None, 'SELL': None}
 
     def evaluate(self, now, md, stats, positions=(), gates=None):
         """What the Algo says, and what it decided on this call.
@@ -617,6 +622,7 @@ class AlgoSignal:
         trusted = bool(md) and not gates.get('health') and \
             not md.get('jump_reason')
         self._count(body, fresh, trusted)
+        self._track_extreme(md, positions, trusted)
 
         for pos in positions:
             body['positions'].append(self._judge_exit(now, md, pos, body))
@@ -655,6 +661,22 @@ class AlgoSignal:
         self._judge_entry(body, md, gates)
         return body
 
+    def _track_extreme(self, md, positions, trusted):
+        """The furthest the spread has gone past the entry on each held
+        side, on trusted prices only (a glitch is not a move)."""
+        held = {pos.get('side') for pos in positions}
+        for side, key, further in (('BUY', 'long_spread', min),
+                                   ('SELL', 'short_spread', max)):
+            if side not in held:
+                self._extreme[side] = None
+                continue
+            price = (md or {}).get(key)
+            if price is None or not trusted:
+                continue
+            seen = self._extreme[side]
+            self._extreme[side] = (float(price) if seen is None
+                                   else further(seen, float(price)))
+
     def _add_room(self, positions, body):
         """May the Algo ADD to what it holds, and where - {'side', 'beyond'
         (the spread an add must reach), 'count'} - or {'why': ...}.
@@ -681,8 +703,17 @@ class AlgoSignal:
             return {'why': 'no entry or sigma to measure from'}
         sign = 1.0 if side == 'SELL' else -1.0
         furthest = max(entries) if side == 'SELL' else min(entries)
-        return {'side': side, 'count': adds,
-                'beyond': furthest + sign * p['add_sigma'] * float(sigma)}
+        line = furthest + sign * p['add_sigma'] * float(sigma)
+        # HOW FAR IT WENT, not where it is now: the add follows a spread
+        # that ran add_sigma past the entry and is coming back - and the
+        # come-back is near the entry band by its nature, so judging the
+        # re-entry price itself against the line meant it never added.
+        extreme = self._extreme.get(side)
+        reached = extreme is not None and (extreme >= line if side == 'SELL'
+                                           else extreme <= line)
+        return {'side': side, 'count': adds, 'beyond': line,
+                'extreme': extreme, 'reached': reached,
+                'entry': furthest}
 
     # -- entry ------------------------------------------------------------
 
@@ -764,13 +795,22 @@ class AlgoSignal:
         if not blocked and side is not None and beyond is not None:
             price = md.get('short_spread' if side == 'SELL'
                            else 'long_spread')
-            line = beyond['beyond']
-            if price is None or (price < line if side == 'SELL'
-                                 else price > line):
+            line, entry = beyond['beyond'], beyond['entry']
+            if not beyond.get('reached'):
                 past = '\u2265' if side == 'SELL' else '\u2264'
-                blocked = (f'add: the spread is not yet '
-                           f'{p["add_sigma"]:g} sigma past the entry '
-                           f'(needs {past} {line:.4f})')
+                went = beyond.get('extreme')
+                blocked = (f'add: the spread has not gone '
+                           f'{p["add_sigma"]:g} sigma past the entry yet '
+                           f'(needs {past} {line:.4f}'
+                           + (f', furthest {went:.4f}' if went is not None
+                              else '') + ')')
+            elif price is None or (price < entry if side == 'SELL'
+                                   else price > entry):
+                # An add only ever IMPROVES the average: never a worse
+                # price than the trade it adds to.
+                blocked = (f'add: {price:.4f} is a worse price than the '
+                           f'entry {entry:.4f}' if price is not None
+                           else 'add: no price to add at')
         if side is None:
             self._entry_live = None
             if blocked:

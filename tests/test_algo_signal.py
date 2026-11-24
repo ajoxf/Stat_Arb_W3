@@ -536,3 +536,38 @@ def test_add_settings_are_read_and_checked():
     assert (p['add_on'], p['add_sigma'], p['max_adds']) == (False, 1.5, 2)
     assert algo.DEFAULT_PARAMS['add_on'] is True
     assert algo.check_params({'add_sigma': 0})
+
+
+def test_the_add_follows_how_far_the_spread_WENT_not_where_it_re_enters():
+    """ETH vs BTC, 24 Nov: long at -22.57, the spread went further and
+    armed again, came back to the re-entry near the entry band - and no
+    add, because the re-entry price itself was judged against 2 sigma.
+    It is how far the spread went that counts: past the line, then the
+    re-entry adds - at a price no worse than the entry."""
+    signal = algo.AlgoSignal({'max_entry_z': 0, 'add_sigma': 1.0})
+    held = [position(side='BUY', entry=9.80, tp=9.95, be=9.82)]
+    # Down to 9.65 (offer): 1.5 sigma past the entry, z -3.5 - armed.
+    body = feed(signal, 9.63, 9.65, 3, positions=held)
+    assert body['intents'] == [] and body['add']['reached']
+    assert body['add']['extreme'] == 9.65
+    # Back to z -1.9 at 9.81: the re-entry - but a WORSE price than the
+    # 9.80 entry, so no add.
+    body = feed(signal, 9.79, 9.81, 3, start=10, positions=held)
+    assert body['intents'] == []
+    assert 'worse price' in body['add']['waiting']
+    # Back to z -2.0 at 9.80: no worse than the entry - the add, on the
+    # first price there (the re-entry was already confirmed).
+    body = feed(signal, 9.78, 9.80, 1, start=30, positions=held)
+    [intent] = body['intents']
+    assert intent['side'] == 'BUY' and intent['add'] is True
+    assert intent['spread'] == 9.80
+
+
+def test_the_CONTROL_a_spread_that_never_went_far_does_not_add():
+    signal = algo.AlgoSignal({'max_entry_z': 0, 'add_sigma': 1.0})
+    held = [position(side='BUY', entry=9.80, tp=9.95, be=9.82)]
+    # z -2.6 at 9.74: armed, but only 0.6 sigma past the entry.
+    feed(signal, 9.72, 9.74, 3, positions=held)
+    body = feed(signal, 9.78, 9.80, 3, start=10, positions=held)
+    assert body['intents'] == [] and not body['add']['reached']
+    assert 'furthest 9.7400' in body['add']['waiting']

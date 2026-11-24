@@ -7540,7 +7540,8 @@ def test_the_algo_box_shows_an_add_and_where_the_next_would_go(page):
                 'exit': None}
     publisher.algo_block = _algo_block(
         state='IN_POSITION', signal=None, positions=[pos('P1', 59.0, -1.0)],
-        add={'side': 'SELL', 'beyond': 59.08, 'count': 0})
+        add={'side': 'SELL', 'beyond': 59.08, 'count': 0,
+             'extreme': 59.05, 'reached': False})
     try:
         publisher.publish()
         page.wait_for_function(
@@ -7548,7 +7549,8 @@ def test_the_algo_box_shows_an_add_and_where_the_next_would_go(page):
             " || {textContent: ''}).textContent.includes('on re-entry')",
             timeout=WAIT)
         text = page.text_content('.window.algowin .aw-signal')
-        assert 'add ≥ 59.08' in text
+        assert 'add once past ≥ 59.08 (furthest 59.05), then on re-entry' \
+            in text
         publisher.algo_block = _algo_block(
             state='IN_POSITION', signal=None,
             positions=[pos('P1', 59.0, -1.0), pos('P2', 59.09, 2.5)],
