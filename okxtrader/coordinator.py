@@ -602,6 +602,24 @@ class Coordinator:
             self._feed_mirror()
             return snapshot
 
+    #: The words a MAKER exit closes under (`algo_exit`: the profit
+    #: target and back to the mean rest at their level).
+    def _close_style(self, position_id):
+        """How a closed trade came off: MAKER for the Algo's resting
+        exits, TAKER for everything else (a stop, a time stop, CLOSE ALL)."""
+        position = self.book.position(position_id)
+        reason = (getattr(position, 'close_reason', None) or '').lower()
+        makers = [algo_module.EXIT_WORDS.get(r, r).lower()
+                  for r in self.MAKER_EXITS]
+        return 'MAKER' if any(m in reason for m in makers) else 'TAKER'
+
+    def mirror_control(self, follower, action):
+        """The Mirror tab's buttons: HALT, RESUME, CLOSE_COPIES."""
+        mirror = getattr(self, 'mirror', None)
+        if mirror is None:
+            return {'ok': False, 'reason': 'the mirror is not on'}
+        return mirror.control(follower, action)
+
     def _feed_mirror(self):
         """The Algo's open positions, to the mirror - if there is one.
         Never fatal, never waits: the orders go out on its own thread."""
@@ -617,10 +635,16 @@ class Coordinator:
                 legs = [{'symbol': fill.symbol, 'side': fill.side.value,
                          'volume': fill.volume}
                         for fill in (position.leg_a, position.leg_b) if fill]
+                # HOW IT WENT ON: a resting limit is a MAKER entry, the
+                # followers copy it as one; anything else crossed.
+                style = ('MAKER' if getattr(position.order_type, 'value',
+                                            position.order_type) == 'LIMIT'
+                         else 'TAKER')
                 rows.append({'position_id': position.position_id,
                              'pair_key': position.pair_key,
-                             'opened_at': position.opened_at, 'legs': legs})
-            mirror.observe(rows)
+                             'opened_at': position.opened_at,
+                             'style': style, 'legs': legs})
+            mirror.observe(rows, close_style=self._close_style)
         except Exception as e:
             logging.error('MIRROR: %s', e)
 

@@ -2006,11 +2006,42 @@
     }).join(' · ');
   }
 
+  function mirrorFilter() {
+    /* The Mirror tab's filters: one client (or all), which trades, over
+     * what period. Per browser session. */
+    state.mirrorFilter = state.mirrorFilter ||
+      {client: '', show: 'all', period: 'all'};
+    return state.mirrorFilter;
+  }
+
+  function mirrorMoney(x) {
+    if (x === null || x === undefined) { return DASH; }
+    return '<span class="' + (x > 0 ? 'up' : x < 0 ? 'down' : '') + '">' +
+      (x > 0 ? '+' : '') + money(x) + '</span>';
+  }
+
+  function mirrorReportLink(name, view, label, days) {
+    return '<a class="mr-btn" target="_blank" rel="noopener" href="' +
+      '/mirror/report?follower=' + encodeURIComponent(name) +
+      (view === 'client' ? '&view=client' : '') + '&days=' + (days || 0) +
+      '" title="' + escapeHtml(label + ' for ' + name) + '">' + label +
+      '</a>';
+  }
+
+  function mirrorLimit(used, max, fmtUsed) {
+    /* "105 / 150" - red at 90% of the limit or over; DASH when off. */
+    if (!max) { return '<span class="hint">off</span>'; }
+    var near = used >= 0.9 * max;
+    return '<span class="' + (near ? 'down' : '') + '">' + fmtUsed(used) +
+      ' / ' + fmtUsed(max) + '</span>';
+  }
+
   function mirrorPane(mr) {
     /* THE MIRROR, built for ten or fifteen accounts: what needs a person
-     * first, then one row per follower, then one row per trade with every
-     * account's copy as a chip - opened out on a click. */
+     * first, then one row per follower with its money and its limits,
+     * then the trades - filtered by client, by status, by period. */
     var sum = mr.summary || {};
+    var flt = mirrorFilter();
     var followers = (mr.followers || []).slice();
     var attention = mr.attention || [];
     var high = attention.filter(function (a) { return a.severity === 'high'; });
@@ -2020,17 +2051,24 @@
     function tile(label, value, cls, title) {
       return '<div class="mr-tile ' + (cls || '') + '"' + (title
         ? ' title="' + escapeHtml(title) + '"' : '') + '><b>' + value +
-        '</b><span>' + label + '</span></div>';
+        '</b><span class="mr-lbl">' + label + '</span></div>';
     }
+    var today = followers.reduce(function (a, f) {
+      return a + (f.pnl_today || 0); }, 0);
+    var month = followers.reduce(function (a, f) {
+      return a + (f.pnl_month || 0); }, 0);
+    var halted = followers.filter(function (f) { return f.halted; }).length;
     html += '<div class="mr-tiles">' +
       tile('followers', (sum.following || 0) + ' / ' + (sum.followers || 0),
            '', 'following now / in the config') +
       tile('copies held', sum.holding || 0, sum.holding ? 'ok' : '',
            'copies open in follower accounts now') +
-      tile('Algo trades open', sum.open_trades || 0) +
+      tile('P&amp;L today, all clients', mirrorMoney(today)) +
+      tile('P&amp;L this month', mirrorMoney(month)) +
       tile('failed today', sum.failed_today || 0,
            sum.failed_today ? 'bad' : '',
            'copies that did not open (or close) today') +
+      tile('halted', halted, halted ? 'bad' : '') +
       tile('need attention', high.length, high.length ? 'alarm' : 'ok',
            'an account still holding a copy whose trade has closed') +
       tile('updated', mirrorAgo(mr.at)) + '</div>';
@@ -2048,95 +2086,211 @@
           ? '<div class="hint">…and ' + (high.length + low.length - 12) +
             ' more</div>' : '') + '</div>';
     }
-    // 3. ONE ROW PER FOLLOWER - trouble first.
+    // 3. THE FILTERS.
+    function opt(value, label, on) {
+      return '<option value="' + escapeHtml(value) + '"' +
+        (on ? ' selected' : '') + '>' + escapeHtml(label) + '</option>';
+    }
+    var names = followers.map(function (f) { return f.name; }).sort();
+    if (flt.client && names.indexOf(flt.client) < 0) { flt.client = ''; }
+    html += '<div class="mr-filters"><label>Client <select class="mr-filter"' +
+      ' data-key="client">' + opt('', 'All clients', !flt.client) +
+      names.map(function (n) { return opt(n, n, flt.client === n); })
+        .join('') + '</select></label>' +
+      '<label>Show <select class="mr-filter" data-key="show">' +
+      [['all', 'All trades'], ['open', 'Open'],
+       ['attention', 'Needs attention'], ['failed', 'Failed / skipped'],
+       ['closed', 'Closed']].map(function (o) {
+        return opt(o[0], o[1], flt.show === o[0]);
+      }).join('') + '</select></label>' +
+      '<label>Period <select class="mr-filter" data-key="period">' +
+      [['today', 'Today'], ['7', 'Last 7 days'], ['30', 'Last 30 days'],
+       ['all', 'All']].map(function (o) {
+        return opt(o[0], o[1], flt.period === o[0]);
+      }).join('') + '</select></label>' +
+      (flt.client ? '<span class="mr-reports">Reports for <b>' +
+        escapeHtml(flt.client) + '</b>: ' + mirrorReportLink(flt.client,
+          'client', 'Client report', flt.period === 'all' ? 0 :
+          flt.period === 'today' ? 1 : flt.period) + ' ' +
+        mirrorReportLink(flt.client, 'trader', 'Trader report',
+          flt.period === 'all' ? 0 : flt.period === 'today' ? 1 :
+          flt.period) + '</span>' : '') + '</div>';
+    // 4. ONE ROW PER FOLLOWER - trouble first.
     function rank(f) {
       return (high.some(function (a) { return a.follower === f.name; }) ? 0
-        : f.last_error ? 1 : f.enabled ? 2 : 3);
+        : f.halted ? 1 : f.last_error ? 2 : f.enabled ? 3 : 4);
     }
     followers.sort(function (a, b) {
       return rank(a) - rank(b) || String(a.name).localeCompare(b.name);
     });
+    var shown = flt.client ? followers.filter(function (f) {
+      return f.name === flt.client; }) : followers;
+    function usd0(x) {
+      return '$' + Math.round(x).toLocaleString('en-US');
+    }
     html += '<h4>Followers <small>— each takes a multiple of every ' +
-      'Algo trade, in its own account</small></h4>' +
+      'Algo trade, in its own account. Limits stop NEW copies only; a ' +
+      'copy on always closes.</small></h4>' +
       '<table class="mr-table"><thead><tr><th class="l">Follower</th>' +
-      '<th>Multiple</th><th>Status</th><th>Account</th>' +
-      '<th class="l">Ladders</th><th>Holding</th>' +
-      '<th title="today: copies that went on / did not / were skipped">' +
-      'Today ✓ / ✗ / skip</th><th>Last action</th>' +
-      '<th class="l">Last error</th></tr></thead><tbody>' +
-      followers.map(function (f) {
+      '<th>Multiple</th><th>Status</th><th>Account</th><th>Execution</th>' +
+      '<th>Capital</th><th>Holding</th><th>P&amp;L today</th>' +
+      '<th>P&amp;L month</th><th title="margin its open copies tie up / ' +
+      'its max">Margin</th><th title="today’s closed P&amp;L / its ' +
+      'daily loss limit">Day loss</th><th title="copies today / its max">' +
+      'Trades</th><th class="l">Last error</th><th>Actions</th></tr>' +
+      '</thead><tbody>' + shown.map(function (f) {
         var alarm = high.some(function (a) { return a.follower === f.name; });
-        return '<tr class="' + (alarm ? 'alarm-row' : '') + '">' +
+        var status = f.halted
+          ? '<span class="mr-pill alarm" title="' + escapeHtml(
+              f.halted.why || '') + '">HALTED</span>'
+          : !f.enabled ? '<span class="mr-pill skip">off — closes only' +
+            '</span>'
+          : f.blocked ? '<span class="mr-pill bad" title="' +
+            escapeHtml(f.blocked) + '">limit reached</span>'
+          : '<span class="mr-pill ok">following</span>';
+        var dayLoss = Math.max(0, -(f.pnl_today || 0));
+        return '<tr class="' + (alarm ? 'alarm-row' : '') +
+          (flt.client === f.name ? ' mr-picked' : '') + '">' +
           '<td class="l"><b>' + escapeHtml(f.name) + '</b></td>' +
-          '<td>×' + fmt(f.multiple, 2) + '</td>' +
-          '<td><span class="mr-pill ' + (f.enabled ? 'ok' : 'skip') + '">' +
-          (f.enabled ? 'following' : 'off — closes only') +
-          '</span></td><td>' + (f.demo ? 'demo'
+          '<td>×' + fmt(f.multiple, 2) + '</td><td>' + status +
+          '</td><td>' + (f.demo ? 'demo'
             : '<span class="mr-pill alarm">LIVE</span>') + '</td>' +
-          '<td class="l">' + (f.pairs ? escapeHtml(f.pairs.join(', '))
-            : 'every ladder') + '</td>' +
+          '<td>' + (f.execution === 'TAKER' ? 'always taker'
+            : 'as the trade') + '</td>' +
+          '<td>' + (f.capital ? usd0(f.capital) : DASH) + '</td>' +
           '<td>' + (f.holding ? '<b class="up">' + f.holding + '</b>' : '0') +
-          '</td><td>' + (f.copied_today || 0) + ' / ' +
-          '<span class="' + (f.failed_today ? 'down' : '') + '">' +
-          (f.failed_today || 0) + '</span> / ' + (f.skipped_today || 0) +
-          '</td><td>' + mirrorAgo(f.last_at) + '</td>' +
+          '</td><td>' + mirrorMoney(f.pnl_today) + '</td><td>' +
+          mirrorMoney(f.pnl_month) + (f.return_month_pct === null ||
+            f.return_month_pct === undefined ? '' : ' <small>(' +
+            pctSigned(f.return_month_pct, 2) + ')</small>') + '</td>' +
+          '<td>' + mirrorLimit(f.margin_held || 0, f.max_margin, usd0) +
+          '</td><td>' + mirrorLimit(dayLoss, f.daily_loss_limit,
+            function (x) { return money(x); }) + '</td><td>' +
+          mirrorLimit(f.trades_today || 0, f.max_trades_day,
+            function (x) { return String(x); }) + '</td>' +
           '<td class="l down mr-why">' + escapeHtml(f.last_error || '') +
-          '</td></tr>';
+          '</td><td class="mr-acts">' +
+          (f.halted
+            ? '<button class="mr-btn mr-act" data-act="RESUME" data-name="' +
+              escapeHtml(f.name) + '">Resume</button>'
+            : '<button class="mr-btn mr-act" data-act="HALT" data-name="' +
+              escapeHtml(f.name) + '" title="No new copies; what it holds ' +
+              'still closes with the trade">Halt</button>') +
+          (f.holding ? ' <button class="mr-btn mr-act danger" ' +
+            'data-act="CLOSE_COPIES" data-name="' + escapeHtml(f.name) +
+            '" title="Close every copy it holds NOW, at market, and halt it' +
+            '">Close copies</button>' : '') + ' ' +
+          mirrorReportLink(f.name, 'client', 'Client') + ' ' +
+          mirrorReportLink(f.name, 'trader', 'Trader') + '</td></tr>';
       }).join('') + '</tbody></table>';
-    // 4. ONE ROW PER TRADE, every account as a chip.
-    var trades = mr.trades || [];
+    // 5. THE TRADES, filtered.
+    var since = flt.period === 'all' ? 0 : Date.now() / 1000 -
+      (flt.period === 'today' ? (Date.now() / 1000) % 86400
+        : Number(flt.period) * 86400);
+    var live = ['OPEN', 'PENDING', 'CLOSING', 'CLOSE_FAILED'];
+    var trades = (mr.trades || []).filter(function (t) {
+      if ((t.opened_at || 0) < since) { return false; }
+      var copies = Object.keys(t.followers || {}).filter(function (n) {
+        return !flt.client || n === flt.client;
+      }).map(function (n) { return t.followers[n]; });
+      if (flt.client && !copies.length) { return false; }
+      if (flt.show === 'open') {
+        return copies.some(function (f) { return live.indexOf(f.status) >= 0; });
+      }
+      if (flt.show === 'attention') {
+        return copies.some(function (f) {
+          return f.status === 'CLOSE_FAILED' || f.status === 'FAILED'; });
+      }
+      if (flt.show === 'failed') {
+        return copies.some(function (f) {
+          return ['FAILED', 'CLOSE_FAILED', 'SKIPPED']
+            .indexOf(f.status) >= 0; });
+      }
+      if (flt.show === 'closed') {
+        return t.gone && copies.every(function (f) {
+          return live.indexOf(f.status) < 0; });
+      }
+      return true;
+    });
     state.mirrorOpen = state.mirrorOpen || {};
-    html += '<h4>Copied trades <small>— newest first. Click a trade ' +
-      'for each account’s legs and reason. A trade first seen more ' +
-      'than ' + fmt(mr.open_window_sec, 0) + 's after it opened is not ' +
-      'copied.</small></h4><table class="mr-table mr-trades"><thead><tr>' +
-      '<th></th><th>Opened</th><th class="l">Ladder</th><th>Trade</th>' +
-      '<th class="l">Legs</th><th class="l">Copies</th></tr></thead><tbody>';
+    html += '<h4>Copied trades <small>— ' + trades.length + ' shown' +
+      (flt.client ? ' for ' + escapeHtml(flt.client) : '') + ', newest ' +
+      'first. Click a trade for each account’s legs and reason. A ' +
+      'trade first seen more than ' + fmt(mr.open_window_sec, 0) + 's ' +
+      'after it opened is not copied.</small></h4>' +
+      '<table class="mr-table mr-trades"><thead><tr><th></th>' +
+      '<th>Opened</th><th class="l">Ladder</th><th>Trade</th>' +
+      '<th>In / out</th><th class="l">Legs</th><th class="l">' +
+      (flt.client ? escapeHtml(flt.client) + '’s copy' : 'Copies') +
+      '</th>' + (flt.client ? '<th>Its P&amp;L</th>' : '') +
+      '</tr></thead><tbody>';
     if (!trades.length) {
-      html += '<tr><td colspan="6" class="hint">No Algo trade since the ' +
-        'mirror was switched on.</td></tr>';
+      html += '<tr><td colspan="8" class="hint">No trade matches these ' +
+        'filters.</td></tr>';
     }
     trades.forEach(function (t) {
       var open = !!state.mirrorOpen[t.position_id];
       var counts = t.counts || {};
+      var order = ['CLOSE_FAILED', 'FAILED', 'PENDING', 'CLOSING', 'OPEN',
+                   'CLOSED', 'SKIPPED'];
       var tally = Object.keys(counts).sort(function (a, b) {
-        var order = ['CLOSE_FAILED', 'FAILED', 'PENDING', 'CLOSING', 'OPEN',
-                     'CLOSED', 'SKIPPED'];
         return order.indexOf(a) - order.indexOf(b);
       }).map(function (k) {
         var st = MIRROR_STATUS[k] || [k, ''];
         return '<span class="mr-pill ' + st[1] + '">' + counts[k] + ' ' +
           st[0] + '</span>';
       }).join(' ');
-      var names = Object.keys(t.followers || {}).sort();
+      var names = Object.keys(t.followers || {}).sort().filter(function (n) {
+        return !flt.client || n === flt.client;
+      });
+      var mine = flt.client ? t.followers[flt.client] : null;
+      var styleIn = t.style === 'MAKER' ? 'maker' : 'taker';
+      var styleOut = !t.gone ? '…' :
+        (t.close_style === 'MAKER' ? 'maker' : 'taker');
       html += '<tr class="mr-trade" data-pid="' + escapeHtml(t.position_id) +
         '"><td class="mr-caret">' + (open ? '▾' : '▸') + '</td>' +
         '<td>' + (t.opened_at ? anClock(t.opened_at) : DASH) + '</td>' +
         '<td class="l">' + escapeHtml(t.pair_key || '') + '</td><td>' +
         (t.gone ? 'closed' : '<b class="up">open</b>') + '</td>' +
-        '<td class="l">' + mirrorLegs(t.legs) + '</td>' +
-        '<td class="l">' + (tally || '<span class="hint">no follower ' +
-          'on this ladder</span>') + '<div class="mr-chips">' +
-        names.map(function (n) {
-          var f = t.followers[n], st = MIRROR_STATUS[f.status] ||
-            [f.status, ''];
-          return '<span class="mr-chip ' + st[1] + '" title="' +
-            escapeHtml(n + ': ' + st[0] + (f.why ? ' — ' + f.why : '')) +
-            '">' + escapeHtml(n) + '</span>';
-        }).join('') + '</div></td></tr>';
+        '<td>' + styleIn + ' / ' + styleOut + '</td>' +
+        '<td class="l">' + mirrorLegs(t.legs) + '</td><td class="l">' +
+        (mine ? (function () {
+            var st = MIRROR_STATUS[mine.status] || [mine.status, ''];
+            return '<span class="mr-pill ' + st[1] + '">' + st[0] +
+              '</span> ' + (mirrorLegs(mine.legs) || '') +
+              (mine.why ? '<div class="mr-why hint">' +
+                escapeHtml(mine.why) + '</div>' : '');
+          }()) :
+          (tally || '<span class="hint">no follower on this ladder</span>') +
+          '<div class="mr-chips">' + names.map(function (n) {
+            var f = t.followers[n], st = MIRROR_STATUS[f.status] ||
+              [f.status, ''];
+            return '<span class="mr-chip ' + st[1] + '" title="' +
+              escapeHtml(n + ': ' + st[0] + (f.pnl !== undefined &&
+                f.pnl !== null ? ' · P&L ' + money(f.pnl) : '') +
+                (f.why ? ' — ' + f.why : '')) + '">' + escapeHtml(n) +
+              '</span>';
+          }).join('') + '</div>') + '</td>' +
+        (flt.client ? '<td>' + mirrorMoney(mine && mine.pnl) + '</td>' : '') +
+        '</tr>';
       if (open) {
-        html += '<tr class="mr-detail"><td></td><td colspan="5">' +
+        html += '<tr class="mr-detail"><td></td><td colspan="7">' +
           '<table class="mr-table mr-inner"><thead><tr>' +
-          '<th class="l">Account</th><th>Status</th><th class="l">Its legs' +
-          '</th><th class="l">Reason</th></tr></thead><tbody>' +
+          '<th class="l">Account</th><th>Status</th><th>In</th><th>Out</th>' +
+          '<th class="l">Its legs</th><th>P&amp;L</th><th>Fees</th>' +
+          '<th class="l">Reason</th></tr></thead><tbody>' +
           names.map(function (n) {
             var f = t.followers[n], st = MIRROR_STATUS[f.status] ||
               [f.status, ''];
             return '<tr><td class="l"><b>' + escapeHtml(n) + '</b></td>' +
               '<td><span class="mr-pill ' + st[1] + '">' + st[0] +
-              '</span></td><td class="l">' + (mirrorLegs(f.legs) || DASH) +
-              '</td><td class="l mr-why">' + escapeHtml(f.why || '') +
-              '</td></tr>';
+              '</span></td><td>' + (f.style ? f.style.toLowerCase() : DASH) +
+              '</td><td>' + (f.style_out ? f.style_out.toLowerCase() : DASH) +
+              '</td><td class="l">' + (mirrorLegs(f.legs) || DASH) +
+              '</td><td>' + mirrorMoney(f.pnl) + '</td><td>' +
+              (f.fees === undefined || f.fees === null ? DASH
+                : money(f.fees)) + '</td><td class="l mr-why">' +
+              escapeHtml(f.why || '') + '</td></tr>';
           }).join('') + '</tbody></table></td></tr>';
       }
     });
@@ -6475,6 +6629,10 @@
           state.analysisPair = e.target.value;
           loadAnalysis(true);
         }
+        if (e.target.classList.contains('mr-filter')) {
+          mirrorFilter()[e.target.dataset.key] = e.target.value;
+          render();
+        }
         if (e.target.classList.contains('an-pnl')) {
           state.analysisPnl = e.target.value;
           try {
@@ -9084,6 +9242,30 @@
     if (e.target.classList && e.target.classList.contains('okx-orders-ours')) {
       state.okxOrdersOurs = e.target.checked;
       render();
+      return;
+    }
+    var act = e.target.closest('.mr-act');
+    if (act) {
+      var who = act.dataset.name, what = act.dataset.act;
+      var go = function () {
+        send('mirror_control', {follower: who, action: what},
+             function (result) {
+               var data = (result || {}).data || {};
+               toast(who + ': ' + (data.ok === false ? (data.reason ||
+                 'refused') : what === 'HALT' ? 'halted — no new copies'
+                 : what === 'RESUME' ? 'following again'
+                 : 'closing ' + (data.closing || 0) + ' copy(ies), halted'),
+                 data.ok === false ? '' : 'ok');
+             });
+      };
+      if (what === 'CLOSE_COPIES') {
+        ask('Close every copy ' + who + ' holds?', 'Each copy is closed ' +
+            'NOW, at market, in ' + who + '’s account, and ' + who +
+            ' is halted (no new copies) until resumed. Your own trades ' +
+            'and the other clients are not touched.', 'Close copies', go);
+      } else {
+        go();
+      }
       return;
     }
     var trade = e.target.closest('.mr-trade');

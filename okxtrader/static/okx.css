@@ -248,7 +248,7 @@
 .monitor .mr-tile { flex: 1 1 110px; background: #fff; border: 1px solid #c9cfd8;
   border-top: 3px solid #16324f; padding: 4px 8px; display: flex; flex-direction: column; }
 .monitor .mr-tile b { font-size: 18px; line-height: 1.2; }
-.monitor .mr-tile span { font-size: 10px; color: #6b7280; text-transform: uppercase;
+.monitor .mr-tile .mr-lbl { font-size: 10px; color: #6b7280; text-transform: uppercase;
   letter-spacing: .04em; }
 .monitor .mr-tile.ok { border-top-color: #198754; }
 .monitor .mr-tile.bad { border-top-color: #d97706; }
@@ -284,3 +284,16 @@
 .monitor tr.mr-detail > td { background: #f8fafc; }
 .monitor table.mr-inner { margin: 2px 0 4px; }
 .monitor table.mr-inner th { background: #e3e8ef; color: #1f2933; }
+.monitor .mr-filters { display: flex; flex-wrap: wrap; gap: 12px; align-items: center;
+  margin: 2px 0 6px; padding: 5px 8px; background: #fff; border: 1px solid #c9cfd8; font-size: 12px; }
+.monitor .mr-filters select { font-family: inherit; font-size: 12px; margin-left: 4px; }
+.monitor .mr-reports { margin-left: auto; }
+.monitor .mr-btn { display: inline-block; font-family: inherit; font-size: 11px;
+  line-height: 16px; padding: 1px 7px; border: 1px solid #8a94a3;
+  background: #fff; color: #16324f; border-radius: 3px; cursor: pointer; text-decoration: none;
+  white-space: nowrap; }
+.monitor .mr-btn:hover { background: #16324f; color: #fff; }
+.monitor .mr-btn.danger { border-color: #b42318; color: #b42318; }
+.monitor .mr-btn.danger:hover { background: #b42318; color: #fff; }
+.monitor td.mr-acts { white-space: nowrap; text-align: left; }
+.monitor tr.mr-picked td { background: #eef5ff; }

@@ -63,7 +63,8 @@
     "SHUTDOWN_CLOSE_POSITIONS": "ask"
   },
   "mirror": {
-    "_about": "OFF until enabled is true. Each follower is an OKX Managed Trading Sub-account bound to this desk, traded through its own API key in .env as OKX_API_KEY_MIRROR_<NAME>, OKX_SECRET_KEY_MIRROR_<NAME>, OKX_PASSPHRASE_MIRROR_<NAME> (name in capitals, spaces as _). multiple: the share of each Algo trade it takes (0.5 = half the lots of each leg). pairs: leave out for every ladder. A trade first seen more than open_window_sec after it opened is not copied.",
+    "_about": "OFF until enabled is true. Each follower is an OKX Managed Trading Sub-account bound to this desk, traded through its own API key in .env as OKX_API_KEY_MIRROR_<NAME>, OKX_SECRET_KEY_MIRROR_<NAME>, OKX_PASSPHRASE_MIRROR_<NAME> (name in capitals, spaces as _). A trade first seen more than open_window_sec after it opened is not copied.",
+    "_follower_fields": "multiple: share of each Algo trade (0.5 = half the lots of each leg). capital: the client's capital in USDT, for returns. execution: MIRROR (maker when the trade was maker, taker when taker) or TAKER (always cross). maker_timeout_sec: how long a maker leg rests (entry: not copied if unfilled; exit: the rest crosses). Limits, 0 = off, each stops NEW copies only: max_margin (USDT its open copies may tie up), daily_loss_limit (USDT closed loss today), max_trades_day. pairs: leave out for every ladder.",
     "enabled": false,
     "open_window_sec": 60,
     "followers": [
@@ -71,7 +72,13 @@
         "name": "client_a",
         "multiple": 0.5,
         "demo": true,
-        "enabled": true
+        "enabled": true,
+        "capital": 10000,
+        "execution": "MIRROR",
+        "maker_timeout_sec": 30,
+        "max_margin": 1000,
+        "daily_loss_limit": 150,
+        "max_trades_day": 10
       }
     ]
   }

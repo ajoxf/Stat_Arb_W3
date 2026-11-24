@@ -317,3 +317,311 @@ def test_old_finished_records_are_pruned_live_ones_never(tmp_path):
     mirror.observe([trade('LIVE', opened_at=999.0)])
     assert 'LIVE' in mirror.records
     assert len(mirror.records) <= 6
+
+
+# -- limits, maker / taker, P&L and reports ----------------------------------
+
+class Account:
+    """A scripted follower account: resting orders fill after `fill_after`
+    looks (None: never), market orders fill at the touch."""
+
+    def __init__(self, fill_after=1, bid=100.0, ask=100.1, margin=50.0,
+                 fees=(2.0, 5.0)):
+        self.fill_after, self.bid, self.ask = fill_after, bid, ask
+        self.margin, self.fees = margin, fees
+        self.next, self.orders, self.market, self.closes = 0, {}, [], []
+        self.amends, self.cancels = [], []
+
+    def symbol_info(self, symbol):
+        return types.SimpleNamespace(volume_step=0.01, volume_min=0.01,
+                                     contract_size=0.1)
+
+    def symbol_tick(self, symbol):
+        return types.SimpleNamespace(bid=self.bid, ask=self.ask)
+
+    def margin_for(self, symbol, side, volume, price=None):
+        return self.margin * volume
+
+    def fees_bps(self, symbol):
+        return self.fees
+
+    def place_pending_limit(self, symbol, side, volume, price, comment='',
+                            position_ticket=None, post_only=True):
+        self.next += 1
+        self.orders[self.next] = {'symbol': symbol, 'side': side.value,
+                                  'volume': volume, 'price': price, 'looks': 0,
+                                  'close': position_ticket}
+        return {'ok': True, 'ticket': self.next, 'price': price}
+
+    def order_fill_state(self, ticket):
+        o = self.orders[ticket]
+        o['looks'] += 1
+        done = self.fill_after is not None and o['looks'] >= self.fill_after
+        return {'ok': True, 'filled_volume': o['volume'] if done else 0.0,
+                'price': o['price'] if done else None,
+                'position_tickets': [ticket] if done else [],
+                'still_open': not done}
+
+    def modify_pending(self, ticket, price):
+        self.amends.append((ticket, price))
+        self.orders[ticket]['price'] = price
+        return {'ok': True}
+
+    def cancel_pending(self, ticket):
+        self.cancels.append(ticket)
+        return {'ok': True, 'filled_volume': 0.0, 'price': None,
+                'position_tickets': [], 'still_open': False}
+
+    def send_market_order(self, symbol, side, volume, **kw):
+        self.next += 1
+        price = self.ask if side is OrderSide.BUY else self.bid
+        self.market.append((symbol, side.value, volume, price))
+        return OrderResult(True, executed_price=price, ticket=self.next,
+                           volume=volume)
+
+    def close_position_ticket(self, symbol, ticket, volume, side, **kw):
+        price = self.bid if side is OrderSide.BUY else self.ask
+        self.closes.append((symbol, ticket, volume, price))
+        return OrderResult(True, executed_price=price, ticket=ticket,
+                           volume=volume)
+
+
+def quiet_mirror(tmp_path, *followers, now=86400.0 * 100 + 50):
+    return m.Mirror(list(followers), str(tmp_path / 'mirror_state.json'),
+                    clock=lambda: now, background=False,
+                    sleep=lambda s: None)
+
+
+def maker_trade(pid='POS-1', opened_at=86400.0 * 100 + 40):
+    return dict(trade(pid, opened_at=opened_at), style='MAKER')
+
+
+def test_a_maker_trade_is_copied_as_maker_first_leg_rests_second_hedges(
+        tmp_path):
+    acct = Account(fill_after=2)
+    mirror = quiet_mirror(tmp_path, m.Follower('c1', 1.0, broker=acct))
+    mirror.observe([maker_trade()])
+    fr = mirror.records['POS-1']['followers']['c1']
+    assert fr['status'] == m.OPEN and fr['style'] == 'MAKER'
+    # ETH (the first leg) rested - a SELL at this account's offer...
+    [order] = acct.orders.values()
+    assert (order['symbol'], order['side'], order['price']) == \
+        ('ETH-USDT-SWAP', 'SELL', 100.1)
+    # ...and only BTC crossed.
+    assert [mk[0] for mk in acct.market] == ['BTC-USDT-SWAP']
+    kinds = {p['symbol']: p['kind'] for p in fr['legs']}
+    assert kinds == {'ETH-USDT-SWAP': 'maker', 'BTC-USDT-SWAP': 'taker'}
+
+
+def test_a_maker_leg_follows_the_touch_and_is_never_chased_on_entry(
+        tmp_path):
+    acct = Account(fill_after=None)              # it never fills
+    follower = m.Follower('c1', 1.0, broker=acct, maker_timeout_sec=3)
+    mirror = quiet_mirror(tmp_path, follower)
+    real = acct.symbol_tick
+    looks = {'n': 0}
+
+    def moving(symbol):
+        looks['n'] += 1
+        acct.ask = 100.1 + 0.1 * looks['n']      # the offer walks up
+        return real(symbol)
+    acct.symbol_tick = moving
+    mirror.observe([maker_trade()])
+    fr = mirror.records['POS-1']['followers']['c1']
+    assert fr['status'] == m.SKIPPED and 'never chases' in fr['why']
+    assert acct.amends                            # re-priced to the touch
+    assert acct.cancels and acct.market == []     # cancelled, nothing crossed
+
+
+def test_execution_TAKER_crosses_even_when_the_trade_was_maker(tmp_path):
+    acct = Account()
+    mirror = quiet_mirror(tmp_path, m.Follower('c1', 1.0, broker=acct,
+                                               execution='TAKER'))
+    mirror.observe([maker_trade()])
+    assert acct.orders == {} and len(acct.market) == 2
+
+
+def test_a_maker_exit_rests_then_whatever_is_left_crosses(tmp_path):
+    acct = Account(fill_after=1)
+    follower = m.Follower('c1', 1.0, broker=acct, maker_timeout_sec=2)
+    mirror = quiet_mirror(tmp_path, follower)
+    mirror.observe([trade(opened_at=86400.0 * 100 + 40)])    # taker in
+    acct.fill_after = None                                   # exit: no fill
+    mirror.observe([], close_style=lambda pid: 'MAKER')
+    fr = mirror.records['POS-1']['followers']['c1']
+    assert fr['status'] == m.CLOSED and fr['style_out'] == 'MAKER'
+    closes = [o for o in acct.orders.values() if o['close']]
+    assert closes and closes[0]['symbol'] == 'ETH-USDT-SWAP'
+    # Nothing filled resting: it CROSSED - a copy always gets out.
+    assert {c[0] for c in acct.closes} == {'ETH-USDT-SWAP', 'BTC-USDT-SWAP'}
+
+
+def test_the_pnl_of_a_copy_is_its_own_fills_less_its_fees(tmp_path):
+    acct = Account()
+    mirror = quiet_mirror(tmp_path, m.Follower('c1', 1.0, broker=acct))
+    mirror.observe([trade(opened_at=86400.0 * 100 + 40)])
+    # ETH sold at 100.0 (bid); BTC bought at 100.1 (ask). Out: ETH bought
+    # back at 99.0, BTC sold at 101.0.
+    acct.bid, acct.ask = 101.0, 99.0
+    mirror.observe([])
+    fr = mirror.records['POS-1']['followers']['c1']
+    # ETH: -1 x (99 - 100) x 2 x 0.1 = +0.2; BTC: +1 x (101 - 100.1) x 0.1
+    # x 0.1 = +0.009. Fees 5 bp taker on every fill.
+    assert fr['gross'] == pytest.approx(0.209)
+    fees = 5e-4 * 0.1 * (100.0 * 2 + 100.1 * 0.1 + 99.0 * 2 + 101.0 * 0.1)
+    assert fr['fees'] == pytest.approx(fees, abs=1e-6)
+    assert fr['pnl'] == pytest.approx(0.209 - fees, abs=1e-6)
+    [kept] = mirror.closed['c1']
+    assert kept['pnl'] == pytest.approx(fr['pnl'])
+
+
+def test_max_margin_holds_a_copy_that_would_go_over(tmp_path):
+    acct = Account(margin=50.0)          # 2.0 + 0.1 lots = 105 a copy
+    mirror = quiet_mirror(tmp_path, m.Follower('c1', 1.0, broker=acct,
+                                               max_margin=150.0))
+    mirror.observe([trade('P1', opened_at=86400.0 * 100 + 40)])
+    mirror.observe([trade('P1', opened_at=86400.0 * 100 + 40),
+                    trade('P2', opened_at=86400.0 * 100 + 45)])
+    assert mirror.records['P1']['followers']['c1']['status'] == m.OPEN
+    p2 = mirror.records['P2']['followers']['c1']
+    assert p2['status'] == m.SKIPPED and 'margin' in p2['why']
+    assert mirror.margin_held('c1') == pytest.approx(105.0)
+
+
+def test_the_daily_loss_limit_stops_new_copies_until_tomorrow(tmp_path):
+    clock = {'now': 86400.0 * 100 + 50}
+    acct = Account()
+    mirror = m.Mirror([m.Follower('c1', 1.0, broker=acct,
+                                  daily_loss_limit=0.1)],
+                      str(tmp_path / 'mirror_state.json'),
+                      clock=lambda: clock['now'], background=False,
+                      sleep=lambda s: None)
+    mirror.observe([trade('P1', opened_at=clock['now'] - 5)])
+    acct.bid, acct.ask = 99.0, 101.0                  # a losing exit
+    mirror.observe([])
+    assert mirror.closed['c1'][0]['pnl'] < -0.1
+    mirror.observe([trade('P2', opened_at=clock['now'] - 1)])
+    p2 = mirror.records['P2']['followers']['c1']
+    assert p2['status'] == m.SKIPPED and 'daily loss limit' in p2['why']
+    # The next day: copies again.
+    clock['now'] += 86400.0
+    mirror.observe([trade('P3', opened_at=clock['now'] - 1)])
+    assert mirror.records['P3']['followers']['c1']['status'] == m.OPEN
+
+
+def test_max_trades_a_day(tmp_path):
+    acct = Account()
+    mirror = quiet_mirror(tmp_path, m.Follower('c1', 1.0, broker=acct,
+                                               max_trades_day=1))
+    mirror.observe([trade('P1', opened_at=86400.0 * 100 + 40)])
+    mirror.observe([])
+    mirror.observe([trade('P2', opened_at=86400.0 * 100 + 45)])
+    assert 'limit is 1' in mirror.records['P2']['followers']['c1']['why']
+
+
+def test_halt_resume_and_close_copies_from_the_screen(tmp_path):
+    acct = Account()
+    mirror = quiet_mirror(tmp_path, m.Follower('c1', 1.0, broker=acct),
+                          m.Follower('c2', 1.0, broker=Account()))
+    assert mirror.control('c1', 'HALT')['ok']
+    mirror.observe([trade('P1', opened_at=86400.0 * 100 + 40)])
+    assert 'halted' in mirror.records['P1']['followers']['c1']['why']
+    assert mirror.records['P1']['followers']['c2']['status'] == m.OPEN
+    mirror.control('c1', 'RESUME')
+    mirror.observe([trade('P1', opened_at=86400.0 * 100 + 40),
+                    trade('P2', opened_at=86400.0 * 100 + 45)])
+    assert mirror.records['P2']['followers']['c1']['status'] == m.OPEN
+    # Close copies: c1 out now (and halted); c2 keeps its copies.
+    answer = mirror.control('c1', 'CLOSE_COPIES')
+    assert answer['closing'] == 1
+    assert mirror.records['P2']['followers']['c1']['status'] == m.CLOSED
+    assert mirror.records['P2']['followers']['c2']['status'] == m.OPEN
+    assert mirror.halted['c1']
+    assert mirror.closed['c1'][0]['forced'] is True
+    # The trade closes later: nothing left to do for c1.
+    mirror.observe([])
+    assert mirror.records['P2']['followers']['c2']['status'] == m.CLOSED
+    assert mirror.control('nobody', 'HALT')['ok'] is False
+
+
+def test_the_snapshot_carries_each_followers_pnl_limits_and_halts(tmp_path):
+    acct = Account()
+    mirror = quiet_mirror(tmp_path, m.Follower('c1', 1.0, broker=acct,
+                                               capital=1000.0,
+                                               max_margin=500.0))
+    mirror.observe([trade('P1', opened_at=86400.0 * 100 + 40)])
+    acct.bid, acct.ask = 101.0, 99.0
+    mirror.observe([])
+    mirror.control('c1', 'HALT')
+    [f] = mirror.snapshot()['followers']
+    assert f['pnl_today'] == pytest.approx(mirror.closed['c1'][0]['pnl'],
+                                           abs=0.01)
+    assert f['return_month_pct'] == pytest.approx(
+        100 * f['pnl_month'] / 1000.0, abs=0.01)
+    assert f['halted'] and 'halted' in f['blocked']
+    assert f['max_margin'] == 500.0 and f['closed_count'] == 1
+
+
+def test_the_report_rows_are_closed_copies_with_their_pnl_only(tmp_path):
+    acct = Account()
+    mirror = quiet_mirror(tmp_path, m.Follower('c1', 1.0, broker=acct))
+    mirror.observe([trade('P1', opened_at=86400.0 * 100 + 40)])
+    mirror.observe([])
+    closed = m.load_closed(str(tmp_path / 'mirror_state.json'))
+    [row] = m.report_positions(closed, 'c1')
+    assert row['realized_pnl'] == pytest.approx(closed['c1'][0]['pnl'])
+    assert row['quantity'] is None and row['side'] is None
+    assert m.report_positions(closed, 'nobody') == []
+
+
+def test_each_follower_has_a_trader_and_a_client_report(tmp_path):
+    """/mirror/report: the follower's own copies - the Trader's with the
+    trades, the Client's with returns on its capital only."""
+    from okxtrader.webapp import create_app
+    acct = Account()
+    status = tmp_path / 'status.json'
+    status.write_text('{}')
+    mirror = m.Mirror([m.Follower('client a', 1.0, broker=acct)],
+                      str(tmp_path / 'mirror_state.json'),
+                      clock=lambda: 1_790_000_000.0, background=False,
+                      sleep=lambda s: None)
+    mirror.observe([trade('P1', opened_at=1_790_000_000.0 - 5)])
+    acct.bid, acct.ask = 101.0, 99.0
+    mirror.observe([])
+    config = tmp_path / 'config.json'
+    config.write_text(json.dumps({'accounts': {}, 'pairs': {}, 'mirror': {
+        'enabled': True, 'followers': [{'name': 'client a', 'multiple': 1,
+                                        'capital': 1000}]}}))
+    app = create_app(str(status), str(tmp_path / 'c.jsonl'),
+                     str(tmp_path / 'r.json'), str(config),
+                     str(tmp_path / 'db.sqlite'))
+    app.config.update(TESTING=True)
+    client = app.test_client()
+    trader = client.get('/mirror/report?follower=client%20a&days=0')
+    assert trader.status_code == 200
+    page = trader.get_data(as_text=True)
+    assert 'client a' in page and 'Trade journal' in page
+    view = client.get('/mirror/report?follower=client%20a&view=client&days=0')
+    page = view.get_data(as_text=True)
+    assert view.status_code == 200 and 'Return on capital' in page
+    assert 'Trade journal' not in page and 'ETH-USDT-SWAP' not in page
+    assert client.get('/mirror/report?follower=nobody').status_code == 404
+
+
+def test_the_mirror_buttons_reach_the_engine_as_a_command(tmp_path):
+    from okxtrader import commands
+
+    class Desk:
+        def __init__(self):
+            self.asked = []
+
+        def mirror_control(self, follower, action):
+            self.asked.append((follower, action))
+            return {'ok': True, 'follower': follower, 'action': action}
+    desk = Desk()
+    processor = commands.CommandRunner(desk, str(tmp_path / 'c.jsonl'),
+                                       str(tmp_path / 'r.json'))
+    result = processor.execute({'id': '1', 'kind': 'mirror_control',
+                                'payload': {'follower': 'c1',
+                                            'action': 'HALT'}})
+    assert result['ok'] and desk.asked == [('c1', 'HALT')]

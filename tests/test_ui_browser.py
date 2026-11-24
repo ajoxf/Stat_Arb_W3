@@ -7650,5 +7650,33 @@ def test_the_mirror_tab_shows_only_when_the_mirror_is_on(page):
     assert 'STILL HOLDS a copy of a closed trade' in opened
     assert 'mr-tile alarm' in opened and 'alarm-row' in opened
     assert 'SELL 1.00 ETH' in opened and 'CLOSE FAILED' in opened
+    # FILTERED to one client: only its row and its copies, its own P&L,
+    # and its reports a click away.
+    one = page.evaluate("""() => {
+        window.MT5Trader.state.mirrorFilter = {client: 'c2', show: 'all',
+                                               period: 'all'};
+        const html = window.MT5Trader.mirrorPane({on: true,
+          open_window_sec: 60, summary: {followers: 2},
+          followers: [{name: 'c1', multiple: 1, enabled: true, demo: true,
+                       capital: 1000, pnl_today: 1, pnl_month: 5},
+                      {name: 'c2', multiple: 2, enabled: true, demo: true,
+                       capital: 2000, pnl_today: 2, pnl_month: 10,
+                       return_month_pct: 0.5, max_margin: 100,
+                       margin_held: 95, halted: {why: 'halted by the trader'}}],
+          trades: [{position_id: 'P1', pair_key: 'ethbtc', gone: true,
+                    counts: {CLOSED: 2}, style: 'MAKER', close_style: 'MAKER',
+                    followers: {c1: {status: 'CLOSED', pnl: 1.5},
+                                c2: {status: 'CLOSED', pnl: 3.25}}}]});
+        window.MT5Trader.state.mirrorFilter = null;
+        return html;
+    }""")
+    assert '<b>c2</b>' in one and '<b>c1</b>' not in one
+    assert 'HALTED' in one and 'Resume' in one
+    assert '/mirror/report?follower=c2&amp;view=client' in one or \
+        '/mirror/report?follower=c2&view=client' in one
+    assert '$3.25' in one and '$1.50' not in one
+    assert 'maker / maker' in one
+    # 95 of a 100 margin limit: near it, so red.
+    assert 'class="down">$95 / $100' in one
     page.evaluate("""() => { const s = window.MT5Trader.state;
         s.open = []; window.MT5Trader.render(); }""")

@@ -501,6 +501,15 @@ def test_the_mirror_follows_a_LIVE_trade_in_and_out(ready, tmp_path):
     assert len(follower.closed) == 2
     record = coordinator.mirror.records[position.position_id]
     assert record['followers']['c1']['status'] == m.CLOSED
+    # The Algo came off at its PROFIT TARGET - a maker exit - and the
+    # mirror was told so. (This fake account cannot rest an order, so the
+    # copy crossed: a maker exit that cannot be worked always gets out.)
+    assert record['close_style'] == 'MAKER'
+    assert record['followers']['c1']['pnl'] is not None
+    # The Halt button, through the desk.
+    assert coordinator.mirror_control('c1', 'HALT')['ok']
+    assert coordinator.snapshot()['mirror']['followers'][0]['halted']
+    assert coordinator.mirror_control('nobody', 'HALT')['ok'] is False
 
 
 def test_without_a_mirror_section_the_desk_is_as_it_was(ready):

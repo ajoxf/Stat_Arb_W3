@@ -289,6 +289,11 @@ class CommandRunner:
                                                payload.get('level'),
                                                payload.get('quantity'))
 
+    def _do_mirror_control(self, payload):
+        """A follower's Halt / Resume / Close copies, from the Mirror tab."""
+        return self.coordinator.mirror_control(payload.get('follower'),
+                                               payload.get('action'))
+
     def _do_kill(self, payload):
         """The global kill: cancel everything, and on confirm flatten
         everything, across every ladder."""

@@ -636,6 +636,58 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
         response.headers['Cache-Control'] = 'no-store'
         return response
 
+    @app.get('/mirror/report')
+    def mirror_report():
+        """ONE FOLLOWER's report: the Trader's (its copies, closed, with
+        their net P&L) or the Client's (returns on its capital, by day or
+        month - nothing about what was traded). From the mirror's own
+        record; the desk's positions are not read."""
+        from . import mirror as mirror_module
+        name = (request.args.get('follower') or '').strip()
+        raw = cfg.load_raw(config_path)
+        section = raw.get('mirror') or {}
+        row = next((f for f in section.get('followers') or ()
+                    if str(f.get('name')) == name), None)
+        if row is None:
+            return f'no follower {name!r} in config.json', 404
+        try:
+            days = float(request.args.get('days', 30))
+        except ValueError:
+            days = 30.0
+        now = time.time()
+        since = None if days <= 0 else now - days * 86400.0
+        state = os.path.join(os.path.dirname(os.path.abspath(status_path)),
+                             'mirror_state.json')
+        rows = mirror_module.report_positions(
+            mirror_module.load_closed(state), name, since)
+        try:
+            capital = max(0.0, float(row.get('capital') or 0.0))
+        except (TypeError, ValueError):
+            capital = 0.0
+        body = analysis.report(rows, now=now, capital=capital)
+        names = {key: (pair or {}).get('name') or key
+                 for key, pair in (raw.get('pairs') or {}).items()}
+        folder = os.path.dirname(os.path.abspath(config_path))
+        pnl = request.args.get('pnl') or 'show'
+
+        def link(mode):
+            query = dict(request.args.items(), pnl=mode)
+            return '/mirror/report?' + urlencode(query)
+        title = f'Nexus \u00b7 {name}'
+        if request.args.get('view') == 'client':
+            page = trade_report.render_client(
+                body, days, now, logo=trade_report.logo_html(folder),
+                desk_name=title, pnl=pnl, link=link)
+        else:
+            page = trade_report.render(
+                body, names, days, None, now,
+                logo=trade_report.logo_html(folder), desk_name=title,
+                pnl=pnl, link=link)
+        response = app.make_response(page)
+        response.headers['Content-Type'] = 'text/html; charset=utf-8'
+        response.headers['Cache-Control'] = 'no-store'
+        return response
+
     @app.get('/api/analysis')
     def api_analysis():
         """The Analysis tab, built from what is recorded: the positions
