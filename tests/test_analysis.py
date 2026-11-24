@@ -574,3 +574,18 @@ def test_the_stop_study_weighs_winners_cut_against_losers_stopped():
         == (0, 1, 0.0)
     # Nothing measured: nothing claimed.
     assert analysis.stop_study([])['trades'] == 0
+
+
+def test_trade_no_numbers_every_closed_trade_in_the_order_it_closed():
+    """#1 the first ever: over the whole record, so a trade keeps its
+    number in any window. Open trades have none."""
+    from okxtrader import analysis
+    rows = [{'position_id': 'C', 'closed_at': 30.0},
+            {'position_id': 'A', 'closed_at': 10.0},
+            {'position_id': 'OPEN', 'closed_at': None},
+            {'position_id': 'B', 'closed_at': 20.0}]
+    numbers = analysis.trade_numbers(rows)
+    assert numbers == {'A': 1, 'B': 2, 'C': 3}
+    journal = analysis.journal([r for r in rows if r['position_id'] == 'C'])
+    analysis.number_journal(journal, numbers)
+    assert journal[0]['trade_no'] == 3          # its number, not '1 of 1'

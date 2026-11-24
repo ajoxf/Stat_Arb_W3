@@ -612,6 +612,7 @@ def test_the_analysis_covers_the_round_turn_just_traded(desk, round_turn):
     assert trip['entry_spread'] is not None and trip['exit_spread'] is not None
     assert trip['leg_a']['entry'] is not None
     assert trip['cum_pnl'] == pytest.approx(trip['pnl'])
+    assert trip['trade_no'] == 1              # the first trade ever
     # A manual trade has no Algo z at either end — a dash, not 0.
     assert trip['entry_z'] is None
     assert body['drawdown']['trades'] == 1
@@ -675,6 +676,7 @@ def test_the_analysis_tab_is_on_the_screen(desk, browser_page, round_turn):
         ".includes('Trade journal')", timeout=8000)
     text = page.text_content('.monitor .pane')
     assert 'Deepest open drawdown' in text
+    assert 'Trade no' in text and '#1' in text
     assert 'where a stop costs least' in text
     for heading in ('Summary', 'Drawdown', 'Take / hold calibration',
                     'What if held?', 'Backtest', 'Signals',

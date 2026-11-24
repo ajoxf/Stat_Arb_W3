@@ -733,6 +733,24 @@ def journal(positions, entry_z=None, exit_z=None, capital=0.0):
     return out
 
 
+def trade_numbers(positions):
+    """TRADE NO: every closed trade on the desk's record, numbered in the
+    order it closed - #1 the first ever. Taken over the WHOLE record, so a
+    trade keeps its number whatever window or ladder the tab is showing.
+    {position id: number}."""
+    closed = sorted((r for r in positions or ()
+                     if r.get('closed_at') is not None),
+                    key=lambda r: (r['closed_at'], str(r.get('position_id'))))
+    return {r.get('position_id'): i for i, r in enumerate(closed, 1)}
+
+
+def number_journal(journal, numbers):
+    """Each journal row's Trade no, from `trade_numbers`."""
+    for row in journal or ():
+        row['trade_no'] = numbers.get(row.get('position_id'))
+    return journal
+
+
 def algo_z(events):
     """(entry_z, exit_z) by position id, from the Algo's own audit trail.
 

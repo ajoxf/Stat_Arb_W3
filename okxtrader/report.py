@@ -291,7 +291,8 @@ def render(body, names=None, days=7.0, pair_key=None, now=None,
     rows = []
     for i, t in enumerate(trips, 1):
         rows.append(
-            f'<tr><td>{i}</td><td>{clock(t.get("opened_at"))}</td>'
+            f'<tr><td>{t.get("trade_no") or i}</td>'
+            f'<td>{clock(t.get("opened_at"))}</td>'
             f'<td>{clock(t.get("closed_at"))}</td>'
             f'<td class="l">{_e(name(t.get("pair_key")))}</td>'
             f'<td>{side(t.get("side"))}</td>'

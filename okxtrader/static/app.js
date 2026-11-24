@@ -8634,7 +8634,10 @@
     html += '<h4>Trade journal <small>— ' + trips.length + ' closed' +
       (pnlHidden ? '' : ', running total ' + pnlCash(total)) +
       '</small></h4>' +
-      '<table class="an-table"><thead><tr><th>Closed</th><th class="l">Pair</th>' +
+      '<table class="an-table"><thead><tr><th title="Every closed trade on ' +
+      'the desk\u2019s record, numbered in the order it closed \u2014 a ' +
+      'trade keeps its number whatever this tab is showing">Trade no</th>' +
+      '<th>Closed</th><th class="l">Pair</th>' +
       '<th class="l">Side</th><th class="l">Who</th><th>Size</th><th>z in → out</th>' +
       '<th>Spread in → out</th>' +
       '<th title="After every cost. The level the other two are ' +
@@ -8661,12 +8664,13 @@
       (pnlHidden ? '' : '<th>Running</th>') +
       '</tr></thead><tbody>';
     if (!trips.length) {
-      html += '<tr><td colspan="22" class="hint">no closed trade in this ' +
+      html += '<tr><td colspan="23" class="hint">no closed trade in this ' +
         'window</td></tr>';
     }
     trips.forEach(function (t) {
       var x = t.exit || {};
-      html += '<tr><td>' + anClock(t.closed_at) + '</td><td class="l">' +
+      html += '<tr><td class="an-no">' + (t.trade_no ? '#' + t.trade_no
+        : DASH) + '</td><td>' + anClock(t.closed_at) + '</td><td class="l">' +
         name(t.pair_key) + '</td><td class="l">' + anSide(t.side) +
         '</td><td class="l">' +
         (t.source === 'ALGO' ? '<b>Algo</b>' : 'Manual') + '</td><td>' +
