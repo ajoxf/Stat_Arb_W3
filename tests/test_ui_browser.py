@@ -7573,3 +7573,30 @@ def test_the_add_says_the_size_it_would_go_on_at(page):
                 f({add_size_by: 'MARGIN', add_qty: 0, algo_qty: 3}), f({})];
     }""")
     assert words == ['17.25 ', '5.00 ', '(size not set) ', '']
+
+
+def test_the_sizing_sheet_prints_on_one_page_with_its_settings(page):
+    """Print sheet: the table as the tab shows it, with the settings it
+    was worked out on, on a page of its own scaled to one A4 page."""
+    page.errors.clear()
+    page.evaluate("""() => { const s = window.MT5Trader.state;
+        s.open = ['monitor:']; s.monitorTab = 'sizing';
+        s.sizing = {freePct: 20}; window.MT5Trader.render(); }""")
+    page.wait_for_selector('.monitor .sz-print', timeout=WAIT)
+    with page.expect_popup() as opened:
+        page.click('.monitor .sz-print')
+    sheet = opened.value
+    sheet.wait_for_selector('table.sz-table')
+    assert 'Position Sizing Sheet' in sheet.text_content('h1')
+    assert sheet.locator('table.sz-table tbody tr').count() == 51
+    assert 'Free capital20%' in sheet.text_content('.set')
+    # Scaled to the printable area of one A4 landscape page.
+    w, h, k = sheet.evaluate("""() => { const s = document.querySelector(
+        '.sheet'); return [s.offsetWidth, s.offsetHeight,
+        parseFloat(s.style.zoom)]; }""")
+    # (A4 landscape less 6 mm margins: 1077 x 748 px at 96 dpi.)
+    assert w * k <= 1077 and h * k <= 748 and k > 0.5
+    sheet.close()
+    assert page.errors == []
+    page.evaluate("""() => { const s = window.MT5Trader.state;
+        s.sizing = null; s.open = []; window.MT5Trader.render(); }""")

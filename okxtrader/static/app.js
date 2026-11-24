@@ -1983,6 +1983,107 @@
             feePts: point ? fees / point : null};
   }
 
+  function sizingSheetHtml() {
+    /* THE PRINTABLE SIZING SHEET: the table as the Sizing tab shows it
+     * now, with the settings it was worked out on, as a page of its own
+     * - A4 landscape, scaled to ONE page. */
+    var cfg = sizingSettings();
+    var mk = sizingMarket();
+    var holder = document.createElement('div');
+    holder.innerHTML = sizingPane();
+    var table = holder.querySelector('.sz-table');
+    var notes = holder.querySelector('.sz-notes');
+    var lev = cfg.lev || mk.lev;
+    var settings = [
+      ['Win rate', cfg.win + '%'],
+      ['Free capital', cfg.freePct + '%'],
+      ['Target', cfg.target + '% of ' + cfg.targetBase],
+      ['Stop', cfg.stop + '% of ' + cfg.stopBase],
+      ['Maker / taker fills', cfg.makerPct + '% / ' + (100 - cfg.makerPct) +
+        '%'],
+      ['Trades a day', cfg.perDay + ' (' + cfg.perDay * 30 + ' a month)'],
+      ['Leverage', lev + 'x'],
+      ['Prices', mk.live ? 'ETH ' + mk.eth.toFixed(2) + ', BTC ' +
+        Math.round(mk.btc).toLocaleString('en-US') : 'no live price: ETH ' +
+        '1,720, BTC 61,400']];
+    var now = new Date();
+    var mark = '<svg class="mark" viewBox="0 0 16 16"><rect x="4" y="7.2" ' +
+      'width="8" height="1.6" fill="#1a1a1a"/><circle cx="4.6" cy="8" ' +
+      'r="2.6" fill="#2f6fb0"/><circle cx="11.4" cy="8" r="2.6" ' +
+      'fill="#c0342f"/></svg>';
+    var css = '@page{size:A4 landscape;margin:6mm}' +
+      '*{box-sizing:border-box}body{margin:0;font:11px "Segoe UI",Arial,' +
+      'sans-serif;color:#1f2933;background:#e9ecf0;' +
+      '-webkit-print-color-adjust:exact;print-color-adjust:exact}' +
+      '.bar{position:sticky;top:0;background:#16324f;color:#dbe4ee;' +
+      'padding:8px 14px;display:flex;gap:12px;align-items:center}' +
+      '.bar button{font:600 12px inherit;padding:5px 14px;border:0;' +
+      'border-radius:4px;background:#fff;color:#16324f;cursor:pointer}' +
+      '.sheet{background:#fff;margin:12px auto;padding:10px 12px;' +
+      'width:max-content}' +
+      '.head{display:flex;justify-content:space-between;align-items:flex-end;' +
+      'border-bottom:3px solid #16324f;padding-bottom:6px;margin-bottom:6px;' +
+      'gap:24px}.brand{display:flex;gap:10px;align-items:center}' +
+      '.mark{width:40px;height:40px}.desk{font-weight:700;letter-spacing:' +
+      '.18em;font-size:10px;color:#6b7280}h1{margin:0;font-size:20px;' +
+      'color:#16324f}.set{display:grid;grid-template-columns:repeat(4,auto);' +
+      'gap:1px 16px;font-size:10px}.set span{color:#6b7280;margin-right:4px}' +
+      // The summary and the notes wrap to the TABLE's width rather than
+      // widening the sheet with one long line (width 0, min 100%).
+      '.sum{font-size:10px;margin:4px 0 6px;color:#374151;width:0;' +
+      'min-width:100%}' +
+      // As narrow as the numbers allow: the headings wrap, the numbers
+      // never do - the narrower the sheet, the bigger it prints.
+      'table{border-collapse:collapse;font-variant-numeric:tabular-nums;' +
+      'width:1px}' +
+      'th,td{border:1px solid #c9cfd8;padding:1px 4px;text-align:center;' +
+      'white-space:nowrap;font-size:10px}th{background:#16324f;color:#fff;' +
+      'font-weight:600;white-space:normal;line-height:1.15}td small,th small{font-size:8px;opacity:.75}' +
+      'tbody tr:nth-child(even) td{background:#f3f5f8}' +
+      '.up{color:#127a3a}.down{color:#b42318}' +
+      '.notes{font-size:9px;color:#6b7280;margin-top:5px;width:0;' +
+      'min-width:100%;white-space:normal}' +
+      '.head{width:0;min-width:100%}' +
+      '@media print{body{background:#fff}.bar{display:none}' +
+      '.sheet{margin:0;padding:0}}';
+    // ONE PAGE: the sheet is scaled to the printable area of A4
+    // landscape (6 mm margins: about 1077 x 748 px at 96 dpi).
+    var fit = 'function fit(){var s=document.querySelector(".sheet");' +
+      's.style.zoom=1;var k=Math.min(1,1060/s.offsetWidth,' +
+      '735/s.offsetHeight);s.style.zoom=k;}' +
+      'fit();window.addEventListener("load",fit);' +
+      'window.addEventListener("beforeprint",fit);' +
+      'if(document.fonts){document.fonts.ready.then(fit);}';
+    return '<!doctype html><html><head><meta charset="utf-8">' +
+      '<title>Nexus \u2014 Position Sizing Sheet</title><style>' + css +
+      '</style></head><body><div class="bar"><button onclick="' +
+      'window.print()">Print / Save as PDF</button><span>One A4 landscape ' +
+      'page. In the print dialog, turn on \u201cBackground graphics\u201d ' +
+      'for the colours.</span></div><div class="sheet"><div class="head">' +
+      '<div class="brand">' + mark + '<div><div class="desk">NEXUS</div>' +
+      '<h1>Position Sizing Sheet</h1></div></div><div class="set">' +
+      settings.map(function (kv) {
+        return '<div><span>' + kv[0] + '</span>' + escapeHtml(kv[1]) +
+          '</div>';
+      }).join('') + '<div><span>Prepared</span>' +
+      escapeHtml(now.toLocaleString()) + '</div></div></div>' +
+      '<div class="sum">' + (holder.querySelector('.sz-sum') || {}).innerHTML +
+      '</div>' + (table ? table.outerHTML : '') +
+      '<div class="notes">' + (notes ? notes.innerHTML : '') + '</div>' +
+      '</div><script>' + fit + '<\/script></body></html>';
+  }
+
+  function printSizingSheet() {
+    var page = window.open('', '_blank');
+    if (!page) {
+      toast('The sheet could not open - allow pop-ups for this page');
+      return;
+    }
+    page.document.open();
+    page.document.write(sizingSheetHtml());
+    page.document.close();
+  }
+
   function sizingPane() {
     var cfg = sizingSettings();
     var mk = sizingMarket();
@@ -2041,7 +2142,10 @@
       '<label class="sz-field"><span>Leverage</span><input class="sz-input" ' +
         'id="sz-lev" type="number" min="1" step="1" data-key="lev" value="' +
         (cfg.lev || '') + '" placeholder="' + mk.lev + '">x</label>' +
-      '<button type="button" class="sz-reset">Reset</button></div>';
+      '<button type="button" class="sz-reset">Reset</button>' +
+      '<button type="button" class="sz-print" title="This sheet, with the ' +
+      'settings above, on one A4 landscape page - print it or save it as ' +
+      'a PDF">Print sheet</button></div>';
     // The summary, at $100k so every percentage reads against one
     // example; each row has its own figures below.
     var ex = sizingRow(100e3, cfg, mk);
@@ -8796,6 +8900,10 @@
       render();
       return;
     }
+    if (button.classList.contains('sz-print')) {
+      printSizingSheet();
+      return;
+    }
     if (button.classList.contains('sz-win')) {
       state.sizing = Object.assign(sizingSettings(),
                                    {win: parseFloat(button.dataset.win)});
@@ -9764,7 +9872,7 @@
     panelId: panelId, openPanel: openPanel, closePanel: closePanel,
     fmt: fmt, money: money, DASH: DASH,
     tidyWindows: tidyWindows, tileWindows: tileWindows, sound: sound,
-    sizingPane: sizingPane, sizingRow: sizingRow, meanExitWords: meanExitWords, volumeProfile: volumeProfile, addSizeWords: addSizeWords,
+    sizingPane: sizingPane, sizingRow: sizingRow, meanExitWords: meanExitWords, volumeProfile: volumeProfile, addSizeWords: addSizeWords, sizingSheetHtml: sizingSheetHtml,
     showFairWindow: showFairWindow, setAlgo: setAlgo,
     calcPosition: calcPosition,
     toastOutcome: toastOutcome
