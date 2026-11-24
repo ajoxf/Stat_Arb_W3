@@ -641,7 +641,7 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
 
     MIRROR_NUMBERS = ('multiple', 'capital', 'max_margin',
                       'daily_loss_limit', 'max_trades_day',
-                      'maker_timeout_sec')
+                      'maker_timeout_sec', 'profit_share_pct')
 
     def mirror_section(raw):
         section = raw.setdefault('mirror', {})
@@ -671,15 +671,21 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
     def api_mirror_accounts():
         raw = cfg.load_raw(config_path)
         section = raw.get('mirror') or {}
+        from . import client_portal
         mirror_now = (status() or {}).get('mirror') or {}
-        holding = {f.get('name'): f.get('holding') or 0
-                   for f in mirror_now.get('followers') or ()}
+        live = {f.get('name'): f for f in mirror_now.get('followers') or ()}
+        holding = {name: f.get('holding') or 0 for name, f in live.items()}
+        logins = client_portal.read_logins(config_path)
         return jsonify({
             'ok': True, 'enabled': bool(section.get('enabled')),
             'open_window_sec': section.get('open_window_sec', 60),
-            'followers': [dict(follower_row(r),
-                               holding=holding.get(r.get('name'), 0))
-                          for r in section.get('followers') or ()],
+            'followers': [dict(
+                follower_row(r), holding=holding.get(r.get('name'), 0),
+                # OKX's own figures, as the engine last read them.
+                balance=(live.get(r.get('name')) or {}).get('balance'),
+                cash=(live.get(r.get('name')) or {}).get('cash'),
+                login=(logins.get(r.get('name')) or {}).get('username'))
+                for r in section.get('followers') or ()],
             'pairs': [{'key': key, 'name': (pair or {}).get('name') or key}
                       for key, pair in (raw.get('pairs') or {}).items()]})
 
@@ -797,12 +803,52 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
                             f'copies on the Mirror tab), then remove it'}), 409
         section['followers'] = [r for r in rows if str(r.get('name')) != name]
         cfg.save_raw(config_path, raw)
+        from . import client_portal
+        client_portal.remove_login(config_path, name)
         env_path = os.path.join(os.path.dirname(
             os.path.abspath(config_path)) or '.', '.env')
         for env in follower_keys(name):
             if os.environ.get(env):
                 cfg.write_env_value(env_path, env, '')
         return jsonify({'ok': True, 'removed': name})
+
+    @app.post('/api/mirror/accounts/<path:name>/login')
+    def api_mirror_login(name):
+        """The client's own sign-in to their dashboard: a username and a
+        password, kept only as a salted hash. Blank password: remove it."""
+        from . import client_portal
+        raw = cfg.load_raw(config_path)
+        if not any(str(r.get('name')) == name for r in
+                   (raw.get('mirror') or {}).get('followers') or ()):
+            return jsonify({'ok': False,
+                            'error': f'no managed account {name}'}), 404
+        payload = request.get_json(silent=True) or {}
+        if payload.get('remove'):
+            client_portal.remove_login(config_path, name)
+            return jsonify({'ok': True, 'login': None})
+        try:
+            client_portal.set_login(config_path, name, payload.get('username'),
+                                    payload.get('password'))
+        except ValueError as e:
+            return jsonify({'ok': False, 'error': str(e)}), 400
+        return jsonify({'ok': True, 'login': (payload.get('username') or '')
+                        .strip().lower()})
+
+    @app.get('/mirror/client/<path:name>')
+    def mirror_client_preview(name):
+        """The client's dashboard as THEY see it, for the manager - the
+        same page the client portal serves after their login."""
+        from . import clientdash
+        state = os.path.join(os.path.dirname(os.path.abspath(status_path)),
+                             'mirror_state.json')
+        data = clientdash.gather(name, config_path, state)
+        if data is None:
+            return f'no managed account {name!r}', 404
+        response = app.make_response(clientdash.render(
+            data, preview=True, logout=False))
+        response.headers['Content-Type'] = 'text/html; charset=utf-8'
+        response.headers['Cache-Control'] = 'no-store'
+        return response
 
     @app.get('/api/mirror/accounts/<path:name>/test')
     def api_test_mirror_account(name):

@@ -54,6 +54,19 @@ DEFAULT_MAKER_TIMEOUT_SEC = 30.0
 #: How often a resting maker leg is looked at, and re-priced to its
 #: account's own touch when the book has moved.
 MAKER_POLL_SEC = 0.5
+#: How often each follower's balance and its money in and out are read
+#: from OKX, for the client's dashboard.
+CASH_REFRESH_SEC = 600.0
+#: The most pages of OKX's funding history read back the first time (100
+#: rows a page): 5,000 transfers.
+CASH_PAGES = 50
+#: OKX's funding-ledger types that are the client's money moving: a
+#: deposit, a withdrawal (and one cancelled), and - for a managed
+#: sub-account - a transfer in from, or out to, its owner's main account.
+CASH_BILL_TYPES = {'1': 'deposit', '2': 'withdrawal',
+                   '13': 'withdrawal cancelled',
+                   '22': 'transfer out to the main account',
+                   '23': 'transfer in from the main account'}
 #: How a follower executes: as the trade did (MIRROR: a maker trade is
 #: copied as maker, a taker one as taker) or always crossing (TAKER).
 EXECUTIONS = ('MIRROR', 'TAKER')
@@ -176,6 +189,11 @@ class Mirror:
         self.closed = {}
         #: Followers halted from the screen: {name: {'at', 'why'}}.
         self.halted = {}
+        #: Each follower's money as OKX last said it: {name: {'balance':
+        #: {'equity', 'at'}, 'flows': {bill id: {'at', 'amount', 'kind'}},
+        #: 'error', 'read_at'}} - for the client's dashboard.
+        self.cash = {}
+        self._cash_due = {}
         #: Copying switched off on the Managed Accounts screen: no NEW
         #: copy; every copy on still closes with its trade.
         self.paused = False
@@ -294,6 +312,7 @@ class Mirror:
             self.records = state.get('records') or {}
             self.closed = state.get('closed') or {}
             self.halted = state.get('halted') or {}
+            self.cash = state.get('cash') or {}
         except FileNotFoundError:
             self.records = {}
         except (OSError, ValueError) as e:
@@ -326,7 +345,7 @@ class Mirror:
             tmp = f'{self.state_path}.{os.getpid()}.tmp'
             with open(tmp, 'w', encoding='utf-8') as f:
                 json.dump({'records': self.records, 'closed': self.closed,
-                           'halted': self.halted}, f)
+                           'halted': self.halted, 'cash': self.cash}, f)
             os.replace(tmp, self.state_path)
         except OSError as e:
             logging.error('MIRROR: could not save %s: %s', self.state_path,
@@ -399,7 +418,14 @@ class Mirror:
                             >= CLOSE_RETRY_SEC):
                         fr['status'] = 'CLOSING'
                         jobs.append(('close', pid, name))
-            if jobs:
+            # THE CLIENT'S MONEY: each follower's balance and deposits /
+            # withdrawals, read now and then on its own thread - after any
+            # order it has to send, never before one.
+            for name in self.followers:
+                if now >= self._cash_due.get(name, 0.0):
+                    self._cash_due[name] = now + CASH_REFRESH_SEC
+                    jobs.append(('cash', None, name))
+            if any(job[0] != 'cash' for job in jobs):
                 self._save()
         for job in jobs:
             self._submit(job)
@@ -532,6 +558,10 @@ class Mirror:
     def _run(self, job):
         kind, pid, name = job
         follower = self.followers.get(name)
+        if kind == 'cash':
+            if follower is not None:
+                self._read_cash(follower)
+            return
         with self._lock:
             record = self.records.get(pid)
             fr = (record or {}).get('followers', {}).get(name)
@@ -567,6 +597,78 @@ class Mirror:
             # A follower taken off the config goes once it holds nothing.
             if follower.removed and not self._holds(name):
                 self.followers.pop(name, None)
+
+    def _cash_summary(self, name):
+        """What OKX says moved in and out of this account: the totals
+        and the latest few - for the Managed Accounts screen."""
+        entry = self.cash.get(name) or {}
+        flows = sorted((entry.get('flows') or {}).values(),
+                       key=lambda f: -(f.get('at') or 0))
+        return {'deposited': round(sum(f['amount'] for f in flows
+                                       if f['amount'] > 0), 2),
+                'withdrawn': round(-sum(f['amount'] for f in flows
+                                        if f['amount'] < 0), 2),
+                'count': len(flows), 'recent': flows[:12],
+                'read_at': entry.get('read_at'),
+                'error': entry.get('error')}
+
+    def _read_cash(self, follower):
+        """This follower's balance (OKX's total equity) and its money in
+        and out (OKX's funding ledger), merged into what is kept by OKX's
+        own bill id - read again, nothing is counted twice. A read that
+        fails keeps what was there and says why."""
+        now = self.clock()
+        entry = self.cash.setdefault(follower.name, {'flows': {}})
+        try:
+            broker = follower.broker(self.ledger_dir)
+            info = broker.account_info()
+            if info is not None:
+                entry['balance'] = {
+                    'equity': float(info.equity), 'at': now,
+                    # What it can still put on, and what its open
+                    # positions tie up - OKX's own figures.
+                    'available': (float(info.margin_free)
+                                  if info.margin_free is not None else None),
+                    'margin_used': (float(info.margin)
+                                    if info.margin is not None else None),
+                    'unrealized': (float(info.profit)
+                                   if getattr(info, 'profit', None)
+                                   is not None else None)}
+            # OKX's funding ledger, ALL of it (since Feb 2021): the newest
+            # page every read, and - the first time - every page back to
+            # the account's first transfer, at OKX's 1 a second.
+            def page(after=None):
+                params = {'ccy': 'USDT', 'limit': '100'}
+                if after:
+                    params['after'] = after
+                return broker.client.get('/api/v5/asset/bills-history',
+                                         params, private=True) or []
+
+            def keep(bills):
+                for bill in bills:
+                    kind = CASH_BILL_TYPES.get(str(bill.get('type')))
+                    if kind is None or not bill.get('billId'):
+                        continue
+                    entry['flows'][str(bill['billId'])] = {
+                        'at': float(bill.get('ts') or 0) / 1000.0,
+                        'amount': float(bill.get('balChg') or 0.0),
+                        'kind': kind, 'source': 'OKX'}
+            bills = page()
+            keep(bills)
+            if not entry.get('history_done'):
+                pages = 0
+                while bills and len(bills) >= 100 and pages < CASH_PAGES:
+                    self.sleep(1.1)
+                    bills = page(bills[-1].get('ts'))
+                    keep(bills)
+                    pages += 1
+                entry['history_done'] = True
+            entry['error'] = None
+        except Exception as e:
+            entry['error'] = f'could not read the balance from OKX: {e}'
+        entry['read_at'] = now
+        with self._lock:
+            self._save()
 
     # -- the orders ---------------------------------------------------------
 
@@ -926,6 +1028,8 @@ class Mirror:
                     pnl_month=round(pnl_month, 2),
                     pnl_total=round(pnl_total, 2),
                     closed_count=len(closed),
+                    balance=(self.cash.get(f.name) or {}).get('balance'),
+                    cash=self._cash_summary(f.name),
                     return_month_pct=(round(100.0 * pnl_month / f.capital, 3)
                                       if f.capital else None),
                     return_total_pct=(round(100.0 * pnl_total / f.capital, 3)

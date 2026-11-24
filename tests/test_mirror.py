@@ -763,3 +763,69 @@ def test_switched_off_no_new_copy_but_what_is_on_still_closes(tmp_path):
     assert 'switched off' in mirror.records['P2']['followers']['c1']['why']
     mirror.observe([])
     assert mirror.records['P1']['followers']['c1']['status'] == m.CLOSED
+
+
+def test_each_followers_balance_margin_and_money_in_and_out_come_from_okx(
+        tmp_path):
+    """For the client's dashboard: OKX's own equity, available margin and
+    margin in use, and its funding ledger's deposits, withdrawals and
+    transfers - kept by bill id, so a second read counts nothing twice."""
+    acct = Account()
+    acct.account_info = lambda: types.SimpleNamespace(
+        equity=10450.5, margin_free=9100.25, margin=1350.25, profit=12.5)
+    bills = [{'billId': 'b1', 'type': '23', 'balChg': '10000', 'ts':
+              '1790000000000'},
+             {'billId': 'b2', 'type': '22', 'balChg': '-500', 'ts':
+              '1790500000000'},
+             {'billId': 'b3', 'type': '8', 'balChg': '-3.2', 'ts':
+              '1790600000000'}]                        # a fee: not money in
+    acct.client = types.SimpleNamespace(
+        get=lambda path, params=None, private=False: list(bills))
+    mirror = quiet_mirror(tmp_path, m.Follower('c1', 1.0, broker=acct))
+    mirror.observe([])
+    cash = mirror.cash['c1']
+    assert cash['balance']['equity'] == 10450.5
+    assert cash['balance']['available'] == 9100.25
+    assert cash['balance']['margin_used'] == 1350.25
+    assert sorted(f['amount'] for f in cash['flows'].values()) == \
+        [-500.0, 10000.0]
+    assert cash['flows']['b1']['kind'] == 'transfer in from the main account'
+    mirror._cash_due['c1'] = 0
+    mirror.observe([])                                  # read again
+    assert len(mirror.cash['c1']['flows']) == 2
+    saved = json.load(open(tmp_path / 'mirror_state.json'))
+    assert saved['cash']['c1']['balance']['available'] == 9100.25
+
+
+def test_a_balance_that_cannot_be_read_keeps_the_last_and_says_why(tmp_path):
+    acct = Account()
+    mirror = quiet_mirror(tmp_path, m.Follower('c1', 1.0, broker=acct))
+    mirror.observe([])                 # this fake has no balance to read
+    assert 'could not read' in mirror.cash['c1']['error']
+
+
+def test_the_client_login_and_profit_share_are_set_from_managed_accounts(
+        tmp_path):
+    client = managed_app(tmp_path)
+    client.post('/api/mirror/accounts/c1', json={'new': True, 'multiple': 1,
+                                                 'profit_share_pct': '20'})
+    raw = json.loads((tmp_path / 'config.json').read_text())
+    assert raw['mirror']['followers'][0]['profit_share_pct'] == 20.0
+    r = client.post('/api/mirror/accounts/c1/login', json={
+        'username': 'Client.One', 'password': 'a good long pw'})
+    assert r.get_json() == {'ok': True, 'login': 'client.one'}
+    listed = client.get('/api/mirror/accounts').get_json()
+    assert listed['followers'][0]['login'] == 'client.one'
+    assert 'a good long pw' not in (tmp_path / 'client_logins.json') \
+        .read_text()
+    bad = client.post('/api/mirror/accounts/c1/login', json={
+        'username': 'x1', 'password': 'short'})
+    assert bad.status_code == 400
+    # The manager's preview of the client's dashboard.
+    page = client.get('/mirror/client/c1').get_data(as_text=True)
+    assert 'Manager preview' in page and 'Client dashboard' in page
+    assert client.get('/mirror/client/nobody').status_code == 404
+    # Removing the account removes its login with it.
+    client.delete('/api/mirror/accounts/c1')
+    assert 'c1' not in json.loads((tmp_path / 'client_logins.json')
+                                  .read_text())

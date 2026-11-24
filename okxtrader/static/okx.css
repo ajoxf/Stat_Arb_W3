@@ -340,3 +340,18 @@
 .window.managed .ma-test li.bad { color: #b42318; }
 .window.managed .ma-test li.warn { color: #92400e; }
 .window.managed .ma-error { color: #b42318; }
+.window.managed .ma-login { align-items: end; }
+.window.managed .ma-loginbtns { display: flex; gap: 6px; align-items: center; grid-column: span 2; }
+.window.managed .ma-hint { color: #6b7280; font-size: 11px; }
+.window.managed .ma-money { display: flex; flex-wrap: wrap; gap: 8px; margin: 2px 0 6px; }
+.window.managed .ma-money div { flex: 1 1 120px; border: 1px solid #e3e7ec; padding: 5px 8px;
+  display: flex; flex-direction: column; }
+.window.managed .ma-money span { font-size: 10.5px; color: #6b7280; text-transform: uppercase; }
+.window.managed .ma-money b { font-size: 15px; }
+.window.managed table.ma-flows { border-collapse: collapse; width: 100%; max-width: 560px; font-size: 12px; }
+.window.managed table.ma-flows th { text-align: right; font-size: 10.5px; color: #6b7280;
+  border-bottom: 1px solid #e3e7ec; padding: 2px 6px; }
+.window.managed table.ma-flows td { text-align: right; padding: 2px 6px; border-bottom: 1px solid #f0f2f5; }
+.window.managed table.ma-flows .l { text-align: left; }
+.window.managed .up { color: #127a3a; } .window.managed .down { color: #b42318; }
+.window.managed a.ma-btn { text-decoration: none; display: inline-block; }

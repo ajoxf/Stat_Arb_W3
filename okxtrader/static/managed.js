@@ -135,6 +135,9 @@
       field('Maker wait (s)', number('maker_timeout_sec',
         a.maker_timeout_sec, '1', 'how long a maker leg rests: on entry ' +
         'the copy is skipped if unfilled; on exit the rest crosses', '30')) +
+      field('Profit share %', number('profit_share_pct', a.profit_share_pct,
+        '0.5', 'your share of the client\u2019s profit above its high-' +
+        'water mark, worked out month by month', 'none')) +
       field('Following', '<select data-f="enabled"><option value="1"' +
         (a.enabled !== false ? ' selected' : '') + '>Yes</option>' +
         '<option value="0"' + (a.enabled === false ? ' selected' : '') +
@@ -164,12 +167,71 @@
       field('Secret', keyInput('secret', a.secret_set, 'Secret')) +
       field('Passphrase', keyInput('passphrase', a.passphrase_set,
         'Passphrase')) + '</div>' +
+      (isNew ? '' : loginHtml(a)) +
       '<div class="ma-actions"><button class="ma-btn primary" ' +
       'data-act="save">' + (isNew ? 'Add account' : 'Save') + '</button>' +
       (isNew ? '<button class="ma-btn" data-act="cancel-new">Cancel</button>'
         : '<button class="ma-btn" data-act="test">Test connection</button>' +
+          '<a class="ma-btn" target="_blank" rel="noopener" href="' +
+          '/mirror/client/' + encodeURIComponent(a.name) + '" title="The ' +
+          'dashboard this client sees when they log in">Client dashboard' +
+          '</a>' +
           '<button class="ma-btn danger" data-act="remove">Remove</button>') +
-      '</div>' + (isNew ? '' : testHtml(a.name)) + '</div>';
+      '</div>' + (isNew ? '' : testHtml(a.name) + moneyHtml(a)) +
+      '</div>';
+  }
+
+  function usd(x) {
+    return x === null || x === undefined ? '\u2014' : UI.money(x);
+  }
+
+  function loginHtml(a) {
+    /* The client's own sign-in to their dashboard. */
+    return '<div class="ma-sub">Client login <small>(their own dashboard: ' +
+      'balance, money in and out, monthly P&amp;L, profit share \u2014 ' +
+      'never a trade)</small></div><div class="ma-grid ma-login">' +
+      field('Username', '<input type="text" class="ma-user" ' +
+        'autocomplete="off" value="' + escape(a.login || '') + '" ' +
+        'placeholder="e.g. client.a">') +
+      field('Password', '<input type="password" class="ma-pass" ' +
+        'autocomplete="new-password" placeholder="' + (a.login
+          ? 'set \u2014 type a new one to change' : '10 characters or more') +
+        '">') +
+      '<div class="ma-loginbtns"><button class="ma-btn" data-act="login">' +
+      (a.login ? 'Change login' : 'Set login') + '</button>' +
+      (a.login ? '<button class="ma-btn" data-act="unlogin">Remove login' +
+        '</button>' : '') + '<span class="ma-hint">' + (a.login
+          ? '\u2713 can sign in as <b>' + escape(a.login) + '</b>'
+          : 'no login yet') + '</span></div></div>';
+  }
+
+  function moneyHtml(a) {
+    /* The account's money AS OKX HOLDS IT: balance and margin, and every
+     * deposit and withdrawal from its own funding history. */
+    var b = a.balance || {}, c = a.cash || {};
+    var rows = (c.recent || []).map(function (f) {
+      return '<tr><td>' + new Date(f.at * 1000).toLocaleDateString(
+        undefined, {day: '2-digit', month: 'short', year: 'numeric'}) +
+        '</td><td class="l">' + escape(f.kind) + '</td><td class="' +
+        (f.amount >= 0 ? 'up' : 'down') + '">' + (f.amount > 0 ? '+' : '') +
+        UI.money(f.amount) + '</td></tr>';
+    }).join('');
+    return '<div class="ma-sub">Account at OKX <small>(read every 10 ' +
+      'minutes' + (c.read_at ? ' \u00b7 last ' + new Date(c.read_at * 1000)
+        .toLocaleTimeString() : ' \u00b7 not read yet') + ')</small></div>' +
+      (c.error ? '<div class="ma-test bad">' + escape(c.error) + '</div>'
+        : '') + '<div class="ma-money"><div><span>Balance</span><b>' +
+      usd(b.equity) + '</b></div><div><span>Available margin</span><b>' +
+      usd(b.available) + '</b></div><div><span>Margin in use</span><b>' +
+      usd(b.margin_used) + '</b></div><div><span>Deposited</span><b>' +
+      usd(c.deposited) + '</b></div><div><span>Withdrawn</span><b>' +
+      usd(c.withdrawn) + '</b></div></div>' + (rows
+        ? '<table class="ma-flows"><thead><tr><th>Date</th><th class="l">' +
+          'Deposits &amp; withdrawals (OKX)</th><th>Amount</th></tr></thead>' +
+          '<tbody>' + rows + '</tbody></table>' +
+          (c.count > 12 ? '<div class="ma-hint">latest 12 of ' + c.count +
+            ' \u2014 all of them on the client dashboard</div>' : '')
+        : '<div class="ma-hint">No deposit or withdrawal at OKX yet.</div>');
   }
 
   function testHtml(name) {
@@ -243,7 +305,11 @@
         '<span class="ma-pill ' + (a.enabled === false ? '' : 'ok') + '">' +
         (a.enabled === false ? 'not following' : 'following') + '</span>' +
         (a.holding ? '<span class="ma-pill ok">' + a.holding + ' held' +
-          '</span>' : '') + '<span class="ma-edit">' + (open ? 'Close'
+          '</span>' : '') + ((a.balance || {}).equity !== undefined &&
+          (a.balance || {}).equity !== null ? '<span>bal ' +
+          UI.money(a.balance.equity) + ' \u00b7 avail ' +
+          usd(a.balance.available) + '</span>' : '') +
+        (a.login ? '<span class="ma-pill">login \u2713</span>' : '') + '<span class="ma-edit">' + (open ? 'Close'
           : 'Edit') + '</span></div>' + (open ? formHtml(a, false) : '') +
         '</div>';
     });
@@ -332,6 +398,20 @@
           local.tests[name] = r.body || {};
           draw();
         });
+      return;
+    }
+    if (act === 'login' || act === 'unlogin') {
+      var box2 = target.closest('.ma-login');
+      var payload = act === 'unlogin' ? {remove: true} : {
+        username: box2.querySelector('.ma-user').value,
+        password: box2.querySelector('.ma-pass').value};
+      post('/api/mirror/accounts/' + encodeURIComponent(name) + '/login',
+           payload).then(function (r) {
+        UI.toast(r.ok ? (act === 'unlogin' ? name + ': login removed'
+          : name + ' can sign in as ' + r.body.login) : r.body.error,
+          r.ok ? 'ok' : '');
+        if (r.ok) { load(); }
+      });
       return;
     }
     if (act === 'remove') {

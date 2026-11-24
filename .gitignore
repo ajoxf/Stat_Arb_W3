@@ -62,3 +62,9 @@ logs/
 screen_layout.json
 chart.json
 chart_history.json
+
+# Managed accounts: client data and secrets - never in git.
+mirror_state.json
+client_logins.json
+client_portal.secret
+data/okx_ledger_mirror_*.json
