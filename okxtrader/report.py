@@ -271,6 +271,14 @@ def render(body, names=None, days=7.0, pair_key=None, now=None,
                    else cash(-d['max'])), 'down' if d.get('max') else '',
              'worst fall from a peak' + (', of capital' if hide and capital
                                          else '')),
+        tile('Deepest open DD', DASH if d.get('open_max') is None
+             else (pct(-d['open_max_pct_capital'])
+                   if hide and d.get('open_max_pct_capital') is not None
+                   else cash(-d['open_max'])), 'down' if d.get('open_max')
+             else '', 'worst point while a trade was open' + (
+                 f", {pct(-d['open_max_pct_capital'])} of capital"
+                 if d.get('open_max_pct_capital') is not None and not hide
+                 and pnl == 'show' else '')),
         tile('Profit factor', f'{factor:.2f}' if factor else DASH, '',
              'won ÷ lost, in money') if hide else
         tile('Avg win / loss', f'{cash(avg_win)} / {cash(avg_loss)}', '',

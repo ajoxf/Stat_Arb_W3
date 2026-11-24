@@ -520,3 +520,27 @@ def test_and_a_real_total_from_the_first_priced_trade_on():
             closed(None, 3, peak=1.0, trough=-1.0)]
     assert [r['cum_pnl'] for r in analysis.journal(rows)] == \
         [-205.0, -205.0, None]
+
+
+def test_the_deepest_open_drawdown_counts_each_trade_at_its_worst():
+    """23 Nov: +$68.91 of winners, then a short that went to -$233.04
+    while open and closed at -$90.64. Closed, the fall is $90.64 (2.59%
+    of $3,500); while open it was $233.04 (6.66%) - the one that
+    matters."""
+    from okxtrader import analysis
+    rows = [{'position_id': 'W', 'closed_at': 1.0, 'realized_pnl': 68.91,
+             'trough_pnl': -5.0},
+            {'position_id': 'L', 'closed_at': 2.0, 'realized_pnl': -90.64,
+             'trough_pnl': -233.04, 'pair_key': 'ethbtc', 'side': 'SELL'},
+            {'position_id': 'X', 'closed_at': 3.0, 'realized_pnl': 10.02,
+             'trough_pnl': -1.0}]
+    d = analysis.drawdown(rows, capital=3500)
+    assert d['max'] == 90.64 and d['max_pct_capital'] == 2.59
+    assert d['open_max'] == 233.04 and d['open_max_pct_capital'] == 6.66
+    assert d['open_max_trade']['position_id'] == 'L'
+    assert d['open_max_trade']['trough_pnl'] == -233.04
+    # No capital set: the money, no %.
+    assert analysis.drawdown(rows)['open_max_pct_capital'] is None
+    # No trough recorded: unmeasured, never zero.
+    bare = [{'closed_at': 1.0, 'realized_pnl': -5.0}]
+    assert analysis.drawdown(bare)['open_max'] is None

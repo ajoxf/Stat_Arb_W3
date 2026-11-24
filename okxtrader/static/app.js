@@ -8190,9 +8190,32 @@
     html += '<h4>Drawdown &amp; excursion <small>\u2014 how bad it got, ' +
       'and how good</small></h4><div class="an-tiles">' +
       anTile('Max drawdown', d.max === null || d.max === undefined ? DASH
-           : money(-d.max), d.max ? 'down' : '',
+           : money(-d.max) + (d.max_pct_capital === null ||
+               d.max_pct_capital === undefined ? ''
+               : ' <small>(' + fmt(-d.max_pct_capital, 2) + '% of capital)' +
+                 '</small>'), d.max ? 'down' : '',
            'the worst fall of the running P&L from a peak, closed trades in ' +
            'the order they closed') +
+      // THE DEEPEST OPEN DRAWDOWN: the same curve with each trade at its
+      // worst point while still open - the low the account really went
+      // through, which a trade that recovered before it closed hides.
+      anTile('Deepest open drawdown', d.open_max === null ||
+               d.open_max === undefined ? DASH
+             : money(-d.open_max) + (d.open_max_pct_capital === null ||
+                 d.open_max_pct_capital === undefined ? ''
+                 : ' <small>(' + fmt(-d.open_max_pct_capital, 2) +
+                   '% of capital)</small>'), d.open_max ? 'down' : '',
+             'the worst fall from a peak counting each trade at its WORST ' +
+             'point while open (its MAE), not where it closed' +
+             (d.open_max_trade ? ' \u2014 on ' +
+               name(d.open_max_trade.pair_key) + ' ' +
+               anSide(d.open_max_trade.side) + ', closed ' +
+               anClock(d.open_max_trade.closed_at) + ': worst ' +
+               money(d.open_max_trade.trough_pnl) + ', closed at ' +
+               money(d.open_max_trade.pnl) : '') +
+             (d.open_max_pct_capital === null ||
+              d.open_max_pct_capital === undefined
+               ? '. Set the capital you manage above for the %' : '')) +
       anTile('Worst trade', money(d.worst_trade), anSign(d.worst_trade),
              'best: ' + money(d.best_trade)) +
       anTile('Below the peak now', d.current === null || d.current === undefined

@@ -366,23 +366,56 @@ def summary(positions, capital=0.0):
             'margin_trades': len(based)}
 
 
-def drawdown(positions):
+def drawdown(positions, capital=0.0):
     """The equity curve over closed trades, oldest first: its peak, its
-    worst fall from a peak, and how far below the peak it is now."""
+    worst fall from a peak, and how far below the peak it is now.
+
+    And the DEEPEST OPEN DRAWDOWN: the same curve, but each trade taken
+    at its worst point while it was still open (its MAE, `trough_pnl`)
+    rather than where it closed - the low the account actually went
+    through. A trade that dipped to -$233 and closed at -$91 was a $233
+    fall, not a $91 one. Each trade is counted from the closed P&L
+    before it; trades open at the same time are counted one at a time,
+    so it is the deepest any ONE trade took the account. Against
+    `capital` (the capital managed) as a %, where it is set."""
     closed = sorted((r for r in positions or ()
                      if r.get('closed_at') is not None
                      and _pnl(r) is not None),
                     key=lambda r: r['closed_at'])
     if not closed:
         return {'trades': 0, 'max': None, 'max_pct': None, 'current': None,
-                'peak_equity': None, 'worst_trade': None, 'best_trade': None}
+                'peak_equity': None, 'worst_trade': None, 'best_trade': None,
+                'max_pct_capital': None, 'open_max': None,
+                'open_max_pct_capital': None, 'open_max_trade': None}
     peak = running = worst = 0.0
+    deepest, deepest_row = None, None
     for row in closed:
+        trough = row.get('trough_pnl')
+        if trough is not None and float(trough) < 0:
+            fall = peak - (running + float(trough))
+            if deepest is None or fall > deepest:
+                deepest, deepest_row = fall, row
         running += _pnl(row)
         peak = max(peak, running)
         worst = max(worst, peak - running)
     current = max(0.0, peak - running)
+    capital = float(capital or 0.0)
+
+    def on_capital(money):
+        return (round(100.0 * money / capital, 2)
+                if capital > 0 and money is not None else None)
+    deepest = None if deepest is None else round(max(deepest, worst), 2)
     return {'trades': len(closed), 'max': round(worst, 2),
+            'max_pct_capital': on_capital(worst),
+            'open_max': deepest,
+            'open_max_pct_capital': on_capital(deepest),
+            'open_max_trade': None if deepest_row is None else {
+                'position_id': deepest_row.get('position_id'),
+                'pair_key': deepest_row.get('pair_key'),
+                'side': deepest_row.get('side'),
+                'closed_at': deepest_row.get('closed_at'),
+                'trough_pnl': round(float(deepest_row['trough_pnl']), 2),
+                'pnl': round(_pnl(deepest_row), 2)},
             'max_pct': (round(100.0 * worst / peak, 1) if peak else None),
             'current': round(current, 2), 'peak_equity': round(peak, 2),
             'equity': round(running, 2),
@@ -670,7 +703,7 @@ def report(positions, events=(), shadows=(), excursions=None, now=0.0,
     positions = list(positions or ())
     entry_z, exit_z = algo_z(events)
     return {'summary': summary(positions, capital),
-            'drawdown': drawdown(positions),
+            'drawdown': drawdown(positions, capital),
             'excursion': excursion_rows(positions),
             'calibration': calibration(positions),
             'shadow': shadow_summary(shadows),
