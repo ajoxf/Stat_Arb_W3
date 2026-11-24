@@ -61,5 +61,18 @@
     "MAX_QUOTE_AGE_SEC": 15.0,
     "MAX_SPREAD_JUMP_SIGMA": 5.0,
     "SHUTDOWN_CLOSE_POSITIONS": "ask"
+  },
+  "mirror": {
+    "_about": "OFF until enabled is true. Each follower is an OKX Managed Trading Sub-account bound to this desk, traded through its own API key in .env as OKX_API_KEY_MIRROR_<NAME>, OKX_SECRET_KEY_MIRROR_<NAME>, OKX_PASSPHRASE_MIRROR_<NAME> (name in capitals, spaces as _). multiple: the share of each Algo trade it takes (0.5 = half the lots of each leg). pairs: leave out for every ladder. A trade first seen more than open_window_sec after it opened is not copied.",
+    "enabled": false,
+    "open_window_sec": 60,
+    "followers": [
+      {
+        "name": "client_a",
+        "multiple": 0.5,
+        "demo": true,
+        "enabled": true
+      }
+    ]
   }
 }

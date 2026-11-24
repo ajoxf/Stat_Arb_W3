@@ -7602,3 +7602,53 @@ def test_the_sizing_sheet_prints_on_one_page_with_its_settings(page):
     assert page.errors == []
     page.evaluate("""() => { const s = window.MT5Trader.state;
         s.sizing = null; s.open = []; window.MT5Trader.render(); }""")
+
+
+def test_the_mirror_tab_shows_only_when_the_mirror_is_on(page):
+    """No mirror in the status: no tab. With one: the followers and what
+    each copy did."""
+    page.evaluate("""() => { const s = window.MT5Trader.state;
+        s.open = ['monitor:']; s.monitorTab = 'positions';
+        window.MT5Trader.render(); }""")
+    page.wait_for_selector('.window.monitor', timeout=WAIT)
+    tab = page.locator('.monitor .tabs button[data-tab="mirror"]')
+    assert tab.is_hidden()
+    html = page.evaluate("""() => window.MT5Trader.mirrorPane({
+        on: true, open_window_sec: 60,
+        followers: [{name: 'c1', multiple: 0.5, enabled: true, demo: true,
+                     pairs: null, last_error: null},
+                    {name: 'c2', multiple: 2, enabled: false, demo: true,
+                     pairs: ['ethbtc'], last_error: '51008 margin'}],
+        trades: [{position_id: 'POS-1', pair_key: 'ethbtc', opened_at: 1,
+                  counts: {OPEN: 1, SKIPPED: 1},
+                  gone: false, legs: [{symbol: 'ETH-USDT-SWAP',
+                  side: 'SELL', volume: 2}],
+                  followers: {c1: {status: 'OPEN', legs: [{symbol:
+                  'ETH-USDT-SWAP', side: 'SELL', volume: 1}]},
+                  c2: {status: 'SKIPPED', why: 'follower switched off'}}}]
+    })""")
+    assert '\u00d70.50' in html and 'off \u2014 closes only' in html
+    assert '51008 margin' in html
+    # One row per trade, every account a chip; the tally in words.
+    assert 'mr-chip ok' in html and '1 held' in html and '1 skipped' in html
+    assert 'follower switched off' in html            # the chip's reason
+    assert 'SELL 1.00 ETH' not in html                # legs: on a click
+    opened = page.evaluate("""() => {
+        window.MT5Trader.state.mirrorOpen = {'POS-1': true};
+        return window.MT5Trader.mirrorPane({on: true, open_window_sec: 60,
+          summary: {followers: 1, following: 1, holding: 1, attention: 1},
+          attention: [{follower: 'c1', position_id: 'POS-1',
+                       why: '50001 unavailable', severity: 'high'}],
+          followers: [{name: 'c1', multiple: 1, enabled: true, demo: true,
+                       holding: 1}],
+          trades: [{position_id: 'POS-1', pair_key: 'ethbtc', gone: true,
+                    counts: {CLOSE_FAILED: 1},
+                    followers: {c1: {status: 'CLOSE_FAILED',
+                      why: '50001 unavailable', legs: [{symbol:
+                      'ETH-USDT-SWAP', side: 'SELL', volume: 1}]}}}]});
+    }""")
+    assert 'STILL HOLDS a copy of a closed trade' in opened
+    assert 'mr-tile alarm' in opened and 'alarm-row' in opened
+    assert 'SELL 1.00 ETH' in opened and 'CLOSE FAILED' in opened
+    page.evaluate("""() => { const s = window.MT5Trader.state;
+        s.open = []; window.MT5Trader.render(); }""")

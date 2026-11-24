@@ -325,7 +325,31 @@ class Coordinator:
         swept = self.sweep_pendings('startup')
         self.resolve_symbols()
         self.recover()
+        self._start_mirror()
         return swept
+
+    def _start_mirror(self):
+        """THE MIRROR (`mirror.py`): only when config.json has a
+        switched-on `mirror` section naming followers. Without one this
+        sets None and nothing else here changes."""
+        self.mirror = None
+        path = getattr(self.config, 'path', None)
+        if not path:
+            return
+        try:
+            from . import mirror as mirror_module
+            state = os.path.join(
+                os.path.dirname(os.path.abspath(self.status_path)),
+                'mirror_state.json')
+            self.mirror = mirror_module.Mirror.from_raw(
+                config_module.load_raw(path), state)
+            if self.mirror is not None:
+                logging.info('MIRROR on: %s', ', '.join(
+                    f'{f.name} x{f.multiple:g}'
+                    for f in self.mirror.followers.values()))
+        except Exception as e:                # the desk runs without it
+            logging.error('MIRROR could not start: %s', e)
+            self.mirror = None
 
     def recover(self):
         """Bring back the positions that were open when we stopped.
@@ -575,7 +599,30 @@ class Coordinator:
         with self.lock:
             snapshot = self._poll_once()
             self._stamp_our_tickets()
+            self._feed_mirror()
             return snapshot
+
+    def _feed_mirror(self):
+        """The Algo's open positions, to the mirror - if there is one.
+        Never fatal, never waits: the orders go out on its own thread."""
+        mirror = getattr(self, 'mirror', None)
+        if mirror is None:
+            return
+        try:
+            rows = []
+            for position in self.book.positions():
+                if getattr(position, 'source', MANUAL) != ALGO_SOURCE or \
+                        not position.is_open:
+                    continue
+                legs = [{'symbol': fill.symbol, 'side': fill.side.value,
+                         'volume': fill.volume}
+                        for fill in (position.leg_a, position.leg_b) if fill]
+                rows.append({'position_id': position.position_id,
+                             'pair_key': position.pair_key,
+                             'opened_at': position.opened_at, 'legs': legs})
+            mirror.observe(rows)
+        except Exception as e:
+            logging.error('MIRROR: %s', e)
 
     def _stamp_our_tickets(self):
         """Write every ticket the book is holding into OUR ledger.
@@ -4414,6 +4461,10 @@ class Coordinator:
             'click_to_on_ms': list(self.executor.timings[-50:]),
             'pairs': pairs,
             'btc_dominance': self._btc_dominance(),
+            # None unless the mirror is switched on in config.json.
+            'mirror': (self.mirror.snapshot()
+                       if getattr(self, 'mirror', None) is not None
+                       else None),
             'magic': MAGIC_NUMBER,
         }
 

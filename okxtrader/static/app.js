@@ -1983,6 +1983,166 @@
             feePts: point ? fees / point : null};
   }
 
+  //: How each status reads, and its colour on the Mirror tab.
+  var MIRROR_STATUS = {
+    OPEN: ['held', 'ok'], CLOSED: ['closed', 'done'],
+    PENDING: ['sending', 'busy'], CLOSING: ['closing', 'busy'],
+    FAILED: ['did not open', 'bad'], CLOSE_FAILED: ['CLOSE FAILED', 'alarm'],
+    SKIPPED: ['skipped', 'skip']
+  };
+
+  function mirrorAgo(at) {
+    if (!at) { return DASH; }
+    var s = Math.max(0, Date.now() / 1000 - at);
+    return s < 60 ? Math.round(s) + 's ago' : s < 3600
+      ? Math.round(s / 60) + 'm ago' : s < 86400
+      ? Math.round(s / 3600) + 'h ago' : anClock(at);
+  }
+
+  function mirrorLegs(legs) {
+    return (legs || []).map(function (l) {
+      return escapeHtml(l.side + ' ' + fmt(l.volume, 2) + ' ' +
+                        String(l.symbol).replace('-USDT-SWAP', ''));
+    }).join(' · ');
+  }
+
+  function mirrorPane(mr) {
+    /* THE MIRROR, built for ten or fifteen accounts: what needs a person
+     * first, then one row per follower, then one row per trade with every
+     * account's copy as a chip - opened out on a click. */
+    var sum = mr.summary || {};
+    var followers = (mr.followers || []).slice();
+    var attention = mr.attention || [];
+    var high = attention.filter(function (a) { return a.severity === 'high'; });
+    var low = attention.filter(function (a) { return a.severity !== 'high'; });
+    var html = '<div class="mr">';
+    // 1. THE TILES.
+    function tile(label, value, cls, title) {
+      return '<div class="mr-tile ' + (cls || '') + '"' + (title
+        ? ' title="' + escapeHtml(title) + '"' : '') + '><b>' + value +
+        '</b><span>' + label + '</span></div>';
+    }
+    html += '<div class="mr-tiles">' +
+      tile('followers', (sum.following || 0) + ' / ' + (sum.followers || 0),
+           '', 'following now / in the config') +
+      tile('copies held', sum.holding || 0, sum.holding ? 'ok' : '',
+           'copies open in follower accounts now') +
+      tile('Algo trades open', sum.open_trades || 0) +
+      tile('failed today', sum.failed_today || 0,
+           sum.failed_today ? 'bad' : '',
+           'copies that did not open (or close) today') +
+      tile('need attention', high.length, high.length ? 'alarm' : 'ok',
+           'an account still holding a copy whose trade has closed') +
+      tile('updated', mirrorAgo(mr.at)) + '</div>';
+    // 2. WHAT NEEDS A PERSON.
+    if (high.length || low.length) {
+      html += '<div class="mr-attn">' + high.concat(low).slice(0, 12)
+        .map(function (a) {
+          return '<div class="' + (a.severity === 'high' ? 'alarm' : 'bad') +
+            '"><b>' + escapeHtml(a.follower) + '</b> — ' +
+            (a.severity === 'high'
+              ? 'STILL HOLDS a copy of a closed trade: '
+              : 'copy did not open: ') + escapeHtml(a.why || '') +
+            ' <small>(' + escapeHtml(a.position_id) + ')</small></div>';
+        }).join('') + (high.length + low.length > 12
+          ? '<div class="hint">…and ' + (high.length + low.length - 12) +
+            ' more</div>' : '') + '</div>';
+    }
+    // 3. ONE ROW PER FOLLOWER - trouble first.
+    function rank(f) {
+      return (high.some(function (a) { return a.follower === f.name; }) ? 0
+        : f.last_error ? 1 : f.enabled ? 2 : 3);
+    }
+    followers.sort(function (a, b) {
+      return rank(a) - rank(b) || String(a.name).localeCompare(b.name);
+    });
+    html += '<h4>Followers <small>— each takes a multiple of every ' +
+      'Algo trade, in its own account</small></h4>' +
+      '<table class="mr-table"><thead><tr><th class="l">Follower</th>' +
+      '<th>Multiple</th><th>Status</th><th>Account</th>' +
+      '<th class="l">Ladders</th><th>Holding</th>' +
+      '<th title="today: copies that went on / did not / were skipped">' +
+      'Today ✓ / ✗ / skip</th><th>Last action</th>' +
+      '<th class="l">Last error</th></tr></thead><tbody>' +
+      followers.map(function (f) {
+        var alarm = high.some(function (a) { return a.follower === f.name; });
+        return '<tr class="' + (alarm ? 'alarm-row' : '') + '">' +
+          '<td class="l"><b>' + escapeHtml(f.name) + '</b></td>' +
+          '<td>×' + fmt(f.multiple, 2) + '</td>' +
+          '<td><span class="mr-pill ' + (f.enabled ? 'ok' : 'skip') + '">' +
+          (f.enabled ? 'following' : 'off — closes only') +
+          '</span></td><td>' + (f.demo ? 'demo'
+            : '<span class="mr-pill alarm">LIVE</span>') + '</td>' +
+          '<td class="l">' + (f.pairs ? escapeHtml(f.pairs.join(', '))
+            : 'every ladder') + '</td>' +
+          '<td>' + (f.holding ? '<b class="up">' + f.holding + '</b>' : '0') +
+          '</td><td>' + (f.copied_today || 0) + ' / ' +
+          '<span class="' + (f.failed_today ? 'down' : '') + '">' +
+          (f.failed_today || 0) + '</span> / ' + (f.skipped_today || 0) +
+          '</td><td>' + mirrorAgo(f.last_at) + '</td>' +
+          '<td class="l down mr-why">' + escapeHtml(f.last_error || '') +
+          '</td></tr>';
+      }).join('') + '</tbody></table>';
+    // 4. ONE ROW PER TRADE, every account as a chip.
+    var trades = mr.trades || [];
+    state.mirrorOpen = state.mirrorOpen || {};
+    html += '<h4>Copied trades <small>— newest first. Click a trade ' +
+      'for each account’s legs and reason. A trade first seen more ' +
+      'than ' + fmt(mr.open_window_sec, 0) + 's after it opened is not ' +
+      'copied.</small></h4><table class="mr-table mr-trades"><thead><tr>' +
+      '<th></th><th>Opened</th><th class="l">Ladder</th><th>Trade</th>' +
+      '<th class="l">Legs</th><th class="l">Copies</th></tr></thead><tbody>';
+    if (!trades.length) {
+      html += '<tr><td colspan="6" class="hint">No Algo trade since the ' +
+        'mirror was switched on.</td></tr>';
+    }
+    trades.forEach(function (t) {
+      var open = !!state.mirrorOpen[t.position_id];
+      var counts = t.counts || {};
+      var tally = Object.keys(counts).sort(function (a, b) {
+        var order = ['CLOSE_FAILED', 'FAILED', 'PENDING', 'CLOSING', 'OPEN',
+                     'CLOSED', 'SKIPPED'];
+        return order.indexOf(a) - order.indexOf(b);
+      }).map(function (k) {
+        var st = MIRROR_STATUS[k] || [k, ''];
+        return '<span class="mr-pill ' + st[1] + '">' + counts[k] + ' ' +
+          st[0] + '</span>';
+      }).join(' ');
+      var names = Object.keys(t.followers || {}).sort();
+      html += '<tr class="mr-trade" data-pid="' + escapeHtml(t.position_id) +
+        '"><td class="mr-caret">' + (open ? '▾' : '▸') + '</td>' +
+        '<td>' + (t.opened_at ? anClock(t.opened_at) : DASH) + '</td>' +
+        '<td class="l">' + escapeHtml(t.pair_key || '') + '</td><td>' +
+        (t.gone ? 'closed' : '<b class="up">open</b>') + '</td>' +
+        '<td class="l">' + mirrorLegs(t.legs) + '</td>' +
+        '<td class="l">' + (tally || '<span class="hint">no follower ' +
+          'on this ladder</span>') + '<div class="mr-chips">' +
+        names.map(function (n) {
+          var f = t.followers[n], st = MIRROR_STATUS[f.status] ||
+            [f.status, ''];
+          return '<span class="mr-chip ' + st[1] + '" title="' +
+            escapeHtml(n + ': ' + st[0] + (f.why ? ' — ' + f.why : '')) +
+            '">' + escapeHtml(n) + '</span>';
+        }).join('') + '</div></td></tr>';
+      if (open) {
+        html += '<tr class="mr-detail"><td></td><td colspan="5">' +
+          '<table class="mr-table mr-inner"><thead><tr>' +
+          '<th class="l">Account</th><th>Status</th><th class="l">Its legs' +
+          '</th><th class="l">Reason</th></tr></thead><tbody>' +
+          names.map(function (n) {
+            var f = t.followers[n], st = MIRROR_STATUS[f.status] ||
+              [f.status, ''];
+            return '<tr><td class="l"><b>' + escapeHtml(n) + '</b></td>' +
+              '<td><span class="mr-pill ' + st[1] + '">' + st[0] +
+              '</span></td><td class="l">' + (mirrorLegs(f.legs) || DASH) +
+              '</td><td class="l mr-why">' + escapeHtml(f.why || '') +
+              '</td></tr>';
+          }).join('') + '</tbody></table></td></tr>';
+      }
+    });
+    return html + '</tbody></table></div>';
+  }
+
   function sizingSheetHtml() {
     /* THE PRINTABLE SIZING SHEET: the table as the Sizing tab shows it
      * now, with the settings it was worked out on, as a page of its own
@@ -6281,7 +6441,9 @@
         '<button data-tab="accounts">Accounts</button>' +
         '<button data-tab="reconcile">Reconciler</button>' +
         '<button data-tab="analysis">Analysis</button>' +
-        '<button data-tab="sizing">Sizing</button></div>' +
+        '<button data-tab="sizing">Sizing</button>' +
+        // Only while the mirror is switched on in config.json.
+        '<button data-tab="mirror" hidden>Mirror</button></div>' +
         // `monitor-note`, not `note`: the panes have notes of their own,
         // and a bare `.note` selector reaches into them and overwrites
         // the first one it finds.
@@ -6383,6 +6545,11 @@
       });
       el('desktop').appendChild(node);
     }
+    var mirrorOn = !!(state.snapshot && state.snapshot.mirror);
+    if (!mirrorOn && state.monitorTab === 'mirror') {
+      state.monitorTab = 'positions';
+    }
+    node.querySelector('.tabs button[data-tab="mirror"]').hidden = !mirrorOn;
     Array.prototype.forEach.call(node.querySelectorAll('.tabs button'),
       function (button) {
         button.classList.toggle('on', button.dataset.tab === state.monitorTab);
@@ -6429,6 +6596,9 @@
     else if (state.monitorTab === 'sizing') {
       pane.innerHTML = sizingPane();
     }
+    else if (state.monitorTab === 'mirror') {
+      pane.innerHTML = mirrorPane(state.snapshot.mirror || {});
+    }
     else { pane.innerHTML = reconcileTable(); }
     node.querySelector('.monitor-note').textContent =
       state.monitorTab === 'sizing'
@@ -6436,6 +6606,11 @@
         'leverage of the ETH vs BTC ladder and OKX\u2019s UAE (AED) ' +
         'futures fee schedule. Target is the profit after every cost; ' +
         'stop is the whole loss. Nothing here sends an order.'
+      : state.monitorTab === 'mirror'
+      ? 'The Algo\u2019s trades, copied into each follower account at its ' +
+        'multiple, and closed when the trade closes. Set in config.json ' +
+        '(mirror); each follower\u2019s API key is in .env. The desk\u2019s ' +
+        'own positions are never touched.'
       : state.monitorTab === 'analysis'
       ? 'Built from what is recorded: closed positions, the Algo\u2019s ' +
         'own audit trail and the trackers. Nothing here sends an order. ' +
@@ -8911,6 +9086,13 @@
       render();
       return;
     }
+    var trade = e.target.closest('.mr-trade');
+    if (trade) {
+      state.mirrorOpen = state.mirrorOpen || {};
+      state.mirrorOpen[trade.dataset.pid] = !state.mirrorOpen[trade.dataset.pid];
+      render();
+      return;
+    }
     var button = e.target.closest('button');
     if (!button) { return; }
     if (button.classList.contains('sz-reset')) {
@@ -9890,7 +10072,7 @@
     panelId: panelId, openPanel: openPanel, closePanel: closePanel,
     fmt: fmt, money: money, DASH: DASH,
     tidyWindows: tidyWindows, tileWindows: tileWindows, sound: sound,
-    sizingPane: sizingPane, sizingRow: sizingRow, meanExitWords: meanExitWords, volumeProfile: volumeProfile, addSizeWords: addSizeWords, sizingSheetHtml: sizingSheetHtml,
+    sizingPane: sizingPane, sizingRow: sizingRow, meanExitWords: meanExitWords, volumeProfile: volumeProfile, addSizeWords: addSizeWords, sizingSheetHtml: sizingSheetHtml, mirrorPane: mirrorPane,
     showFairWindow: showFairWindow, setAlgo: setAlgo,
     calcPosition: calcPosition,
     toastOutcome: toastOutcome

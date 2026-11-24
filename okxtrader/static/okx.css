@@ -241,3 +241,46 @@
 .window.chartwin .cw-vp-toggle.on { background: #2f6fb0; color: #fff;
   border-color: #1f4f80; }
 .window.chartwin .cw-vp { pointer-events: none; }
+
+/* THE MIRROR TAB - ten or fifteen accounts at a glance. */
+.monitor .mr { padding: 4px 6px; }
+.monitor .mr-tiles { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 8px; }
+.monitor .mr-tile { flex: 1 1 110px; background: #fff; border: 1px solid #c9cfd8;
+  border-top: 3px solid #16324f; padding: 4px 8px; display: flex; flex-direction: column; }
+.monitor .mr-tile b { font-size: 18px; line-height: 1.2; }
+.monitor .mr-tile span { font-size: 10px; color: #6b7280; text-transform: uppercase;
+  letter-spacing: .04em; }
+.monitor .mr-tile.ok { border-top-color: #198754; }
+.monitor .mr-tile.bad { border-top-color: #d97706; }
+.monitor .mr-tile.bad b { color: #b45309; }
+.monitor .mr-tile.alarm { border-top-color: #b42318; background: #fdecea; }
+.monitor .mr-tile.alarm b { color: #b42318; }
+.monitor .mr-attn { border: 1px solid #f0b4ad; background: #fff7f6; padding: 4px 8px;
+  margin-bottom: 8px; font-size: 12px; }
+.monitor .mr-attn .alarm { color: #b42318; }
+.monitor .mr-attn .bad { color: #92400e; }
+.monitor table.mr-table { border-collapse: collapse; width: 100%; margin-bottom: 8px;
+  background: #fff; font-size: 12px; }
+.monitor table.mr-table th { background: #16324f; color: #fff; font-weight: 600;
+  padding: 3px 6px; text-align: center; white-space: nowrap; }
+.monitor table.mr-table td { border-bottom: 1px solid #e3e7ec; padding: 3px 6px;
+  text-align: center; vertical-align: top; }
+.monitor table.mr-table .l { text-align: left; }
+.monitor table.mr-table tr.alarm-row td { background: #fdecea; }
+.monitor .mr-why { white-space: normal; max-width: 380px; font-size: 11px; }
+.monitor .mr-pill, .monitor .mr-chip { display: inline-block; padding: 0 6px; border-radius: 9px;
+  font-size: 11px; line-height: 17px; border: 1px solid transparent; white-space: nowrap; }
+.monitor .mr-chips { margin-top: 3px; display: flex; flex-wrap: wrap; gap: 3px; }
+.monitor .mr-chip { border-radius: 3px; padding: 0 5px; font-size: 10.5px; }
+.monitor .mr-pill.ok, .monitor .mr-chip.ok { background: #dcf3e5; color: #0f5132; border-color: #a3d9b8; }
+.monitor .mr-pill.done, .monitor .mr-chip.done { background: #eef1f4; color: #374151; border-color: #d5dae1; }
+.monitor .mr-pill.busy, .monitor .mr-chip.busy { background: #e6f0fb; color: #1e4f8a; border-color: #b6d0ee; }
+.monitor .mr-pill.bad, .monitor .mr-chip.bad { background: #fff1db; color: #92400e; border-color: #f5c97a; }
+.monitor .mr-pill.alarm, .monitor .mr-chip.alarm { background: #b42318; color: #fff; border-color: #b42318; font-weight: 700; }
+.monitor .mr-pill.skip, .monitor .mr-chip.skip { background: #f6f6f6; color: #8a919c; border-color: #e1e4e8; }
+.monitor tr.mr-trade { cursor: pointer; }
+.monitor tr.mr-trade:hover td { background: #f3f6fa; }
+.monitor .mr-caret { color: #6b7280; width: 14px; }
+.monitor tr.mr-detail > td { background: #f8fafc; }
+.monitor table.mr-inner { margin: 2px 0 4px; }
+.monitor table.mr-inner th { background: #e3e8ef; color: #1f2933; }

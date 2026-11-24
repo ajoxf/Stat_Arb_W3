@@ -440,3 +440,90 @@ def test_the_trade_and_its_add_share_one_averaged_set_of_levels(ready):
     # One target worth the sum of what each fill makes there.
     assert a['averaged']['tp_money'] == pytest.approx(
         a['tp_money'] + b['tp_money'], abs=0.02)
+
+
+class FakeFollowerBroker:
+    """A follower account that records what it is sent."""
+
+    def __init__(self):
+        self.sent, self.closed, self.next = [], [], 100
+
+    def symbol_info(self, symbol):
+        import types
+        return types.SimpleNamespace(volume_step=0.01, volume_min=0.01)
+
+    def send_market_order(self, symbol, side, volume, **kw):
+        from okxtrader.okx_broker import OrderResult
+        self.next += 1
+        self.sent.append((symbol, side.value, volume))
+        return OrderResult(True, executed_price=1.0, ticket=self.next,
+                           volume=volume)
+
+    def close_position_ticket(self, symbol, ticket, volume, side, **kw):
+        from okxtrader.okx_broker import OrderResult
+        self.closed.append((symbol, ticket, volume))
+        return OrderResult(True, ticket=ticket, volume=volume)
+
+
+def test_the_mirror_follows_a_LIVE_trade_in_and_out(ready, tmp_path):
+    """The Algo opens a trade: each follower gets the same spread at its
+    multiple. The trade closes: so does the copy. The desk's own book is
+    the desk's alone."""
+    from okxtrader import mirror as m
+    config, pair, legs = ready
+    clock = Clock()
+    coordinator = engine(config, legs, clock=clock)
+    follower = FakeFollowerBroker()
+    coordinator.mirror = m.Mirror(
+        [m.Follower('c1', 0.5, broker=follower)],
+        str(tmp_path / 'mirror_state.json'), clock=clock,
+        background=False)
+    live(coordinator, pair)
+    quote_b(legs, STRETCH)
+    coordinator.poll_once()
+    [position] = coordinator.book.positions(pair.key)
+    assert len(follower.sent) == 2
+    symbols = {s for s, _side, _v in follower.sent}
+    assert symbols == {position.leg_a.symbol, position.leg_b.symbol}
+    for symbol, side, volume in follower.sent:
+        fill = (position.leg_a if symbol == position.leg_a.symbol
+                else position.leg_b)
+        assert side == fill.side.value
+        assert volume == pytest.approx(
+            m.round_down(fill.volume * 0.5, 0.01, 0.01))
+    snap = coordinator.snapshot()['mirror']
+    assert snap['trades'][0]['followers']['c1']['status'] == m.OPEN
+    # The Algo exits: the copy closes.
+    quote_b(legs, BACK)
+    coordinator.poll_once()
+    coordinator.poll_once()
+    assert coordinator.book.positions(pair.key) == []
+    assert len(follower.closed) == 2
+    record = coordinator.mirror.records[position.position_id]
+    assert record['followers']['c1']['status'] == m.CLOSED
+
+
+def test_without_a_mirror_section_the_desk_is_as_it_was(ready):
+    config, pair, legs = ready
+    coordinator = engine(config, legs)
+    assert getattr(coordinator, 'mirror', None) is None
+    assert coordinator.snapshot()['mirror'] is None
+
+
+def test_the_mirror_starts_from_config_json_and_connects_only_when_needed(
+        ready, tmp_path):
+    import json as json_module
+    config, pair, legs = ready
+    path = tmp_path / 'config.json'
+    path.write_text(json_module.dumps({'accounts': {}, 'pairs': {},
+        'mirror': {'enabled': True, 'open_window_sec': 30, 'followers': [
+            {'name': 'client one', 'multiple': 0.25, 'demo': True}]}}))
+    config.path = str(path)
+    coordinator = engine(config, legs)
+    follower = coordinator.mirror.followers['client one']
+    assert follower.multiple == 0.25 and coordinator.mirror.open_window_sec \
+        == 30
+    # No order yet, so no connection was made.
+    assert follower._broker is None
+    assert coordinator.snapshot()['mirror']['followers'][0]['name'] == \
+        'client one'
