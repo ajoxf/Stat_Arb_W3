@@ -72,3 +72,76 @@ def test_a_masked_report_does_not_give_the_capital_away():
         assert '$1,000.00' not in page, mode
     page = report.render(body, {}, 7, None, 1_700_100_000)
     assert '$1,000.00' in page
+
+
+# -- the client's report -------------------------------------------------------
+
+def _client_body(capital=1000):
+    rows = [_trip(0, 1.0), _trip(1, -0.5, side='SELL', source='MANUAL'),
+            _trip(30, 2.0)]
+    return analysis.report(rows, now=1_700_200_000, capital=capital)
+
+
+def _text(page):
+    """What a reader sees: the page without its style sheet or tags."""
+    import re
+    page = re.sub(r'<style>.*?</style>', ' ', page, flags=re.S)
+    return re.sub(r'<[^>]+>', ' ', page)
+
+
+TRADE_DETAILS = ('ETH vs BTC perps', 'ethbtc', 'Short', 'Long', 'Manual', 'Algo',
+                 'take profit', 'Trade journal', 'Breakdown', 'Win rate',
+                 'Trades closed', 'margin', '-20.00')
+
+
+def test_the_client_report_says_nothing_of_what_was_traded():
+    page = report.render_client(_client_body(), 7, 1_700_200_000,
+                                logo=report.NEXUS_MARK)
+    for word in TRADE_DETAILS:
+        assert word not in _text(page), word
+    assert '+0.25%' in page and '+$2.50' in page     # the returns stay
+    assert 'Returns by day' in page
+
+
+def test_CONTROL_the_trader_report_says_all_of_it():
+    page = report.render(_client_body(), {'ethbtc': 'ETH vs BTC perps'}, 7, None,
+                         1_700_200_000, logo=report.NEXUS_MARK)
+    for word in ('ETH vs BTC perps', 'Short', 'Manual', 'Algo',
+                 'Trade journal', 'Win rate', 'margin', '-20.00'):
+        assert word in _text(page), word
+
+
+def test_the_client_report_sums_by_day_never_by_trade():
+    """Two trades closed on one day are ONE row: the count is not given
+    away by the table."""
+    page = report.render_client(_client_body(), 7, 1_700_200_000)
+    body = page[page.index('<tbody>'):page.index('</tbody>')]
+    assert body.count('<tr>') == 2                  # 3 trades, 2 days
+    assert '+$0.50' in body and '+$2.00' in body    # 1.0 - 0.5 ; 2.0
+    assert '+0.05%' in body and '+0.25%' in body    # cumulative on $1,000
+
+
+def test_a_long_period_is_summed_by_month():
+    page = report.render_client(_client_body(), 0, 1_700_200_000)
+    assert 'Returns by month' in page and '<th class="l">Month</th>' in page
+    # Control: a week is by day.
+    assert 'Returns by day' in report.render_client(_client_body(), 7,
+                                                    1_700_200_000)
+
+
+def test_the_client_report_masks_and_hides_the_money():
+    body = _client_body()
+    masked = report.render_client(body, 7, 1_700_200_000, pnl='mask')
+    hidden = report.render_client(body, 7, 1_700_200_000, pnl='hide')
+    for page in (masked, hidden):
+        assert '+$' not in page and '$1,000.00' not in page
+        assert '+0.25%' in page                     # % on capital stays
+    assert report.MASK in masked and '<th>Net P&amp;L</th>' in masked
+    assert '<th>Net P&amp;L</th>' not in hidden
+    shown = report.render_client(body, 7, 1_700_200_000)
+    assert '+$2.50' in shown and '$1,000.00' in shown          # control
+
+
+def test_without_capital_the_client_report_says_so():
+    page = report.render_client(_client_body(capital=0), 7, 1_700_200_000)
+    assert 'capital not set' in page and 'not set' in page

@@ -622,9 +622,15 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
         def link(mode):
             query = dict(request.args.items(), pnl=mode)
             return '/report?' + urlencode(query)
-        page = trade_report.render(body, names, days, pair_key, now,
-                                   logo=trade_report.logo_html(folder),
-                                   pnl=pnl, link=link)
+        if request.args.get('view') == 'client':
+            # Returns only: never what was traded, or how often.
+            page = trade_report.render_client(
+                body, days, now, logo=trade_report.logo_html(folder),
+                pnl=pnl, link=link)
+        else:
+            page = trade_report.render(body, names, days, pair_key, now,
+                                       logo=trade_report.logo_html(folder),
+                                       pnl=pnl, link=link)
         response = app.make_response(page)
         response.headers['Content-Type'] = 'text/html; charset=utf-8'
         response.headers['Cache-Control'] = 'no-store'
