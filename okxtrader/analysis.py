@@ -759,35 +759,44 @@ def _liquidity(kinds):
     return 'M+T'
 
 
-def attach_fills(journal, positions, fills):
-    """MAKER OR TAKER, and THE FEES, per trade - from OKX's own fills.
+def trade_fees(positions, fills):
+    """THE FEES OKX ACTUALLY CHARGED, per trade: {position id: {'fills'
+    (maker / taker per leg and end), 'maker', 'taker' (their cost, a
+    rebate negative), 'n_maker', 'n_taker', 'priced', 'complete' (fills
+    seen at both ends of both legs)}}.
 
     Each fill names the position ticket it opened or closed; each leg of
-    a position lists its tickets. So every trade gets, per leg and end,
-    whether OKX filled it as maker ('M'), taker ('T') or both ('M+T'),
-    and the fees OKX actually charged (a cost is positive, a maker
-    rebate negative), split maker / taker. A trade whose fills are not
-    in the journal keeps the desk's own estimate (`fees`), said as one
-    (`fees_source`). Then the running tally of fees, in close order,
-    and the totals. Returns the tally."""
+    a position lists its tickets. A fill counts once, and only while its
+    trade was alive."""
     by_ticket = {}
     for f in fills or ():
         ticket = f.get('position_ticket')
         if ticket not in (None, ''):
             by_ticket.setdefault(str(ticket), []).append(f)
-    legs_of = {p.get('position_id'): p for p in positions or ()}
+
+    def in_life(f, position):
+        # A quarter of an hour either side, for the broker's clock and a
+        # close that settles late. Tickets are the broker ledger's own
+        # numbers: a reset ledger starts them again, and an old fill
+        # with the same number must not be charged to a new trade.
+        at = f.get('broker_time_ms')
+        opened = position.get('opened_at')
+        if at is None or opened is None:
+            return True
+        at = at / 1000.0 - float(f.get('server_offset_s') or 0.0)
+        closed = position.get('closed_at') or opened
+        return opened - 900 <= at <= closed + 900
     seen = set()
-    tally = {'fees': 0.0, 'maker_fees': 0.0, 'taker_fees': 0.0,
-             'maker_fills': 0, 'taker_fills': 0, 'measured': 0,
-             'estimated': 0, 'trades': 0}
-    for row in journal or ():
-        position = legs_of.get(row.get('position_id')) or {}
+    out = {}
+    for position in sorted(positions or (), key=lambda p: (
+            p.get('closed_at') or float('inf'), str(p.get('position_id')))):
         fills_of = {}
         found = []
         for leg in ('a', 'b'):
             tickets = ((position.get('leg_' + leg) or {})
                        .get('position_tickets') or ())
-            mine = [f for t in tickets for f in by_ticket.get(str(t), ())]
+            mine = [f for t in tickets for f in by_ticket.get(str(t), ())
+                    if in_life(f, position)]
             for end, label in (('open', 'entry'), ('close', 'exit')):
                 fills_of[f'{label}_{leg}'] = _liquidity(
                     (f.get('order_type') or '').lower() for f in mine
@@ -816,7 +825,59 @@ def attach_fills(journal, positions, fills):
                 maker += cost
             else:
                 taker += cost
+        out[position.get('position_id')] = {
+            'fills': fills_of, 'maker': maker, 'taker': taker,
+            'n_maker': n_maker, 'n_taker': n_taker, 'priced': priced,
+            'complete': priced and all(fills_of.values())}
+    return out
+
+
+def with_okx_fees(positions, fills):
+    """The positions with each closed trade's NET P&L worked out from the
+    fees OKX ACTUALLY CHARGED - the gross move, from the fill prices,
+    less those fees - wherever its fills are on record at both ends of
+    both legs. Otherwise the desk's own (the fee estimated at the
+    account's rates) stands. Copies; the record is not touched.
+
+    Every figure built after this - the journal, the summary, the
+    drawdown, both reports - is then on OKX's fees."""
+    fees = trade_fees(positions, fills)
+    out = []
+    for position in positions or ():
+        row = dict(position)
+        got = fees.get(row.get('position_id')) or {}
+        gross = _gross(row)
+        if row.get('closed_at') is not None and got.get('complete') \
+                and gross is not None:
+            row['desk_pnl'] = row.get('realized_pnl')
+            row['realized_pnl'] = gross - (got['maker'] + got['taker'])
+            row['fees_from'] = 'OKX'
+        out.append(row)
+    return out
+
+
+def attach_fills(journal, positions, fills):
+    """MAKER OR TAKER, and THE FEES, per trade - from OKX's own fills
+    (`trade_fees`): per leg and end, whether OKX filled it as maker
+    ('M'), taker ('T') or both ('M+T'), and the fees it charged, split
+    maker / taker. A trade whose fills are not in the journal keeps the
+    desk's own estimate (`fees`), said as one (`fees_source`). Then the
+    running tally of fees, in close order, and the totals. Returns the
+    tally."""
+    fees = trade_fees(positions, fills)
+    tally = {'fees': 0.0, 'maker_fees': 0.0, 'taker_fees': 0.0,
+             'maker_fills': 0, 'taker_fills': 0, 'measured': 0,
+             'estimated': 0, 'trades': 0}
+    for row in journal or ():
+        got = fees.get(row.get('position_id')) or {
+            'fills': {}, 'maker': 0.0, 'taker': 0.0, 'n_maker': 0,
+            'n_taker': 0, 'priced': False}
+        fills_of = got['fills']
+        maker, taker = got['maker'], got['taker']
+        n_maker, n_taker = got['n_maker'], got['n_taker']
+        priced = got['priced']
         row['fills'] = fills_of
+        notional = row.get('notional')
         row['maker_fills'], row['taker_fills'] = n_maker, n_taker
         if priced:
             row['okx_fees'] = round(maker + taker, 4)
@@ -828,10 +889,17 @@ def attach_fills(journal, positions, fills):
             row['okx_fees'] = row['maker_fees'] = row['taker_fees'] = None
             row['fee'] = row.get('fees')
             row['fees_source'] = None if row['fee'] is None else 'estimate'
+        # THE CHECK: fees in basis points of both legs' notional. Both
+        # ends at maker on each leg is 2 x the maker rate; at taker,
+        # 2 x the taker rate (4 and 10 bp at OKX's 2 / 5 bp).
+        row['fees_bp_notional'] = (round(row['fee'] / notional * 1e4, 2)
+                                   if row.get('fee') is not None and notional
+                                   else None)
     # The running tally, in the order the trades closed (the journal is
     # newest first).
     running = 0.0
     gross_total = fees_on_gross = 0.0
+    notional_total = fees_on_notional = 0.0
     for row in reversed(journal or ()):
         gross = row.get('gross_pnl')
         # FEES AS A SHARE OF THE GROSS: what the costs took out of what
@@ -843,6 +911,9 @@ def attach_fills(journal, positions, fills):
         if row.get('fee') is not None and gross is not None:
             gross_total += gross
             fees_on_gross += row['fee']
+        if row.get('fee') is not None and row.get('notional'):
+            notional_total += row['notional']
+            fees_on_notional += row['fee']
         if row.get('fee') is not None:
             running += row['fee']
             tally['trades'] += 1
@@ -857,6 +928,8 @@ def attach_fills(journal, positions, fills):
         row['cum_fees'] = round(running, 2) if tally['trades'] else None
     tally['fees'] = round(running, 2)
     tally['gross'] = round(gross_total, 2)
+    tally['fees_bp_notional'] = (round(fees_on_notional / notional_total
+                                       * 1e4, 2) if notional_total else None)
     tally['fees_pct_gross'] = (round(100.0 * fees_on_gross / gross_total, 2)
                                if gross_total > 0 else None)
     tally['maker_fees'] = round(tally['maker_fees'], 2)

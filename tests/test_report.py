@@ -1,4 +1,5 @@
 """The printable trading report, from the Analysis record."""
+import json
 
 from okxtrader import analysis, report
 
@@ -288,3 +289,92 @@ def test_each_trade_says_how_much_of_the_capital_it_used():
     hidden = report.render(body, {'ethbtc': 'ETH vs BTC'}, 7, None,
                            1_700_100_000, pnl='hide')
     assert '<td>45.4%</td>' in hidden
+
+
+# -- the client report: one base, one source, the table's own basis ----------
+
+def _closing(at, pnl, trough=None):
+    return {'position_id': f'c{at}', 'pair_key': 'ethbtc', 'side': 'BUY',
+            'quantity': 1.0, 'opened_at': at - 600, 'closed_at': at,
+            'realized_pnl': pnl, 'trough_pnl': trough}
+
+
+def test_the_client_totals_are_the_tables_own_to_the_cent():
+    # Three trades whose cents do not add up the same rounded and raw.
+    day = 1_700_006_400                               # 00:00 UTC
+    rows = [_closing(day + 3600, 0.005), _closing(day + 7200, 0.005),
+            _closing(day + 10800, 0.005)]
+    page = report.render_client(analysis.report(rows, now=day + 86000,
+                                                capital=1000), 7,
+                                day + 86000)
+    body = page[page.index('<tbody>'):page.index('</tbody>')]
+    net_tile = page[page.index('Net P&amp;L</div>'):][:120]
+    # Whatever the cents, the tile says what the table's last row says.
+    last = body.split('<tr>')[-1]
+    import re
+    tile_money = re.search(r'\$[\d.,]+', net_tile).group(0)
+    assert tile_money in last
+
+
+def test_a_client_day_is_a_utc_day():
+    # 23:30 UTC on 14 Nov 2023 - the 15th in Dubai (UTC+4), the 14th here.
+    at = 1_700_004_600
+    page = report.render_client(analysis.report([_closing(at, 5.0)],
+                                                now=at + 60, capital=1000),
+                                7, at + 60)
+    assert 'Tue 14 Nov 2023' in page
+
+
+def test_the_client_drawdown_is_one_the_table_shows():
+    """Day ends: +220, +290 (the peak), +20 - a fall of 270 the client
+    can find in the table. Within the days a trade went deeper; that is
+    said beside it, not instead of it."""
+    d = 1_700_006_400
+    rows = [_closing(d + 3600, 220.0), _closing(d + 86400 + 3600, 70.0),
+            _closing(d + 2 * 86400 + 3600, -270.0, trough=-380.0)]
+    page = report.render_client(analysis.report(rows, now=d + 3 * 86400,
+                                                capital=1000), 7,
+                                d + 3 * 86400)
+    tile = _text(page[page.index('Max drawdown'):][:400])
+    assert '−27.00%' in tile                          # 270 on 1,000
+    assert 'Within a day' in tile
+
+
+def test_the_client_report_counts_trades_by_close_from_the_start_capital(
+        tmp_path):
+    """A trade opened before the period and closed in it is the period's
+    result; the capital is the balance less what was made since the
+    start and less the open P&L now."""
+    import time as _time
+    from okxtrader.database import Store
+    from okxtrader.models import SpreadPosition
+    from okxtrader.webapp import create_app
+    now = _time.time()
+    status = tmp_path / 'status.json'
+    status.write_text(json.dumps({
+        'at': now, 'engine': 'up',
+        'accounts': {'okx': {'equity': 3744.0}},
+        'pairs': {'A|B': {'leg_a_account': 'okx', 'leg_b_account': 'okx',
+                          'open_pnl': -44.0}}}))
+    (tmp_path / 'config.json').write_text('{"accounts": {}, "pairs": {}}')
+    store = Store(str(tmp_path / 'x.db'))
+    leg = {'side': 'BUY', 'volume': 1.0, 'price': 1.0, 'contract_size': 1.0,
+           'symbol': 'X', 'account': 'okx'}
+    for pid, opened, closed, pnl in (
+            ('old', now - 10 * 86400, now - 9 * 86400, 1000.0),  # before
+            ('across', now - 9 * 86400, now - 2 * 86400, 200.0),
+            ('inside', now - 86400, now - 3600, 88.0)):
+        store.save_position(SpreadPosition.from_dict({
+            'position_id': pid, 'pair_key': 'A|B', 'side': 'BUY',
+            'quantity': 1.0, 'spread_units': 1.0, 'entry_spread': 1.0,
+            'opened_at': opened, 'closed_at': closed, 'realized_pnl': pnl,
+            'leg_a': dict(leg, side='SELL'), 'leg_b': leg}))
+    app = create_app(str(status), str(tmp_path / 'c.jsonl'),
+                     str(tmp_path / 'r.json'), str(tmp_path / 'config.json'),
+                     db_path=str(tmp_path / 'x.db'))
+    page = app.test_client().get('/report?view=client&days=7') \
+        .get_data(as_text=True)
+    # 3,744 - (200 + 88) made in the week - (-44) open = 3,500.
+    assert '$3,500.00 (balance at the period start)' in page
+    # +288 on 3,500: the trade opened before the week is counted.
+    assert '+$288.00' in page and '+8.23%' in page

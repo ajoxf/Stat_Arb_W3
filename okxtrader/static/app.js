@@ -7938,13 +7938,16 @@ function anFillsCell(t) {
 // THE FEES one trade paid: OKX's, or the desk's estimate marked ~.
 function anFeeCell(t) {
   if (t.fee === null || t.fee === undefined) return '<td>' + DASH + '</td>';
+  var bp = t.fees_bp_notional === null || t.fees_bp_notional === undefined
+    ? '' : ' \u00b7 ' + fmt(t.fees_bp_notional, 1) + ' bp of notional';
   if (t.fees_source === 'OKX') {
     return '<td title="maker ' + escapeHtml(money(t.maker_fees)) +
-      ' \u00b7 taker ' + escapeHtml(money(t.taker_fees)) + ' (OKX)">' +
-      money(t.fee) + '</td>';
+      ' \u00b7 taker ' + escapeHtml(money(t.taker_fees)) + ' (OKX)' + bp +
+      '">' + money(t.fee) + '</td>';
   }
-  return '<td class="hint" title="the desk\u2019s estimate: gross ' +
-    'less net">~' + money(t.fee) + '</td>';
+  return '<td class="hint" title="the desk\u2019s estimate (gross less ' +
+    'net, at your fee rates): OKX\u2019s own fills for this trade are not ' +
+    'in the journal' + bp + '">~' + money(t.fee) + '</td>';
 }
 
 // THE TALLY under the journal: every fee, maker against taker.
@@ -7957,6 +7960,10 @@ function feeTallyHtml(f, cash) {
     ' over ' + f.trades + ' trade(s)' +
     (f.fees_pct_gross === null || f.fees_pct_gross === undefined ? ''
       : ' = <b>' + fmt(f.fees_pct_gross, 1) + '% of gross</b>') +
+    (f.fees_bp_notional === null || f.fees_bp_notional === undefined ? ''
+      : ' \u00b7 <b>' + fmt(f.fees_bp_notional, 1) + ' bp</b> of notional' +
+        (f.expected_bp ? ' (all maker ' + fmt(f.expected_bp.maker, 1) +
+          ' bp, all taker ' + fmt(f.expected_bp.taker, 1) + ' bp)' : '')) +
     (f.measured ? ' \u00b7 <b>maker</b> ' + money(f.maker_fees) + ' (' +
       (f.maker_fills || 0) + ' fills) \u00b7 <b>taker</b> ' +
       money(f.taker_fees) + ' (' + (f.taker_fills || 0) + ' fills)' +
@@ -8702,7 +8709,10 @@ function anHeld(seconds) {
       'the desk\u2019s record, numbered in the order it closed \u2014 a ' +
       'trade keeps its number whatever this tab is showing">Trade no</th>' +
       '<th>Closed</th><th class="l">Pair</th>' +
-      '<th class="l">Side</th><th class="l">Who</th><th>Size</th><th>z in → out</th>' +
+      '<th class="l">Side</th><th class="l">Who</th><th>Size</th>' +
+      '<th title="The margin BOTH legs tied up at entry, at OKX\u2019s ' +
+      'leverage - the base the TP % and SL % are set on. ~ where it was ' +
+      'estimated from the leverage">Margin</th><th>z in → out</th>' +
       '<th>Spread in → out</th>' +
       '<th title="After every cost. The level the other two are ' +
       'measured from">Break-even</th>' +
@@ -8725,6 +8735,10 @@ function anHeld(seconds) {
       '<th title="The fees as a share of the gross P&amp;L: what the costs ' +
       'took out of what the spread move made. A dash where the move ' +
       'itself lost">Fees % of gross</th>' +
+      '<th title="The fees in basis points of both legs\u2019 notional. ' +
+      'At OKX\u2019s 2 bp maker / 5 bp taker, a round trip costs 4 bp if ' +
+      'every fill was maker and 10 bp if every fill was taker: a figure ' +
+      'outside that range is worth a look">Fees bp</th>' +
       (pnlHidden ? '' : '<th>Net P&amp;L</th>') +
       '<th title="net P&amp;L \u00f7 the margin BOTH legs tied up at entry - ' +
       'the base the TP % and SL % are set on. NET: after every fee">' +
@@ -8739,7 +8753,7 @@ function anHeld(seconds) {
       (pnlHidden ? '' : '<th>Running</th>') +
       '</tr></thead><tbody>';
     if (!trips.length) {
-      html += '<tr><td colspan="27" class="hint">no closed trade in this ' +
+      html += '<tr><td colspan="29" class="hint">no closed trade in this ' +
         'window</td></tr>';
     }
     trips.forEach(function (t) {
@@ -8749,7 +8763,9 @@ function anHeld(seconds) {
         name(t.pair_key) + '</td><td class="l">' + anSide(t.side) +
         '</td><td class="l">' +
         (t.source === 'ALGO' ? '<b>Algo</b>' : 'Manual') + '</td><td>' +
-        qty(t.quantity) + '</td><td>' + fmt(t.entry_z, 2) + ' → ' +
+        qty(t.quantity) + '</td><td>' + (t.margin ? (t.margin_estimated
+          ? '~' : '') + money(t.margin) : DASH) + '</td><td>' +
+        fmt(t.entry_z, 2) + ' → ' +
         fmt(t.exit_z, 2) + '</td><td>' + fmt(t.entry_spread, 4) + ' → ' +
         fmt(t.exit_spread, 4) + '</td>' +
         anLevel(x.break_even, false, x.note) +
@@ -8767,6 +8783,9 @@ function anHeld(seconds) {
           pnlCash(t.gross_pnl) + '</td>') + anFeeCell(t) +
         '<td>' + (t.fees_pct_gross === null || t.fees_pct_gross === undefined
           ? DASH : fmt(t.fees_pct_gross, 1) + '%') + '</td>' +
+        '<td>' + (t.fees_bp_notional === null ||
+          t.fees_bp_notional === undefined ? DASH
+          : fmt(t.fees_bp_notional, 1)) + '</td>' +
         (pnlHidden ? '' : '<td class="' + anSign(t.pnl) + '">' +
           pnlCash(t.pnl) + '</td>') + pctCell(t.pct_margin, 2, t.margin_estimated) +
         pctCell(t.pct_notional, 3, false) +
@@ -8787,7 +8806,9 @@ function anHeld(seconds) {
       anTile('Trades', s.count || 0) +
       anTile('Closed', s.closed || 0) +
       anTile('Net P&amp;L', pnlCash(s.net_pnl), anSign(s.net_pnl),
-           'realized, after the commission the settings charge') +
+           'realized, after the fees OKX actually charged (the desk\u2019s ' +
+           'estimate, marked ~, where a trade\u2019s fills are not on ' +
+           'record)') +
       anTile('Win rate', anPct(s.win_rate), '',
            (s.wins || 0) + ' won, ' + (s.losses || 0) + ' lost') +
       anTile('Return on margin', s.return_on_margin === null ||

@@ -1,6 +1,8 @@
 """The trade journal's maker / taker per leg and its fee tally, from
 OKX's own fills."""
 
+import pytest
+
 from okxtrader import analysis
 
 
@@ -123,3 +125,58 @@ def test_fees_are_read_as_a_share_of_the_gross():
     # A move that lost has no share: a dash, not a negative percent.
     assert p2['fees_pct_gross'] is None
     assert tally['gross'] == 30.0 and tally['fees_pct_gross'] == 30.0
+
+
+def test_an_old_fill_with_a_reused_ticket_is_not_charged_to_a_new_trade():
+    """A reset broker ledger numbers its tickets from 1001 again: an old
+    fill with the same ticket belongs to an old trade, not this one."""
+    trade = dict(position('P9', 2_000_000_000, 1001, 1002),
+                 opened_at=2_000_000_000 - 600)
+    journal = [{'position_id': 'P9', 'fees': 2.0, 'notional': 40000.0}]
+    ms = lambda at: int(at * 1000)
+    fills = [dict(fill('new1', 1001, 'open', 'maker', -4.0),
+                  broker_time_ms=ms(2_000_000_000 - 590)),
+             dict(fill('new2', 1002, 'close', 'maker', -4.0),
+                  broker_time_ms=ms(2_000_000_000 + 5)),
+             # A month earlier, same tickets: someone else's trade.
+             dict(fill('old1', 1001, 'open', 'taker', -10.0),
+                  broker_time_ms=ms(2_000_000_000 - 30 * 86400)),
+             dict(fill('old2', 1002, 'close', 'taker', -10.0),
+                  broker_time_ms=ms(2_000_000_000 - 30 * 86400 + 60))]
+    tally = analysis.attach_fills(journal, [trade], fills)
+    assert journal[0]['fee'] == 8.0
+    # 8 on 40,000 of notional: 2 bp.
+    assert journal[0]['fees_bp_notional'] == 2.0
+    assert tally['fees_bp_notional'] == 2.0
+    assert (tally['maker_fills'], tally['taker_fills']) == (2, 0)
+
+
+def test_net_pnl_is_worked_out_on_the_fees_okx_charged():
+    """Gross 30 (the spread's move x the size), OKX charged 1.20: net
+    28.80 - not the desk's own estimate of 26.00."""
+    trade = dict(position('P1', 1000, 11, 12, pnl=26.0),
+                 entry_spread=10.0, exit_spread=13.0, spread_units=10.0)
+    fills = [fill('d1', 11, 'open', 'maker', -0.20),
+             fill('d2', 12, 'open', 'maker', -0.20),
+             fill('d3', 11, 'close', 'maker', -0.30),
+             fill('d4', 12, 'close', 'taker', -0.50)]
+    [row] = analysis.with_okx_fees([trade], fills)
+    assert row['realized_pnl'] == pytest.approx(28.8)
+    assert row['desk_pnl'] == 26.0 and row['fees_from'] == 'OKX'
+    assert trade['realized_pnl'] == 26.0              # the record untouched
+    # The journal then reads the same fees two ways, and they agree.
+    journal = analysis.journal([row])
+    tally = analysis.attach_fills(journal, [row], fills)
+    assert journal[0]['fees'] == 1.2 and journal[0]['fee'] == 1.2
+    assert journal[0]['pnl'] == 28.8 and tally['fees'] == 1.2
+
+
+def test_a_trade_missing_a_legs_fills_keeps_the_desks_estimate():
+    trade = dict(position('P1', 1000, 11, 12, pnl=26.0),
+                 entry_spread=10.0, exit_spread=13.0, spread_units=10.0)
+    # Leg B's close is not in the journal: OKX's fees are not all known.
+    fills = [fill('d1', 11, 'open', 'maker', -0.20),
+             fill('d2', 12, 'open', 'maker', -0.20),
+             fill('d3', 11, 'close', 'maker', -0.30)]
+    [row] = analysis.with_okx_fees([trade], fills)
+    assert row['realized_pnl'] == 26.0 and 'fees_from' not in row

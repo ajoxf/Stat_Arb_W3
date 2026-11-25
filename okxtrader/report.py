@@ -397,6 +397,13 @@ def render(body, names=None, days=7.0, pair_key=None, now=None,
                              f' = <b>{tally["fees_pct_gross"]:.1f}% of '
                              f'gross</b>' if tally.get('fees_pct_gross')
                              is not None else ''))
+            if tally.get('fees_bp_notional') is not None:
+                expected = tally.get('expected_bp') or {}
+                parts.append(f'<b>{tally["fees_bp_notional"]:.1f} bp</b> of '
+                             'notional' + (
+                                 f' (all maker {expected["maker"]:.1f} bp, '
+                                 f'all taker {expected["taker"]:.1f} bp)'
+                                 if expected else ''))
             if tally.get('measured'):
                 parts.append(
                     f'<b>maker</b> {cash(tally.get("maker_fees"), sign=False)}'
@@ -546,7 +553,8 @@ AUDIENCES = ('trader', 'client')
 
 def _periods(trips, days, now):
     """Closed P&L summed by day (a month or less) or by month, oldest
-    first: [(label, pnl)]. Only the sums leave here - never a trade."""
+    first: [(label, pnl)]. Only the sums leave here - never a trade.
+    Days are UTC days, as everywhere else on the desk."""
     monthly = days <= 0 or days > 31
     fmt, label = ('%Y-%m', '%b %Y') if monthly else ('%Y-%m-%d',
                                                      '%a %d %b %Y')
@@ -554,7 +562,7 @@ def _periods(trips, days, now):
     for t in trips:
         if t.get('pnl') is None or t.get('closed_at') is None:
             continue
-        at = time.localtime(t['closed_at'])
+        at = time.gmtime(t['closed_at'])
         key = time.strftime(fmt, at)
         if key not in out:
             out[key] = [time.strftime(label, at), 0.0]
@@ -582,6 +590,21 @@ def render_client(body, days=7.0, now=None, logo='', desk_name='Nexus',
     def on_cap(x):
         return None if x is None or not capital else x / capital * 100.0
     monthly, periods = _periods(trips, days, now)
+    # ONE SOURCE for every total on the page: the periods' own sums, so
+    # the Net P&L tile is the table's last cumulative figure to the cent.
+    periods = [(label, round(value, 2)) for label, value in periods]
+    net = round(sum(v for _l, v in periods), 2) if periods else None
+    ret = None if net is None or not capital else net / capital * 100.0
+    # DRAWDOWN ON THE TABLE'S OWN BASIS: the worst fall of the
+    # cumulative result from a peak, period end to period end - a fall
+    # the client can find in the table. The deeper fall within a period
+    # (trade by trade, at each trade's worst point) is said beside it.
+    peak = running = fall = 0.0
+    for _label, value in periods:
+        running += value
+        peak = max(peak, running)
+        fall = max(fall, peak - running)
+    inner = max(d.get('max') or 0.0, d.get('open_max') or 0.0)
     best = max(periods, key=lambda p: p[1]) if periods else None
     worst = min(periods, key=lambda p: p[1]) if periods else None
     unit = 'month' if monthly else 'day'
@@ -590,20 +613,19 @@ def render_client(body, days=7.0, now=None, logo='', desk_name='Nexus',
         return (f'<div class="tile"><div class="tl">{label}</div>'
                 f'<div class="tv {cls}">{value}</div>'
                 f'<div class="tn">{note}</div></div>')
-    dd_pct = d.get('max_pct_capital')
     tiles = ''.join([
-        tile('Return on capital', pct(s.get('return_on_capital')),
-             tone(s.get('return_on_capital')),
+        tile('Return on capital', pct(ret), tone(ret),
              'after trading costs' if capital else 'capital not set'),
         '' if hide else
-        tile('Net P&amp;L', cash(s.get('net_pnl')), tone(s.get('net_pnl')),
-             'after trading costs'),
-        tile('Max drawdown', DASH if not d.get('max')
-             else pct(-dd_pct) if dd_pct is not None
-             else cash(-d['max']), 'down' if d.get('max') else '',
-             'worst fall from a peak' + (
-                 f', {cash(-d["max"])}' if d.get('max') and dd_pct is not None
-                 and pnl == 'show' else '')),
+        tile('Net P&amp;L', cash(net), tone(net), 'after trading costs'),
+        tile('Max drawdown', DASH if not periods
+             else pct(-on_cap(fall)) if capital else cash(-fall),
+             'down' if fall else '',
+             f'worst fall from a peak, {unit} end to {unit} end' + (
+                 f', {cash(-fall)}' if capital and pnl == 'show' and fall
+                 else '') + (
+                 f'. Within a {unit}: {pct(-on_cap(inner))}'
+                 if capital and inner > fall + 0.005 else '')),
         tile(f'Best {unit}', DASH if best is None else
              pct(on_cap(best[1])) if capital else cash(best[1]),
              tone(best and best[1]), _e(best[0]) if best else ''),
@@ -640,8 +662,10 @@ def render_client(body, days=7.0, now=None, logo='', desk_name='Nexus',
         time.strftime('%d %b %Y', time.localtime(start)) + ' – ' +
         time.strftime('%d %b %Y', time.localtime(now)))
     meta = [('Period', period_text(days) + (f' · {span}' if span else '')),
-            ('Capital managed', (money(capital, sign=False)
-                                 if pnl == 'show' else 'not shown')
+            ('Capital managed', ((money(capital, sign=False) + (
+                ' (balance at the period start)' if
+                s.get('capital_source') == 'balance at the start' else ''))
+                if pnl == 'show' else 'not shown')
              if capital else 'not set'),
             ('Prepared', time.strftime('%d %b %Y, %H:%M',
                                        time.localtime(now)))]
@@ -667,10 +691,11 @@ def render_client(body, days=7.0, now=None, logo='', desk_name='Nexus',
 <section class="tiles client">{tiles}</section>
 <section class="panel"><h2>Returns by {unit}</h2>{table}</section>
 <footer class="notes"><b>Return</b> is the net result after trading
-costs, divided by the capital managed. <b>Cumulative return</b> adds
-each {unit}'s return. <b>Max drawdown</b>: the worst fall of the
-running result from a peak, closed results only. Funding is not
-included. Past results do not promise future ones.</footer>
+costs, divided by the capital at the start of the period.
+<b>Cumulative return</b> adds each {unit}'s return. A result belongs to
+the {unit} (UTC) its trade closed in. <b>Max drawdown</b>: the worst
+fall of the cumulative result from a peak, {unit} end to {unit} end.
+Funding is not included. Past results do not promise future ones.</footer>
 </main></body></html>"""
 
 CSS = """

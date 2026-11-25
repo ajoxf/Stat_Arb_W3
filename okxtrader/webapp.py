@@ -223,20 +223,71 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
         return ('the engine is waiting — open Exchanges to fix its setup; '
                 'it starts by itself once that is right. ' + held[0])
 
-    def attach_fees(db, body, positions, now):
-        """MAKER OR TAKER and THE FEES, per trade, from OKX's own fills -
-        the Analysis tab and the trader report alike."""
+    def okx_fills(db, positions, now):
+        """OKX's own fills over the positions' lives (a day either side).
+        [] when the journal cannot be read: the desk's estimate stands."""
         try:
             first = min((p.get('opened_at') or now for p in positions),
                         default=now)
-            fills = db.fills(ours_only=True,
-                             since_ms=int((first - 86400.0) * 1000),
-                             limit=200000)
+            return db.fills(ours_only=True,
+                            since_ms=int((first - 86400.0) * 1000),
+                            limit=200000)
+        except Exception as e:
+            logging.error('the fills could not be read: %s', e)
+            return []
+
+    def okx_net(db, positions, now):
+        """(positions with each trade's net on the fees OKX actually
+        charged, the fills it came from)."""
+        fills = okx_fills(db, positions, now)
+        try:
+            return analysis.with_okx_fees(positions, fills), fills
+        except Exception as e:
+            logging.error('OKX fees could not be applied: %s', e)
+            return positions, fills
+
+    def attach_fees(db, body, positions, now, fills=None):
+        """MAKER OR TAKER and THE FEES, per trade, from OKX's own fills -
+        the Analysis tab and the trader report alike."""
+        try:
+            if fills is None:
+                fills = okx_fills(db, positions, now)
             body['fee_tally'] = analysis.attach_fills(
                 body.get('journal'), positions, fills)
+            body['fee_tally']['expected_bp'] = expected_fee_bp()
         except Exception as e:
             logging.error('the fills could not be matched: %s', e)
             body['fee_tally'] = None
+
+    def start_capital(balance, closed):
+        """The capital at the START of a period, from the balance now:
+        less what the period's closed trades made, and less the open
+        P&L the balance holds now. Money moved in or out of the account
+        in the period is not known here and is not taken off."""
+        made = sum(float(p.get('realized_pnl') or 0.0) for p in closed)
+        open_pnl = 0.0
+        for row in ((status() or {}).get('pairs') or {}).values():
+            try:
+                open_pnl += float((row or {}).get('open_pnl') or 0.0)
+            except (TypeError, ValueError):
+                continue
+        start = balance - made - open_pnl
+        return round(start, 2) if start > 0 else balance
+
+    def expected_fee_bp():
+        """What a round trip SHOULD cost, in bp of both legs' notional,
+        at this account's OKX rates: every fill maker, and every fill
+        taker. Both ends, so twice each rate. None before the engine has
+        read the rates."""
+        rates = [leg for pair in ((status() or {}).get('pairs') or {})
+                 .values() for leg in ((pair or {}).get('fee_bps') or {})
+                 .values() if leg]
+        try:
+            maker = sum(float(r['maker']) for r in rates) / len(rates)
+            taker = sum(float(r['taker']) for r in rates) / len(rates)
+        except (KeyError, TypeError, ValueError, ZeroDivisionError):
+            return None
+        return {'maker': round(2 * maker, 2), 'taker': round(2 * taker, 2)}
 
     def make_okx_client(key, secret, passphrase, demo):
         from .okx_api import OKXClient
@@ -656,6 +707,8 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
         now = time.time()
         start = None if days <= 0 else now - days * 86400.0
         positions = db.positions_between(start, None, pair_key=pair_key)
+        # Net P&L on the fees OKX actually charged.
+        positions, fills = okx_net(db, positions, now)
         events = db.events_between(('algo_signal', 'algo_order'), start)
         if pair_key:
             events = [e for e in events if e.get('pair_key') == pair_key]
@@ -667,7 +720,7 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
         body.setdefault('summary', {})['capital_source'] = capital_source
         analysis.number_trades(body, analysis.trade_numbers(
             db.positions_between(None, None)))
-        attach_fees(db, body, positions, now)
+        attach_fees(db, body, positions, now, fills)
         folder = os.path.dirname(os.path.abspath(config_path))
         pnl = request.args.get('pnl') or 'show'
 
@@ -675,9 +728,24 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
             query = dict(request.args.items(), pnl=mode)
             return '/report?' + urlencode(query)
         if request.args.get('view') == 'client':
-            # Returns only: never what was traded, or how often.
+            # Returns only: never what was traded, or how often. Built on
+            # its own: the trades CLOSED in the period (a result belongs
+            # to the period it was realised in), and the capital as it
+            # stood at the period's START.
+            closed = [p for p in db.positions_between(
+                None if start is None else start - 400 * 86400.0, None,
+                pair_key=pair_key)
+                if p.get('closed_at') is not None
+                and (start is None or p['closed_at'] >= start)]
+            closed, _fills = okx_net(db, closed, now)
+            base, base_source = capital, capital_source
+            if capital_source == 'balance' and capital:
+                base = start_capital(capital, closed)
+                base_source = 'balance at the start'
+            client = analysis.report(closed, now=now, capital=base)
+            client.setdefault('summary', {})['capital_source'] = base_source
             page = trade_report.render_client(
-                body, days, now, logo=trade_report.logo_html(folder),
+                client, days, now, logo=trade_report.logo_html(folder),
                 pnl=pnl, link=link)
         else:
             page = trade_report.render(body, names, days, pair_key, now,
@@ -1249,6 +1317,8 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
         now = time.time()
         start = None if days <= 0 else now - days * 86400.0
         positions = db.positions_between(start, None, pair_key=pair_key)
+        # Net P&L on the fees OKX actually charged.
+        positions, fills = okx_net(db, positions, now)
         events = db.events_between(('algo_signal', 'algo_order'), start)
         if pair_key:
             events = [e for e in events if e.get('pair_key') == pair_key]
@@ -1268,7 +1338,7 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
         # every window and on every ladder filter.
         analysis.number_trades(body, analysis.trade_numbers(
             db.positions_between(None, None)))
-        attach_fees(db, body, positions, now)
+        attach_fees(db, body, positions, now, fills)
         try:
             zone_days = float(request.args.get('zone_days', 1))
         except ValueError:
