@@ -118,6 +118,13 @@ def fills_text(t):
             f'{f.get("exit_a") or DASH}/{f.get("exit_b") or DASH}')
 
 
+def trade_ref(row):
+    """A trade's reference: its number on the desk's whole record,
+    `#12` - the same in every table, every period and every report."""
+    number = row.get('trade_no')
+    return f'#{number}' if number else DASH
+
+
 def side(value):
     return {'BUY': 'Long', 'SELL': 'Short'}.get(value, value or DASH)
 
@@ -317,7 +324,7 @@ def render(body, names=None, days=7.0, pair_key=None, now=None,
     rows = []
     for i, t in enumerate(trips, 1):
         rows.append(
-            f'<tr><td>{t.get("trade_no") or i}</td>'
+            f'<tr><td class="no">{trade_ref(t)}</td>'
             f'<td>{clock(t.get("opened_at"))}</td>'
             f'<td>{clock(t.get("closed_at"))}</td>'
             f'<td class="l">{_e(name(t.get("pair_key")))}</td>'
@@ -346,7 +353,8 @@ def render(body, names=None, days=7.0, pair_key=None, now=None,
                f'<td class="{tone(t.get("cum_pnl"))}">{cash(t.get("cum_pnl"))}'
                '</td>') +
             '</tr>')
-    journal = ('<table class="journal"><thead><tr><th>#</th><th>Opened</th>'
+    journal = ('<table class="journal"><thead><tr><th>Trade<br>no</th>'
+               '<th>Opened</th>'
                '<th>Closed</th><th class="l">Ladder</th><th>Side</th>'
                '<th>Who</th><th>Size</th><th>Spread in → out</th>'
                '<th>Held</th><th class="l">Exit</th><th>Fills A/B<br>'
@@ -396,7 +404,8 @@ def render(body, names=None, days=7.0, pair_key=None, now=None,
         mae = None if r.get('mae') is None else -r['mae']
         mfe = r.get('mfe')
         ex_rows.append(
-            f'<tr><td>{clock(r.get("closed_at"))}</td>'
+            f'<tr><td class="no">{trade_ref(r)}</td>'
+            f'<td>{clock(r.get("closed_at"))}</td>'
             f'<td class="l">{_e(name(r.get("pair_key")))}</td>'
             f'<td>{side(r.get("side"))}</td>'
             f'<td class="l">{_e(r.get("exit_reason") or DASH)}</td>'
@@ -417,6 +426,7 @@ def render(body, names=None, days=7.0, pair_key=None, now=None,
             '<small>MAE: the worst net P&amp;L while open · MFE: the best · '
             'each on the capital and on the margin the trade tied up'
             '</small></h2><table class="journal excursion"><thead><tr>'
+            '<th>Trade<br>no</th>'
             '<th>Closed</th><th class="l">Ladder</th><th>Side</th>'
             '<th class="l">Exit</th>' +
             ('' if hide else '<th>MAE</th>') +
@@ -703,6 +713,7 @@ td.l, th.l { text-align: left; }
   max-width: 140px; }
 .journal th { white-space: normal; }
 .tally { margin: 6px 0 0; font-size: 10.5px; }
+td.no { font-weight: 700; color: var(--navy); }
 .excursion { margin-top: 2px; }
 .returns { font-size: 12px; max-width: 760px; }
 .returns td, .returns th { padding: 5px 10px; }

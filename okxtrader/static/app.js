@@ -8838,7 +8838,9 @@ function anHeld(seconds) {
            ? DASH : money(-d.current), d.current ? 'down' : '') +
       anTile('Peak equity', money(d.peak_equity), 'up') + '</div>';
     var rows = a.excursion || [];
-    html += '<table class="an-table"><thead><tr><th>Closed</th><th class="l">Pair</th>' +
+    html += '<table class="an-table"><thead><tr><th title="The trade\u2019s ' +
+      'number on the desk\u2019s record, as in the journal">Trade no</th>' +
+      '<th>Closed</th><th class="l">Pair</th>' +
       '<th class="l">Side</th><th class="l">Exit</th>' +
       '<th title="Maximum adverse excursion: the worst net P&L while open">' +
       'MAE (worst)</th>' +
@@ -8859,7 +8861,7 @@ function anHeld(seconds) {
       '<th title="Minutes from the open to the best point">Best at</th>' +
       '</tr></thead><tbody>';
     if (!rows.length) {
-      html += '<tr><td colspan="13" class="hint">no closed trade with its ' +
+      html += '<tr><td colspan="14" class="hint">no closed trade with its ' +
         'best and worst point yet \u2014 they are kept from this version on' +
         '</td></tr>';
     }
@@ -8877,7 +8879,8 @@ function anHeld(seconds) {
       return onBase(value, excCapital, 'set the capital above');
     }
     rows.forEach(function (r) {
-      html += '<tr><td>' + anClock(r.closed_at) + '</td><td class="l">' +
+      html += '<tr><td class="an-no">' + (r.trade_no ? '#' + r.trade_no
+        : DASH) + '</td><td>' + anClock(r.closed_at) + '</td><td class="l">' +
         name(r.pair_key) + '</td><td class="l">' + anSide(r.side) +
         '</td><td class="l">' + escapeHtml(r.exit_reason || DASH) + '</td>' +
         '<td class="down">' + (r.mae === null ? DASH : money(-r.mae)) + '</td>' +

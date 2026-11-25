@@ -658,7 +658,7 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
         capital, capital_source = desk_capital(raw)
         body = analysis.report(positions, events, now=now, capital=capital)
         body.setdefault('summary', {})['capital_source'] = capital_source
-        analysis.number_journal(body.get('journal'), analysis.trade_numbers(
+        analysis.number_trades(body, analysis.trade_numbers(
             db.positions_between(None, None)))
         attach_fees(db, body, positions, now)
         folder = os.path.dirname(os.path.abspath(config_path))
@@ -1082,7 +1082,7 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
         body.setdefault('summary', {})['capital_source'] = capital_source
         # TRADE NO, over the whole record: a trade keeps its number in
         # every window and on every ladder filter.
-        analysis.number_journal(body.get('journal'), analysis.trade_numbers(
+        analysis.number_trades(body, analysis.trade_numbers(
             db.positions_between(None, None)))
         attach_fees(db, body, positions, now)
         try:

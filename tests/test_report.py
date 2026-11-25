@@ -182,6 +182,7 @@ def _full(units=34.107, n=12):
     body = analysis.report(rows, now=1_700_100_000, capital=3744)
     body['summary']['capital_source'] = 'balance'
     body['fee_tally'] = analysis.attach_fills(body['journal'], rows, fills)
+    analysis.number_trades(body, {f'p{i}': 40 + i for i in range(n)})
     return body
 
 
@@ -253,3 +254,23 @@ def test_nothing_in_the_printed_report_runs_outside_its_column(tmp_path):
                 }""")
                 assert bad == [], (units, mode, bad)
         browser.close()
+
+
+def test_every_trade_carries_its_reference_number_in_both_tables():
+    page = report.render(_full(), {'ethbtc': 'ETH vs BTC'}, 7, None,
+                         1_700_100_000)
+    journal = page[page.index('<table class="journal">'):
+                   page.index('Worst and best points')]
+    section = page[page.index('Worst and best points'):]
+    assert 'Trade<br>no' in journal and 'Trade<br>no' in section
+    # Oldest first in both, by the desk's own numbers.
+    for part in (journal, section):
+        assert '<td class="no">#40</td>' in part
+        assert '<td class="no">#51</td>' in part
+        assert part.index('#40<') < part.index('#51<')
+
+
+def test_a_trade_with_no_number_is_a_dash_not_its_row_count():
+    body = analysis.report([_trip(0, 1.0)], now=1_700_100_000)
+    page = report.render(body, {}, 7, None, 1_700_100_000)
+    assert '<td class="no">—</td>' in page

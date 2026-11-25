@@ -850,6 +850,14 @@ def attach_fills(journal, positions, fills):
     return tally
 
 
+def number_trades(body, numbers):
+    """The same Trade no on every table of trades in a report: the
+    journal and the worst / best points."""
+    for key in ('journal', 'excursion'):
+        number_journal(body.get(key), numbers)
+    return body
+
+
 def number_journal(journal, numbers):
     """Each journal row's Trade no, from `trade_numbers`."""
     for row in journal or ():
