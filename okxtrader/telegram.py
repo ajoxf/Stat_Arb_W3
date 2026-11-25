@@ -560,6 +560,59 @@ def pnl_shares(pnl, position):
             f'{" (estimated)" if estimated and margin else ""})')
 
 
+def _position_margin(position, level=None):
+    """The margin a holding ties up: frozen at entry times its Qty, or
+    the Algo's own figure for it. None when neither is known."""
+    margin = position.get('entry_margin')
+    if margin:
+        return float(margin) * float(position.get('quantity') or 1.0)
+    margin = (level or {}).get('margin')
+    return float(margin) if margin else None
+
+
+def _equity_share(margin, equity):
+    if not margin or not equity:
+        return ''
+    return f'  · {margin / float(equity) * 100:.1f}% of equity'
+
+
+def _equity_of(snapshot, row):
+    """The equity of the account leg A trades, from the status."""
+    info = (snapshot.get('accounts') or {}).get(
+        row.get('leg_a_account') or row.get('account_a')) or {}
+    try:
+        return float(info['equity']) if info.get('equity') else None
+    except (TypeError, ValueError):
+        return None
+
+
+def algo_size_words(row, params, add=False):
+    """The size of the Algo's NEXT trade (or its add): the Qty, what it
+    is in money across both legs, and the margin it was sized from."""
+    legs = row.get('leg_notional') or {}
+    per = ((legs.get('a') or 0.0) + (legs.get('b') or 0.0)) \
+        if legs.get('a') and legs.get('b') else None
+    sizing = row.get('algo_sizing') or {}
+    if add and params.get('add_size_by', 'SAME') != 'SAME':
+        by = params.get('add_size_by')
+        qty = params.get('add_qty')
+        total = params.get('add_margin') if by == 'MARGIN' else None
+    else:
+        by = 'MARGIN' if sizing.get('by') == 'MARGIN' else 'QTY'
+        qty = sizing.get('qty') if by == 'MARGIN' else params.get('algo_qty')
+        total = sizing.get('margin') if by == 'MARGIN' else None
+        if by == 'MARGIN' and qty is None:
+            return sizing.get('note') or 'not sized yet'
+    if not qty:
+        return 'not sized yet'
+    words = f'{plain(qty)} Qty'
+    if per:
+        words += f' · {usd(per * float(qty), False, 0)}'
+    if total:
+        words += f'  (from {usd(total, False, 0)} margin)'
+    return words
+
+
 def margin_text(position):
     margin = position.get('entry_margin')
     if not margin:
@@ -1197,7 +1250,8 @@ class Bot:
         buttons = []
         for key, row in sorted(pairs.items()):
             parts.append(f'<b>{self._pair_name(pairs, key)}</b>\n'
-                         + table(self._ladder_rows(row)))
+                         + table(self._ladder_rows(
+                             row, _equity_of(snapshot, row))))
             if row.get('positions'):
                 buttons.append([(f'Close all: {row.get("name") or key}',
                                  'flatten_ask', (key,))])
@@ -1212,7 +1266,7 @@ class Bot:
                         ('Main menu', 'main', ())])
         self.show(chat, message_id, '\n\n'.join(parts), buttons)
 
-    def _ladder_rows(self, row):
+    def _ladder_rows(self, row, equity=None):
         block = row.get('algo_block') or {}
         params = effective_params(row)
         problem = self._price_problem(row)
@@ -1260,6 +1314,10 @@ class Bot:
                 rows.append(('Warm-up', 'complete' if warmup.get('done') else
                              f'{int((warmup.get("sec") or 0) // 60)} of '
                              f'{round(warmup["need_sec"] / 60)} min'))
+            rows.append(('Trade size', algo_size_words(row, params)))
+            if params.get('add_on'):
+                rows.append(('Add size', algo_size_words(row, params,
+                                                         add=True)))
         rows.append(None)
         rows.append(('H to L', plain(row.get('short_spread'), 3)
                      + (f'   z {plain(block.get("z_sell"), 2, True)}'
@@ -1318,9 +1376,21 @@ class Bot:
             rows.append(('Holding', f'{side_words(position.get("side"))} '
                          f'{plain(position.get("quantity"))} '
                          f'({(position.get("source") or "MANUAL").lower()})'))
+            # What the holding IS in money: both legs' face value, and
+            # the margin it ties up (with its share of the account).
+            face = notional(position) or level.get('notional')
+            rows.append(('Size', (usd(face, False) + ' (both legs)')
+                         if face else '—'))
+            rows.append(('Margin', margin_text(position)
+                         + _equity_share(_position_margin(position, level),
+                                         equity)))
             rows.append(('Entry', plain(position.get('entry_spread'), 3)))
             rows.append(('Now', plain(position.get('closing_spread'), 3)))
-            rows.append(('P&L', money(position.get('net_pnl'))))
+            pnl = position.get('net_pnl')
+            margin = _position_margin(position, level)
+            rows.append(('P&L', money(pnl) + (
+                f'  ({pnl / margin * 100:+.2f}% of margin)'
+                if pnl is not None and margin else '')))
             if level:
                 rows.append(('Take profit', plain(level.get('tp'), 3)))
                 rows.append(('Stop loss', plain(level.get('sl'), 3)))

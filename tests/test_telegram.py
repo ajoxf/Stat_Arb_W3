@@ -1256,3 +1256,37 @@ def test_the_status_carries_the_mean_the_z_is_measured_from(bot):
     say(bot, '/status')
     text = bot.api.texts()[-1]
     assert 'Mean</b>  <code>-11.869  (σ 1.66)' in text
+
+
+# -- size and margin on the status ------------------------------------------------
+
+
+def test_the_status_says_each_holdings_size_and_margin(bot):
+    holding(bot)
+    bot.desk.snapshot['pairs'][KEY]['leg_a_account'] = 'main'
+    bot.desk.snapshot['accounts'] = {'main': {'equity': 3500.0,
+                                              'currency': 'USDT'}}
+    say(bot, '/status')
+    text = bot.api.texts()[-1]
+    # 0.05 x 1000 x 89.08 + 0.05 x 1000 x 102.276; 191.50 x 0.5 Qty.
+    in_order(text, ['Holding</b>  <code>H to L 0.50',
+                    'Size</b>  <code>$9,567.80 (both legs)',
+                    'Margin</b>  <code>$95.75  (100x)  · 2.7% of equity',
+                    'Entry', 'Now', 'P&amp;L</b>'])
+
+
+def test_the_status_says_the_algos_next_trade_size(bot):
+    pair = bot.desk.snapshot['pairs'][KEY]
+    pair['leg_notional'] = {'a': 4454.0, 'b': 5113.8}
+    pair['algo_params'].update(algo_qty=2.0)
+    say(bot, '/status')
+    assert 'Trade size</b>  <code>2.00 Qty · $19,136' in bot.api.texts()[-1]
+    pair['algo_sizing'] = {'by': 'MARGIN', 'margin': 1700.0,
+                           'per_qty': 383.0, 'qty': 4.43}
+    pair['algo_params'].update(add_on=True, add_size_by='MARGIN',
+                               add_margin=600.0, add_qty=1.56)
+    say(bot, '/status')
+    text = bot.api.texts()[-1]
+    assert ('Trade size</b>  <code>4.43 Qty · $42,385  (from $1,700 margin)'
+            in text)
+    assert 'Add size</b>  <code>1.56 Qty · $14,926  (from $600 margin)' in text
