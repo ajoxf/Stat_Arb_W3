@@ -739,6 +739,11 @@ class MakerFills:
     def _fail(self, pair, job, refused=False, naked=None):
         from .executor import ExecutionResult
         job.phase = 'done'
+        # Said in the log as plainly as a fill is: an entry that timed out
+        # with nothing on used to leave no line at all, so a log showed
+        # the order resting and then nothing - filled or not, unknown.
+        logging.info('%s: maker fill %s ended - %s', pair.key, job.id,
+                     job.reason or 'not filled')
         elapsed_ms = (self.clock() - job.started) * 1000.0
         self._done(job, ExecutionResult(False, reason=job.reason,
                                         refused=refused, naked=naked,

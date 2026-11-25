@@ -142,10 +142,15 @@ def test_it_re_pegs_by_amend_when_the_touch_moves_over_1bp(desk):
     assert job.legs['a'].amends == 1
 
 
-def test_not_filled_in_30s_is_a_clean_refusal(desk):
+def test_not_filled_in_30s_is_a_clean_refusal(desk, caplog):
+    import logging
+    caplog.set_level(logging.INFO)
     desk.maker.start(desk.pair, SpreadSide.BUY, desk.md(), 1)
     for _ in range(31):
         desk.tick()
+    # Said in the log, not left to be guessed from silence.
+    assert any('ended - not filled: timed out after 30s' in r.getMessage()
+               for r in caplog.records)
     assert len(desk.done) == 1
     result = desk.done[0]
     assert not result.ok and result.refused and 'nothing went on' in \
