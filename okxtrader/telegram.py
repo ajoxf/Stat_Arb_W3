@@ -658,12 +658,13 @@ def _pct(now, then):
         return ''
 
 
-def trade_entry_text(position, ladder, levels=None, block=None):
+def trade_entry_text(position, ladder, levels=None, block=None,
+                     equity=None):
     """TRADE ENTRY, row for row as Stat_Arb_W3 sends it - then the exits
     this desk sets, which W3 has no rows for."""
     levels = levels or {}
     legs = _legs(position)
-    face = notional(position)
+    face = notional(position) or levels.get('notional')
     fill_a = (position.get('leg_a') or {})
     rows = [('ID', f'#{position.get("position_id") or "pending"}'),
             ('Entry Time', utc(position.get('opened_at'))), None]
@@ -671,8 +672,18 @@ def trade_entry_text(position, ladder, levels=None, block=None):
         rows.append((f'Leg {name} Lots', f'{fill.get("side") or ""} '
                                          f'{plain(fill.get("volume"))} '
                                          f'{fill.get("symbol") or ""}'))
-    rows += [('Notional', price(face, 2) if face else '—'),
-             ('Margin Req', margin_text(position)), None]
+    # THE SIZE and THE MARGIN, as the status says them: the Qty and both
+    # legs' face value, then what it ties up and its share of the account.
+    margin = _position_margin(position, levels)
+    margin_words = margin_text(position)
+    if margin_words == '—' and margin:
+        margin_words = usd(margin, False)
+    rows += [('Size', f'{plain(position.get("quantity"))} Qty'
+                      + (f' · {usd(face, False)} (both legs)' if face
+                         else '')),
+             ('Notional', price(face, 2) if face else '—'),
+             ('Margin Req', margin_words + _equity_share(margin, equity)),
+             None]
     for name, fill in legs:
         rows.append((f'Leg {name} Entry', price(fill.get('price'))))
     rows.append(('Spread', plain(position.get('entry_spread'), 4, True)
@@ -2146,8 +2157,9 @@ class AlertWatch:
                     continue
                 current[pid] = key
                 if not first and pid not in self.positions:
-                    out.append(trade_entry_text(position, name_of(key),
-                                                levels.get(pid), block))
+                    out.append(trade_entry_text(
+                        position, name_of(key), levels.get(pid), block,
+                        _equity_of(snapshot, row)))
         if not first:
             for pid, key in self.positions.items():
                 if pid in current:

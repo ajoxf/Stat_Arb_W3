@@ -359,3 +359,11 @@
 .window.managed table.ma-payouts td { vertical-align: middle; }
 .window.managed .ma-ref { font-family: inherit; font-size: 11px; width: 160px; padding: 1px 4px; }
 .monitor td.an-no { font-weight: 600; color: #16324f; }
+
+/* The journal's maker / taker per leg, and the fee tally under it. */
+.an-fills { white-space: nowrap; }
+.an-liq { font-weight: 600; }
+.an-liq-m { color: #1f9d55; }
+.an-liq-t { color: #d97706; }
+.an-liq-mt { color: #6b7280; }
+.an-fee-tally { margin: 6px 0 14px; font-size: 12px; }

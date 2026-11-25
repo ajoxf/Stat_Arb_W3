@@ -7908,7 +7908,51 @@
       Number(value).toFixed(1) + ' min';
   }
 
-  function anHeld(seconds) {
+  // MAKER OR TAKER per leg and end, from OKX's own fills.
+function anFillsCell(t) {
+  var f = t.fills || {};
+  function k(v) {
+    if (!v) return DASH;
+    return '<span class="an-liq an-liq-' + (v === 'M' ? 'm' : v === 'T'
+      ? 't' : 'mt') + '">' + v + '</span>';
+  }
+  var any = f.entry_a || f.entry_b || f.exit_a || f.exit_b;
+  if (!any) return '<td class="hint">' + DASH + '</td>';
+  return '<td class="an-fills" title="' + (t.maker_fills || 0) +
+    ' maker fill(s), ' + (t.taker_fills || 0) + ' taker fill(s)">' +
+    k(f.entry_a) + '/' + k(f.entry_b) + ' \u2192 ' + k(f.exit_a) + '/' +
+    k(f.exit_b) + '</td>';
+}
+
+// THE FEES one trade paid: OKX's, or the desk's estimate marked ~.
+function anFeeCell(t) {
+  if (t.fee === null || t.fee === undefined) return '<td>' + DASH + '</td>';
+  if (t.fees_source === 'OKX') {
+    return '<td title="maker ' + escapeHtml(money(t.maker_fees)) +
+      ' \u00b7 taker ' + escapeHtml(money(t.taker_fees)) + ' (OKX)">' +
+      money(t.fee) + '</td>';
+  }
+  return '<td class="hint" title="the desk\u2019s estimate: gross ' +
+    'less net">~' + money(t.fee) + '</td>';
+}
+
+// THE TALLY under the journal: every fee, maker against taker.
+function feeTallyHtml(f) {
+  if (!f || !f.trades) return '';
+  var fills = (f.maker_fills || 0) + (f.taker_fills || 0);
+  return '<p class="an-fee-tally"><b>Fees</b> ' + money(f.fees) +
+    ' over ' + f.trades + ' trade(s)' +
+    (f.measured ? ' \u00b7 <b>maker</b> ' + money(f.maker_fees) + ' (' +
+      (f.maker_fills || 0) + ' fills) \u00b7 <b>taker</b> ' +
+      money(f.taker_fees) + ' (' + (f.taker_fills || 0) + ' fills)' +
+      (fills ? ' \u00b7 ' + fmt(100 * (f.maker_fills || 0) / fills, 0) +
+        '% of fills maker' : '') : '') +
+    (f.estimated ? ' \u00b7 <span class="hint">' + f.estimated +
+      ' trade(s) estimated (~), their OKX fills not in the journal' +
+      '</span>' : '') + '</p>';
+}
+
+function anHeld(seconds) {
     if (seconds === null || seconds === undefined) { return DASH; }
     var s = Math.max(0, Math.round(seconds));
     var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
@@ -8650,6 +8694,14 @@
       'close actually went">vs level</th>' +
       '<th>Leg A in</th><th>Leg B in</th>' +
       '<th>Held</th><th class="l">Exit</th>' +
+      '<th title="How OKX filled each leg: M maker, T taker, M+T both. ' +
+      'Leg A / leg B, at the entry and at the exit">Fills A/B in \u2192 out' +
+      '</th>' +
+      '<th title="The trading fees OKX charged on this trade\u2019s fills ' +
+      '(a maker rebate is negative). ~ is the desk\u2019s own estimate, ' +
+      'where OKX\u2019s fills are not in the journal">Fees</th>' +
+      '<th title="The fees added up, in the order the trades closed">' +
+      'Fees running</th>' +
       (pnlHidden ? '' : '<th>Net P&amp;L</th>') +
       '<th title="net P&amp;L \u00f7 the margin BOTH legs tied up at entry - ' +
       'the base the TP % and SL % are set on. NET: after every fee">' +
@@ -8664,7 +8716,7 @@
       (pnlHidden ? '' : '<th>Running</th>') +
       '</tr></thead><tbody>';
     if (!trips.length) {
-      html += '<tr><td colspan="23" class="hint">no closed trade in this ' +
+      html += '<tr><td colspan="26" class="hint">no closed trade in this ' +
         'window</td></tr>';
     }
     trips.forEach(function (t) {
@@ -8687,6 +8739,9 @@
         '</td><td>' + (t.leg_b.side || '') + ' ' + fmt(t.leg_b.entry, 3) +
         '</td><td>' + anHeld(t.held_sec) + '</td><td class="l">' +
         escapeHtml(t.exit_reason || DASH) + '</td>' +
+        anFillsCell(t) + anFeeCell(t) +
+        '<td>' + (t.cum_fees === null || t.cum_fees === undefined ? DASH
+          : money(t.cum_fees)) + '</td>' +
         (pnlHidden ? '' : '<td class="' + anSign(t.pnl) + '">' +
           pnlCash(t.pnl) + '</td>') + pctCell(t.pct_margin, 2, t.margin_estimated) +
         pctCell(t.pct_notional, 3, false) +
@@ -8703,6 +8758,7 @@
           pnlCash(t.cum_pnl) + '</td>') + '</tr>';
     });
     html += '</tbody></table>';
+    html += feeTallyHtml(a.fee_tally);
 
     // 1. The summary.
     html += '<h4>Summary</h4><div class="an-tiles">' +

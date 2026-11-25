@@ -619,6 +619,18 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
         body = analysis.report(positions, events, now=now, capital=capital)
         analysis.number_journal(body.get('journal'), analysis.trade_numbers(
             db.positions_between(None, None)))
+        # MAKER OR TAKER and THE FEES, per trade, from OKX's own fills.
+        try:
+            first = min((p.get('opened_at') or now for p in positions),
+                        default=now)
+            fills = db.fills(ours_only=True,
+                             since_ms=int((first - 86400.0) * 1000),
+                             limit=200000)
+            body['fee_tally'] = analysis.attach_fills(
+                body.get('journal'), positions, fills)
+        except Exception as e:
+            logging.error('the fills could not be matched: %s', e)
+            body['fee_tally'] = None
         folder = os.path.dirname(os.path.abspath(config_path))
         pnl = request.args.get('pnl') or 'show'
 

@@ -744,6 +744,109 @@ def trade_numbers(positions):
     return {r.get('position_id'): i for i, r in enumerate(closed, 1)}
 
 
+def _liquidity(kinds):
+    """'M' all maker, 'T' all taker, 'M+T' both, None unseen."""
+    kinds = set(kinds)
+    if not kinds:
+        return None
+    if kinds == {'maker'}:
+        return 'M'
+    if kinds == {'taker'}:
+        return 'T'
+    return 'M+T'
+
+
+def attach_fills(journal, positions, fills):
+    """MAKER OR TAKER, and THE FEES, per trade - from OKX's own fills.
+
+    Each fill names the position ticket it opened or closed; each leg of
+    a position lists its tickets. So every trade gets, per leg and end,
+    whether OKX filled it as maker ('M'), taker ('T') or both ('M+T'),
+    and the fees OKX actually charged (a cost is positive, a maker
+    rebate negative), split maker / taker. A trade whose fills are not
+    in the journal keeps the desk's own estimate (`fees`), said as one
+    (`fees_source`). Then the running tally of fees, in close order,
+    and the totals. Returns the tally."""
+    by_ticket = {}
+    for f in fills or ():
+        ticket = f.get('position_ticket')
+        if ticket not in (None, ''):
+            by_ticket.setdefault(str(ticket), []).append(f)
+    legs_of = {p.get('position_id'): p for p in positions or ()}
+    seen = set()
+    tally = {'fees': 0.0, 'maker_fees': 0.0, 'taker_fees': 0.0,
+             'maker_fills': 0, 'taker_fills': 0, 'measured': 0,
+             'estimated': 0, 'trades': 0}
+    for row in journal or ():
+        position = legs_of.get(row.get('position_id')) or {}
+        fills_of = {}
+        found = []
+        for leg in ('a', 'b'):
+            tickets = ((position.get('leg_' + leg) or {})
+                       .get('position_tickets') or ())
+            mine = [f for t in tickets for f in by_ticket.get(str(t), ())]
+            for end, label in (('open', 'entry'), ('close', 'exit')):
+                fills_of[f'{label}_{leg}'] = _liquidity(
+                    (f.get('order_type') or '').lower() for f in mine
+                    if f.get('entry') == end
+                    and (f.get('order_type') or '').lower()
+                    in ('maker', 'taker'))
+            found += [f for f in mine
+                      if (f.get('account'), f.get('deal_id')) not in seen]
+            seen.update((f.get('account'), f.get('deal_id')) for f in mine)
+        maker = taker = 0.0
+        n_maker = n_taker = 0
+        priced = False
+        for f in found:
+            fee = f.get('fee') if f.get('fee') is not None \
+                else f.get('commission')
+            kind = (f.get('order_type') or '').lower()
+            if kind == 'maker':
+                n_maker += 1
+            elif kind == 'taker':
+                n_taker += 1
+            if fee is None:
+                continue
+            priced = True
+            cost = -float(fee)
+            if kind == 'maker':
+                maker += cost
+            else:
+                taker += cost
+        row['fills'] = fills_of
+        row['maker_fills'], row['taker_fills'] = n_maker, n_taker
+        if priced:
+            row['okx_fees'] = round(maker + taker, 4)
+            row['maker_fees'] = round(maker, 4)
+            row['taker_fees'] = round(taker, 4)
+            row['fee'] = row['okx_fees']
+            row['fees_source'] = 'OKX'
+        else:
+            row['okx_fees'] = row['maker_fees'] = row['taker_fees'] = None
+            row['fee'] = row.get('fees')
+            row['fees_source'] = None if row['fee'] is None else 'estimate'
+    # The running tally, in the order the trades closed (the journal is
+    # newest first).
+    running = 0.0
+    for row in reversed(journal or ()):
+        if row.get('fee') is not None:
+            running += row['fee']
+            tally['trades'] += 1
+            if row['fees_source'] == 'OKX':
+                tally['measured'] += 1
+                tally['maker_fees'] += row['maker_fees']
+                tally['taker_fees'] += row['taker_fees']
+            else:
+                tally['estimated'] += 1
+        tally['maker_fills'] += row.get('maker_fills') or 0
+        tally['taker_fills'] += row.get('taker_fills') or 0
+        row['cum_fees'] = round(running, 2) if tally['trades'] else None
+    tally['fees'] = round(running, 2)
+    tally['maker_fees'] = round(tally['maker_fees'], 2)
+    tally['taker_fees'] = round(tally['taker_fees'], 2)
+    return tally
+
+
 def number_journal(journal, numbers):
     """Each journal row's Trade no, from `trade_numbers`."""
     for row in journal or ():

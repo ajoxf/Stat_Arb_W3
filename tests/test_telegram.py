@@ -1290,3 +1290,24 @@ def test_the_status_says_the_algos_next_trade_size(bot):
     assert ('Trade size</b>  <code>4.43 Qty · $42,385  (from $1,700 margin)'
             in text)
     assert 'Add size</b>  <code>1.56 Qty · $14,926  (from $600 margin)' in text
+
+
+def test_the_trade_entry_says_its_size_and_margin(bot):
+    watch(bot)
+    holding(bot)
+    bot.desk.snapshot['pairs'][KEY]['leg_a_account'] = 'main'
+    bot.desk.snapshot['accounts'] = {'main': {'equity': 3500.0}}
+    [told] = watch(bot)
+    in_order(told, ['Size</b>  <code>0.50 Qty · $9,567.80 (both legs)',
+                    'Notional',
+                    'Margin Req</b>  <code>$95.75  (100x)  · 2.7% of equity'])
+
+
+def test_a_trade_entry_whose_fills_are_unpriced_takes_the_algos_figures():
+    position = {'position_id': 'P9', 'side': 'BUY', 'quantity': 2.0,
+                'leg_a': {}, 'leg_b': {}}
+    text = tg.trade_entry_text(position, 'ETH vs BTC',
+                               {'notional': 40000.0, 'margin': 2000.0},
+                               equity=10000.0)
+    assert 'Size</b>  <code>2.00 Qty · $40,000.00 (both legs)' in text
+    assert 'Margin Req</b>  <code>$2,000.00  · 20.0% of equity' in text
