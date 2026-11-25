@@ -321,6 +321,12 @@ def render(body, names=None, days=7.0, pair_key=None, now=None,
         return ('' if t.get('fees_source', 'OKX') == 'OKX' or pnl != 'show'
                 else '~') + cash(fee, sign=False)
 
+    def capital_used(t):
+        # The margin both legs tied up at entry, as a share of the
+        # capital: how much of the account the trade put to work.
+        value = t.get('pct_capital_used')
+        return DASH if value is None else f'{value:.1f}%'
+
     def fee_share(t):
         value = t.get('fees_pct_gross')
         return DASH if value is None else f'{value:.1f}%'
@@ -335,8 +341,9 @@ def render(body, names=None, days=7.0, pair_key=None, now=None,
             f'<td>{side(t.get("side"))}</td>'
             f'<td>{"Algo" if t.get("source") == "ALGO" else "Manual"}</td>'
             f'<td>{size(t.get("quantity"))}</td>'
-            f'<td>{spread(t.get("entry_spread"))} → '
-            f'{spread(t.get("exit_spread"))}</td>'
+            f'<td>{spread(t.get("entry_spread"))}<br>'
+            f'<span class="closed">→ {spread(t.get("exit_spread"))}'
+            '</span></td>'
             f'<td>{held(t.get("held_sec"))}</td>'
             f'<td class="l">{_e(t.get("exit_reason") or DASH)}</td>'
             + f'<td>{fills_text(t)}</td>'
@@ -351,6 +358,7 @@ def render(body, names=None, days=7.0, pair_key=None, now=None,
             f'{pct(t.get("pct_margin"))}</td>'
             f'<td class="{tone(t.get("pct_capital"))}">'
             f'{pct(t.get("pct_capital"), 3)}</td>'
+            f'<td>{capital_used(t)}</td>'
             + ('' if hide else
                '<td>' + (DASH if t.get('notional') is None else
                          MASK if pnl != 'show' else
@@ -362,16 +370,17 @@ def render(body, names=None, days=7.0, pair_key=None, now=None,
     journal = ('<table class="journal"><thead><tr><th>Trade<br>no</th>'
                '<th>Opened<br>closed</th>'
                '<th class="l">Ladder</th><th>Side</th>'
-               '<th>Who</th><th>Size</th><th>Spread in → out</th>'
+               '<th>Who</th><th>Size</th><th>Spread<br>in → out</th>'
                '<th>Held</th><th class="l">Exit</th><th>Fills A/B<br>'
                'in → out</th>' +
                ('' if hide else '<th>Gross</th><th>Fees</th>') +
                '<th class="nw">Fees %<br>of gross</th>' +
                ('' if hide else '<th>Net P&amp;L</th>') +
-               '<th>On margin</th><th>On capital</th>' +
+               '<th>On margin</th><th>On capital</th>'
+               '<th class="nw">% of capital<br>used</th>' +
                ('' if hide else '<th>Notional value</th><th>Running</th>') +
                '</tr></thead><tbody>' +
-               (''.join(rows) or '<tr><td colspan="18">No closed trade in '
+               (''.join(rows) or '<tr><td colspan="19">No closed trade in '
                                  'this period.</td></tr>') +
                '</tbody></table>')
 
@@ -519,7 +528,8 @@ how OKX filled leg A / leg B at the entry and the exit (M maker, T taker).
 the fees as a share of what the spread move made (a dash where the move
 lost). <b>On margin</b>:
 net ÷ the margin both legs tied up at entry. <b>On capital</b>: net ÷
-the capital managed. <b>Max drawdown</b>: the worst fall of the running
+the capital managed. <b>% of capital used</b>: the margin both legs tied
+up at entry ÷ the capital managed. <b>Max drawdown</b>: the worst fall of the running
 net from a peak, closed trades only. Funding is not included. Built from
 the desk’s own record of fills; past results do not promise future ones.
 </footer>
@@ -720,7 +730,7 @@ th { background: var(--navy); color: #fff; font-weight: 600; font-size: 10.5px; 
 td.l, th.l { text-align: left; }
 .split { margin-bottom: 8px; font-size: 11px; }
 .journal { font-size: 9.5px; table-layout: auto; }
-.journal th, .journal td { padding: 2px 4px; }
+.journal th, .journal td { padding: 2px 3px; }
 /* Free text wraps inside its column rather than pushing out of it. */
 .journal td.l { white-space: normal; overflow-wrap: anywhere;
   max-width: 140px; }

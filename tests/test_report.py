@@ -275,3 +275,16 @@ def test_a_trade_with_no_number_is_a_dash_not_its_row_count():
     body = analysis.report([_trip(0, 1.0)], now=1_700_100_000)
     page = report.render(body, {}, 7, None, 1_700_100_000)
     assert '<td class="no">—</td>' in page
+
+
+def test_each_trade_says_how_much_of_the_capital_it_used():
+    body = _full()
+    page = report.render(body, {'ethbtc': 'ETH vs BTC'}, 7, None,
+                         1_700_100_000)
+    assert '% of capital<br>used</th>' in page
+    # 341.07 x 4.9844 of margin on $3,744: 45.4% of the capital.
+    assert '<td>45.4%</td>' in page
+    # A percentage, so it stays when the money is hidden.
+    hidden = report.render(body, {'ethbtc': 'ETH vs BTC'}, 7, None,
+                           1_700_100_000, pnl='hide')
+    assert '<td>45.4%</td>' in hidden
