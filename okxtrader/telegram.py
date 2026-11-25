@@ -90,6 +90,16 @@ def btc_dominance_text(reading):
     return text
 
 
+def level_at(block):
+    """z -> the spread there (`mean + z x sigma`), written as the status
+    writes a spread; None before the band has its mean and sigma."""
+    mean = (block or {}).get('mean')
+    sigma = (block or {}).get('sigma')
+    if mean is None or not sigma:
+        return None
+    return lambda z: plain(float(mean) + float(z) * float(sigma), 3)
+
+
 def mean_words(block):
     """'-17.583  (σ 4.26)': the Algo's band middle and its sigma, or a
     dash before the band has its candles."""
@@ -558,6 +568,33 @@ def pnl_shares(pnl, position):
     return (f'  ({share(face, 4)} of notional \u00b7 '
             f'{share(margin, 2)} of margin'
             f'{" (estimated)" if estimated and margin else ""})')
+
+
+def _px(value):
+    """A price at a sensible number of places for its size."""
+    value = float(value)
+    places = 2 if value >= 1000 else 3 if value >= 10 else 4 \
+        if value >= 0.1 else 6
+    return f'{value:,.{places}f}'
+
+
+def leg_price_rows(row):
+    """Each leg's instrument and its price now: the mid, then the bid and
+    the offer it is the middle of. Nothing where the book is not read."""
+    market = row.get('market') or {}
+    rows = []
+    for leg in ('a', 'b'):
+        bid, ask = market.get(f'leg_{leg}_bid'), market.get(f'leg_{leg}_ask')
+        symbol = row.get('symbol_' + leg) or f'Leg {leg.upper()}'
+        try:
+            mid = market.get(f'leg_{leg}_mid') or (
+                (float(bid) + float(ask)) / 2.0)
+        except (TypeError, ValueError):
+            continue
+        rows.append((str(symbol).replace('-USDT-SWAP', ''),
+                     f'${_px(mid)}' + (f'  ({_px(bid)} / {_px(ask)})'
+                                       if bid and ask else '')))
+    return rows
 
 
 def _position_margin(position, level=None):
@@ -1330,6 +1367,8 @@ class Bot:
                 rows.append(('Add size', algo_size_words(row, params,
                                                          add=True)))
         rows.append(None)
+        # THE INSTRUMENTS' OWN PRICES, beside the spread built from them.
+        rows += leg_price_rows(row)
         rows.append(('H to L', plain(row.get('short_spread'), 3)
                      + (f'   z {plain(block.get("z_sell"), 2, True)}'
                         if on else '')))
@@ -1344,10 +1383,25 @@ class Bot:
                 edge = back * (1.0 - (params.get('reentry_window_pct')
                                       or 100.0) / 100.0)
                 rows.append(('Arms at', f'z +/-{plain(entry)}'))
+                # ...and the SPREAD each of those z's is, from the band's
+                # middle and sigma: the prices to watch on the chart.
+                at = level_at(block)
+                armed = block.get('armed') or {}
+                if at:
+                    rows.append(('Arms H to L', f'{at(entry)} and above'))
+                    rows.append(('Arms L to H', f'{at(-entry)} and below'))
                 # The whole window: past its far edge the side disarms.
                 rows.append(('Enters at', f'z +/-{plain(back)} to '
                                           f'+/-{plain(edge)} (way back)'))
-                armed = block.get('armed') or {}
+                if at:
+                    # The armed side's window is the one live now.
+                    rows.append(('Enters H to L', f'{at(back)} to {at(edge)}'
+                                 + ('  (armed)' if armed.get('SELL')
+                                    else '')))
+                    rows.append(('Enters L to H', f'{at(-back)} to '
+                                                  f'{at(-edge)}'
+                                 + ('  (armed)' if armed.get('BUY')
+                                    else '')))
                 rows.append(('Armed', ', '.join(
                     side_words(s) for s in ('SELL', 'BUY') if armed.get(s))
                     or 'no'))

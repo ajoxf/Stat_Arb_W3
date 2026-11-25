@@ -1311,3 +1311,48 @@ def test_a_trade_entry_whose_fills_are_unpriced_takes_the_algos_figures():
                                equity=10000.0)
     assert 'Size</b>  <code>2.00 Qty · $40,000.00 (both legs)' in text
     assert 'Margin Req</b>  <code>$2,000.00  · 20.0% of equity' in text
+
+
+def test_the_status_says_each_instruments_price():
+    rows = tg.leg_price_rows({
+        'symbol_a': 'BTC-USDT-SWAP', 'symbol_b': 'ETH-USDT-SWAP',
+        'market': {'leg_a_bid': 87420.5, 'leg_a_ask': 87420.6,
+                   'leg_b_bid': 2925.41, 'leg_b_ask': 2925.42}})
+    assert rows == [('BTC', '$87,420.55  (87,420.50 / 87,420.60)'),
+                    ('ETH', '$2,925.41  (2,925.41 / 2,925.42)')]
+    # A book not read yet says nothing rather than a price of nothing.
+    assert tg.leg_price_rows({'market': {}}) == []
+
+
+def test_the_status_puts_the_prices_by_the_spread(bot):
+    row = bot.desk.snapshot['pairs'][KEY]
+    row.update(symbol_a='USOIL', symbol_b='UKOIL',
+               market={'leg_a_bid': 89.171, 'leg_a_ask': 89.223,
+                       'leg_b_bid': 102.503, 'leg_b_ask': 102.536})
+    say(bot, '/status')
+    in_order(bot.api.texts()[-1], ['USOIL</b>  <code>$89.197  (89.171 / 89.223)',
+                                   'UKOIL</b>  <code>$102.519',
+                                   'H to L</b>'])
+
+
+def test_the_status_says_the_spread_at_which_each_side_arms_and_enters(bot):
+    row = bot.desk.snapshot['pairs'][KEY]
+    row['algo_params'] = dict(row['algo_params'], reentry_on=True,
+                              entry_z=1.8, reentry_back=0.2,
+                              reentry_window_pct=50)
+    row['algo_block'].update(mean=-22.395, sigma=2.63,
+                             armed={'BUY': True})
+    say(bot, '/status')
+    text = bot.api.texts()[-1]
+    # mean + z x sigma: 1.8 to arm, 1.6 to 0.8 to come back in.
+    in_order(text, ['Arms at</b>  <code>z +/-1.80',
+                    'Arms H to L</b>  <code>-17.661 and above',
+                    'Arms L to H</b>  <code>-27.129 and below',
+                    'Enters at</b>  <code>z +/-1.60 to +/-0.80',
+                    'Enters H to L</b>  <code>-18.187 to -20.291</code>',
+                    'Enters L to H</b>  <code>-26.603 to -24.499  (armed)',
+                    'Armed</b>  <code>L to H'])
+    # No band yet: the z's alone, no made-up prices.
+    row['algo_block'].update(mean=None)
+    say(bot, '/status')
+    assert 'Arms H to L' not in bot.api.texts()[-1]
