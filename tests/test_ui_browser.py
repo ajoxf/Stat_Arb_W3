@@ -6931,7 +6931,7 @@ def test_the_analysis_page_reads_trades_against_the_capital_managed(page):
     assert 'Capital used' in tiles and '5.0%' in tiles
     table = page.locator('.monitor table.an-table', has_text='% on capital')
     heads = table.locator('th').all_text_contents()
-    for word in ('Capital used', 'Notional value', 'Net % on capital',
+    for word in ('% of capital used', 'Notional value', 'Net % on capital',
                  'Net % on margin', 'Net % of notional'):
         assert word in heads, word
     row = table.locator('tbody tr').first.text_content()

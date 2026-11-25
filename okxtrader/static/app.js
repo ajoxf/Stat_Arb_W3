@@ -8732,7 +8732,7 @@ function anHeld(seconds) {
       '<th title="net P&amp;L \u00f7 both legs\u2019 face value at entry">' +
       'Net % of notional</th>' +
       '<th title="The margin BOTH legs tied up at entry \u00f7 the capital ' +
-      'managed (set above). Hover a cell for the money">Capital used</th>' +
+      'managed (set above). Hover a cell for the money">% of capital used</th>' +
       '<th title="Both legs\u2019 value at entry: lots \u00d7 contract ' +
       'size \u00d7 price, leg A plus leg B">Notional value</th>' +
       '<th title="net P&amp;L \u00f7 the capital managed">Net % on capital</th>' +
