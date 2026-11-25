@@ -555,7 +555,10 @@ def excursion_row(row):
                                 if mfe and pnl is not None and pnl > 0
                                 else None),
             'peak_min': row.get('peak_min'),
-            'trough_min': row.get('trough_min')}
+            'trough_min': row.get('trough_min'),
+            # The margin BOTH legs tied up at entry: the worst and best
+            # points read on it, as the TP % and SL % are set on it.
+            'margin': returns(row, pnl)['margin']}
 
 
 def excursion_rows(positions):

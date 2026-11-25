@@ -8722,8 +8722,8 @@ function anHeld(seconds) {
       'Net % of notional</th>' +
       '<th title="The margin BOTH legs tied up at entry \u00f7 the capital ' +
       'managed (set above). Hover a cell for the money">Capital used</th>' +
-      '<th title="Both legs\u2019 face value at entry \u00f7 the capital ' +
-      'managed: 1.0x is a position as big as the capital">Exposure</th>' +
+      '<th title="Both legs\u2019 value at entry: lots \u00d7 contract ' +
+      'size \u00d7 price, leg A plus leg B">Notional value</th>' +
       '<th title="net P&amp;L \u00f7 the capital managed">Net % on capital</th>' +
       (pnlHidden ? '' : '<th>Running</th>') +
       '</tr></thead><tbody>';
@@ -8759,10 +8759,7 @@ function anHeld(seconds) {
           ' of margin"' : '') + '>' +
         (t.pct_capital_used === null || t.pct_capital_used === undefined
           ? DASH : fmt(t.pct_capital_used, 1) + '%') + '</td>' +
-        '<td' + (t.notional ? ' title="' + escapeHtml(money(t.notional)) +
-          ' of notional"' : '') + '>' +
-        (t.exposure === null || t.exposure === undefined ? DASH
-          : fmt(t.exposure, 2) + 'x') + '</td>' +
+        '<td>' + (t.notional ? money(t.notional) : DASH) + '</td>' +
         pctCell(t.pct_capital, 2, false) +
         (pnlHidden ? '' : '<td class="' + anSign(t.cum_pnl) + '">' +
           pnlCash(t.cum_pnl) + '</td>') + '</tr>';
@@ -8845,22 +8842,51 @@ function anHeld(seconds) {
       '<th class="l">Side</th><th class="l">Exit</th>' +
       '<th title="Maximum adverse excursion: the worst net P&L while open">' +
       'MAE (worst)</th>' +
+      '<th title="The worst point as a share of the capital: what the ' +
+      'account would have lost had the trade closed there">' +
+      'MAE % capital</th>' +
+      '<th title="The worst point as a share of the margin both legs tied ' +
+      'up at entry - the base the SL % is set on">MAE % margin</th>' +
       '<th title="Maximum favourable excursion: the best net P&L while open">' +
-      'MFE (best)</th><th>Net P&amp;L</th>' +
+      'MFE (best)</th>' +
+      '<th title="The best point as a share of the capital: what the ' +
+      'account would have made had the trade closed there">' +
+      'MFE % capital</th>' +
+      '<th title="The best point as a share of the margin both legs tied ' +
+      'up at entry - the base the TP % is set on">MFE % margin</th>' +
+      '<th>Net P&amp;L</th>' +
       '<th title="How much of its best a WINNING trade kept: net / MFE">Kept</th>' +
       '<th title="Minutes from the open to the best point">Best at</th>' +
       '</tr></thead><tbody>';
     if (!rows.length) {
-      html += '<tr><td colspan="9" class="hint">no closed trade with its ' +
+      html += '<tr><td colspan="13" class="hint">no closed trade with its ' +
         'best and worst point yet \u2014 they are kept from this version on' +
         '</td></tr>';
+    }
+    // On the capital: the typed figure, or the account balance.
+    var excCapital = (a.summary || {}).capital || null;
+    function onBase(value, base, missing) {
+      if (value === null || value === undefined || !base) {
+        return '<td' + (base ? '' : ' title="' + missing + '"') +
+          '>' + DASH + '</td>';
+      }
+      var pct = value / base * 100;
+      return '<td class="' + anSign(pct) + '">' + pctSigned(pct, 2) + '</td>';
+    }
+    function onCapital(value) {
+      return onBase(value, excCapital, 'set the capital above');
     }
     rows.forEach(function (r) {
       html += '<tr><td>' + anClock(r.closed_at) + '</td><td class="l">' +
         name(r.pair_key) + '</td><td class="l">' + anSide(r.side) +
         '</td><td class="l">' + escapeHtml(r.exit_reason || DASH) + '</td>' +
         '<td class="down">' + (r.mae === null ? DASH : money(-r.mae)) + '</td>' +
+        onCapital(r.mae === null || r.mae === undefined ? null : -r.mae) +
+        onBase(r.mae === null || r.mae === undefined ? null : -r.mae,
+               r.margin, 'the margin was not priced') +
         '<td class="up">' + money(r.mfe) + '</td>' +
+        onCapital(r.mfe) +
+        onBase(r.mfe, r.margin, 'the margin was not priced') +
         '<td class="' + anSign(r.pnl) + '">' + money(r.pnl) + '</td>' +
         '<td>' + anPct(r.utilisation_pct, 0) + '</td>' +
         '<td>' + anMin(r.peak_min) + '</td></tr>';

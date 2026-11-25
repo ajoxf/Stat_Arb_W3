@@ -6929,11 +6929,12 @@ def test_the_analysis_page_reads_trades_against_the_capital_managed(page):
     assert 'Capital used' in tiles and '5.0%' in tiles
     table = page.locator('.monitor table.an-table', has_text='% on capital')
     heads = table.locator('th').all_text_contents()
-    for word in ('Capital used', 'Exposure', 'Net % on capital',
+    for word in ('Capital used', 'Notional value', 'Net % on capital',
                  'Net % on margin', 'Net % of notional'):
         assert word in heads, word
     row = table.locator('tbody tr').first.text_content()
-    assert '5.0%' in row and '1.00x' in row and '+2.00%' in row
+    assert '5.0%' in row and '$3,500.00' in row and '+2.00%' in row
+    assert 'Exposure' not in heads
     # Typing a capital saves it as the setting.
     box = page.locator('.monitor .an-capital')
     box.fill('5000')
@@ -7712,3 +7713,37 @@ def test_managed_accounts_are_set_up_from_their_own_window(page):
     assert page.errors == []
     page.evaluate("() => window.MT5Trader.closePanel("
                   "window.MT5Trader.panelId('managed'))")
+
+
+def test_mae_and_mfe_are_read_on_the_capital(page):
+    """The worst and best points of a trade, as a share of the capital
+    (the typed figure, or the account balance)."""
+    page.errors.clear()
+    page.evaluate("""() => {
+        const s = window.MT5Trader.state;
+        s.open = ['monitor:'];
+        s.monitorTab = 'analysis';
+        delete s.capitalManaged;
+        s.analysis = {ok: true, names: {'A|B': 'ETH vs BTC'},
+          summary: {count: 1, closed: 1, capital: 4000,
+                    capital_source: 'balance'},
+          drawdown: {}, calibration: {}, shadow: {}, signals: [],
+          journal: [],
+          excursion: [{pair_key: 'A|B', side: 'BUY', closed_at: 1764000000,
+                       exit_reason: 'Algo: target', mae: 80, mfe: 120,
+                       margin: 1600,
+                       pnl: 100, utilisation_pct: 83, peak_min: 20}]};
+        s.analysisAt = Date.now();
+        window.MT5Trader.render();
+    }""")
+    table = page.locator('.monitor table.an-table', has_text='MAE % capital')
+    table.wait_for(timeout=WAIT)
+    heads = table.locator('th').all_text_contents()
+    assert 'MAE % capital' in heads and 'MFE % capital' in heads
+    assert 'MAE % margin' in heads and 'MFE % margin' in heads
+    row = table.locator('tbody tr').first.text_content()
+    assert '-2.00%' in row and '+3.00%' in row          # on the capital
+    assert '-5.00%' in row and '+7.50%' in row          # on the margin
+    # The balance stands in for the capital: it is the placeholder.
+    assert page.locator('.monitor .an-capital').get_attribute(
+        'placeholder') == '4,000'

@@ -98,3 +98,11 @@ def test_a_typed_capital_wins(tmp_path):
         '/api/analysis').get_json()
     assert body['summary']['capital'] == 5000.0
     assert body['summary']['capital_source'] == 'set'
+
+
+def test_each_excursion_row_carries_the_margin_it_is_read_on():
+    row = analysis.excursion_row({
+        'position_id': 'P1', 'realized_pnl': 10.0, 'peak_pnl': 30.0,
+        'trough_pnl': -20.0, 'entry_margin': 5.0, 'quantity': 300.0})
+    assert row['margin'] == 1500.0
+    assert row['mae'] == 20.0 and row['mfe'] == 30.0
