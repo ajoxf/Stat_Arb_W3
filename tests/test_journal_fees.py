@@ -106,3 +106,9 @@ def test_each_excursion_row_carries_the_margin_it_is_read_on():
         'trough_pnl': -20.0, 'entry_margin': 5.0, 'quantity': 300.0})
     assert row['margin'] == 1500.0
     assert row['mae'] == 20.0 and row['mfe'] == 30.0
+
+
+def test_the_analysis_tab_and_the_report_both_match_okxs_fills(tmp_path):
+    client = _app(tmp_path, {}).test_client()
+    assert client.get('/api/analysis').get_json()['fee_tally'] is not None
+    assert client.get('/report').status_code == 200

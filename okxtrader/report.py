@@ -13,6 +13,7 @@ beside config.json, embedded in the page; without one, the Nexus mark.
 import base64
 import html
 import os
+import re
 import time
 
 LOGO_NAMES = ('report_logo.svg', 'report_logo.png', 'report_logo.jpg',
@@ -105,6 +106,16 @@ def size(value):
     if value is None:
         return DASH
     return f'{value:,.2f}'.rstrip('0').rstrip('.')
+
+
+def fills_text(t):
+    """Maker or taker per leg, in -> out: `M/T → M/M`."""
+    f = t.get('fills') or {}
+    if not any(f.get(k) for k in ('entry_a', 'entry_b', 'exit_a',
+                                  'exit_b')):
+        return DASH
+    return (f'{f.get("entry_a") or DASH}/{f.get("entry_b") or DASH} → '
+            f'{f.get("exit_a") or DASH}/{f.get("exit_b") or DASH}')
 
 
 def side(value):
@@ -244,6 +255,12 @@ def render(body, names=None, days=7.0, pair_key=None, now=None,
         return names.get(key) or key or DASH
 
     def tile(label, value, cls='', note=''):
+        # A long figure steps down a size rather than out of its tile.
+        shown = len(re.sub(r'<[^>]+>', '', str(value)))
+        if 'two-line' not in cls and shown > 13:
+            cls += ' longer'
+        elif 'two-line' not in cls and shown > 9:
+            cls += ' long'
         return (f'<div class="tile"><div class="tl">{label}</div>'
                 f'<div class="tv {cls}">{value}</div>'
                 f'<div class="tn">{note}</div></div>')
@@ -281,12 +298,21 @@ def render(body, names=None, days=7.0, pair_key=None, now=None,
                  and pnl == 'show' else '')),
         tile('Profit factor', f'{factor:.2f}' if factor else DASH, '',
              'won ÷ lost, in money') if hide else
-        tile('Avg win / loss', f'{cash(avg_win)} / {cash(avg_loss)}', '',
+        tile('Avg win / loss', f'<span class="pair">{cash(avg_win)} /</span>'
+             f' <span class="pair">{cash(avg_loss)}</span>', 'two-line',
              'profit factor ' + (f'{factor:.2f}' if factor else DASH)),
         '' if hide else
         tile('Gross → fees', f'{cash(gross)}', '',
              f'fees {cash(fees, sign=False)}'),
     ])
+
+    def fee_cell(t):
+        fee = t.get('fee', t.get('fees'))
+        if fee is None:
+            return DASH
+        # ~ : the desk's estimate, where OKX's fills are not recorded.
+        return ('' if t.get('fees_source', 'OKX') == 'OKX' or pnl != 'show'
+                else '~') + cash(fee, sign=False)
 
     rows = []
     for i, t in enumerate(trips, 1):
@@ -302,9 +328,10 @@ def render(body, names=None, days=7.0, pair_key=None, now=None,
             f'{spread(t.get("exit_spread"))}</td>'
             f'<td>{held(t.get("held_sec"))}</td>'
             f'<td class="l">{_e(t.get("exit_reason") or DASH)}</td>'
+            + f'<td>{fills_text(t)}</td>'
             + ('' if hide else
                f'<td>{cash(t.get("gross_pnl"))}</td>'
-               f'<td>{cash(t.get("fees"), sign=False)}</td>'
+               f'<td>{fee_cell(t)}</td>'
                f'<td class="{tone(t.get("pnl"))}"><b>{cash(t.get("pnl"))}</b>'
                '</td>') +
             f'<td class="{tone(t.get("pct_margin"))}">'
@@ -312,21 +339,93 @@ def render(body, names=None, days=7.0, pair_key=None, now=None,
             f'<td class="{tone(t.get("pct_capital"))}">'
             f'{pct(t.get("pct_capital"), 3)}</td>'
             + ('' if hide else
+               '<td>' + (DASH if t.get('notional') is None else
+                         MASK if pnl != 'show' else
+                         f'${t["notional"]:,.0f}') + '</td>')
+            + ('' if hide else
                f'<td class="{tone(t.get("cum_pnl"))}">{cash(t.get("cum_pnl"))}'
                '</td>') +
             '</tr>')
     journal = ('<table class="journal"><thead><tr><th>#</th><th>Opened</th>'
                '<th>Closed</th><th class="l">Ladder</th><th>Side</th>'
                '<th>Who</th><th>Size</th><th>Spread in → out</th>'
-               '<th>Held</th><th class="l">Exit</th>' +
+               '<th>Held</th><th class="l">Exit</th><th>Fills A/B<br>'
+               'in → out</th>' +
                ('' if hide else '<th>Gross</th><th>Fees</th>'
                                 '<th>Net P&amp;L</th>') +
                '<th>On margin</th><th>On capital</th>' +
-               ('' if hide else '<th>Running</th>') +
+               ('' if hide else '<th>Notional value</th><th>Running</th>') +
                '</tr></thead><tbody>' +
-               (''.join(rows) or '<tr><td colspan="16">No closed trade in '
+               (''.join(rows) or '<tr><td colspan="18">No closed trade in '
                                  'this period.</td></tr>') +
                '</tbody></table>')
+
+    tally = body.get('fee_tally') or {}
+    fee_line = ''
+    if tally.get('trades'):
+        fills_n = (tally.get('maker_fills') or 0) + \
+            (tally.get('taker_fills') or 0)
+        parts = []
+        if not hide:
+            parts.append(f'<b>Fees</b> {cash(tally.get("fees"), sign=False)}'
+                         f' over {tally["trades"]} trade(s)')
+            if tally.get('measured'):
+                parts.append(
+                    f'<b>maker</b> {cash(tally.get("maker_fees"), sign=False)}'
+                    f' ({tally.get("maker_fills") or 0} fills)')
+                parts.append(
+                    f'<b>taker</b> {cash(tally.get("taker_fees"), sign=False)}'
+                    f' ({tally.get("taker_fills") or 0} fills)')
+        elif fills_n:
+            parts.append(f'<b>Fills</b> {tally.get("maker_fills") or 0} maker'
+                         f' · {tally.get("taker_fills") or 0} taker')
+        if fills_n:
+            parts.append(f'{100.0 * (tally.get("maker_fills") or 0) / fills_n:.0f}'
+                         '% of fills maker')
+        if tally.get('estimated') and not hide:
+            parts.append(f'{tally["estimated"]} trade(s) estimated (~): '
+                         'their OKX fills are not on record')
+        fee_line = '<p class="tally">' + ' · '.join(parts) + '</p>'
+
+    def share(value, base):
+        if value is None or not base:
+            return DASH
+        return pct(value / base * 100.0)
+    ex_rows = []
+    for r in reversed(body.get('excursion') or []):        # oldest first
+        mae = None if r.get('mae') is None else -r['mae']
+        mfe = r.get('mfe')
+        ex_rows.append(
+            f'<tr><td>{clock(r.get("closed_at"))}</td>'
+            f'<td class="l">{_e(name(r.get("pair_key")))}</td>'
+            f'<td>{side(r.get("side"))}</td>'
+            f'<td class="l">{_e(r.get("exit_reason") or DASH)}</td>'
+            + ('' if hide else f'<td class="down">{cash(mae)}</td>') +
+            f'<td class="{tone(mae)}">{share(mae, capital)}</td>'
+            f'<td class="{tone(mae)}">{share(mae, r.get("margin"))}</td>'
+            + ('' if hide else f'<td class="up">{cash(mfe)}</td>') +
+            f'<td class="{tone(mfe)}">{share(mfe, capital)}</td>'
+            f'<td class="{tone(mfe)}">{share(mfe, r.get("margin"))}</td>'
+            + ('' if hide else
+               f'<td class="{tone(r.get("pnl"))}">{cash(r.get("pnl"))}</td>')
+            + '<td>' + (DASH if r.get('utilisation_pct') is None
+                        else f'{r["utilisation_pct"]:.0f}%') + '</td></tr>')
+    excursion = ''
+    if ex_rows:
+        excursion = (
+            '<section class="panel jr"><h2>Worst and best points '
+            '<small>MAE: the worst net P&amp;L while open · MFE: the best · '
+            'each on the capital and on the margin the trade tied up'
+            '</small></h2><table class="journal excursion"><thead><tr>'
+            '<th>Closed</th><th class="l">Ladder</th><th>Side</th>'
+            '<th class="l">Exit</th>' +
+            ('' if hide else '<th>MAE</th>') +
+            '<th>MAE<br>% capital</th><th>MAE<br>% margin</th>' +
+            ('' if hide else '<th>MFE</th>') +
+            '<th>MFE<br>% capital</th><th>MFE<br>% margin</th>' +
+            ('' if hide else '<th>Net P&amp;L</th>') +
+            '<th>Kept</th></tr></thead><tbody>' + ''.join(ex_rows) +
+            '</tbody></table></section>')
 
     if pnl == 'show':
         axis = money
@@ -354,7 +453,10 @@ def render(body, names=None, days=7.0, pair_key=None, now=None,
     meta = [('Period', period_text(days) + (f' · {span}' if span
                                             else '')),
             ('Ladders', name(pair_key) if pair_key else 'Every ladder'),
-            ('Capital managed', (money(capital, sign=False)
+            ('Capital managed', ((money(capital, sign=False)
+                                  + (' (account balance)' if
+                                     s.get('capital_source') == 'balance'
+                                     else ''))
                                  if pnl == 'show' else 'not shown')
              if capital else 'not set'),
             ('Prepared', time.strftime('%d %b %Y, %H:%M',
@@ -388,8 +490,11 @@ for the colours.</span></div>
   <div><span>Capital used / trade</span><b>{'' if s.get('capital_used_avg') is None else f"{s['capital_used_avg']:.1f}% avg · {s.get('capital_used_max') or 0:.1f}% max"}</b></div></div></div>
 </section>
 <section class="panel jr"><h2>Trade journal <small>{len(trips)} closed
-trade(s), oldest first</small></h2>{journal}</section>
-<footer class="notes"><b>Net P&amp;L</b> is after every fee. <b>On margin</b>:
+trade(s), oldest first</small></h2>{journal}{fee_line}</section>
+{excursion}
+<footer class="notes"><b>Net P&amp;L</b> is after every fee. <b>Fills</b>:
+how OKX filled leg A / leg B at the entry and the exit (M maker, T taker).
+<b>Fees</b>: what OKX charged on the trade’s fills. <b>On margin</b>:
 net ÷ the margin both legs tied up at entry. <b>On capital</b>: net ÷
 the capital managed. <b>Max drawdown</b>: the worst fall of the running
 net from a peak, closed trades only. Funding is not included. Built from
@@ -570,7 +675,11 @@ h1 { margin: 0; font-size: 24px; color: var(--navy); letter-spacing: -.01em; }
 .tile { border: 1px solid var(--line); border-top: 3px solid var(--navy);
   border-radius: 3px; padding: 7px 8px; background: var(--band); }
 .tl { font-size: 9.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--mute); }
-.tv { font-size: 16px; font-weight: 700; margin: 2px 0; white-space: nowrap; }
+.tv { font-size: 15px; font-weight: 700; margin: 2px 0; white-space: nowrap; }
+/* A value of two figures breaks between them rather than out of the tile. */
+.tv .pair { display: inline-block; }
+.tv.two-line { white-space: normal; line-height: 1.15; }
+.tv.long { font-size: 12.5px; } .tv.longer { font-size: 11px; }
 .tn { font-size: 9.5px; color: var(--mute); }
 .two { display: grid; grid-template-columns: 1.35fr 1fr; gap: 12px; }
 .panel { border: 1px solid var(--line); border-radius: 3px; padding: 8px 10px; }
@@ -587,7 +696,14 @@ th, td { border: 1px solid var(--line); padding: 3px 5px; text-align: center; wh
 th { background: var(--navy); color: #fff; font-weight: 600; font-size: 10.5px; }
 td.l, th.l { text-align: left; }
 .split { margin-bottom: 8px; font-size: 11px; }
-.journal { font-size: 10.5px; }
+.journal { font-size: 9.5px; table-layout: auto; }
+.journal th, .journal td { padding: 2px 4px; }
+/* Free text wraps inside its column rather than pushing out of it. */
+.journal td.l { white-space: normal; overflow-wrap: anywhere;
+  max-width: 140px; }
+.journal th { white-space: normal; }
+.tally { margin: 6px 0 0; font-size: 10.5px; }
+.excursion { margin-top: 2px; }
 .returns { font-size: 12px; max-width: 760px; }
 .returns td, .returns th { padding: 5px 10px; }
 .tiles.client { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
