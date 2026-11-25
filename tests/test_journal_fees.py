@@ -112,3 +112,14 @@ def test_the_analysis_tab_and_the_report_both_match_okxs_fills(tmp_path):
     client = _app(tmp_path, {}).test_client()
     assert client.get('/api/analysis').get_json()['fee_tally'] is not None
     assert client.get('/report').status_code == 200
+
+
+def test_fees_are_read_as_a_share_of_the_gross():
+    journal = [{'position_id': 'P2', 'fees': 5.0, 'gross_pnl': -10.0},
+               {'position_id': 'P1', 'fees': 4.0, 'gross_pnl': 40.0}]
+    tally = analysis.attach_fills(journal, [], [])
+    p2, p1 = journal
+    assert p1['fees_pct_gross'] == 10.0
+    # A move that lost has no share: a dash, not a negative percent.
+    assert p2['fees_pct_gross'] is None
+    assert tally['gross'] == 30.0 and tally['fees_pct_gross'] == 30.0

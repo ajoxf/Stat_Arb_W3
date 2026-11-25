@@ -194,6 +194,7 @@ def test_the_report_carries_the_fills_the_fees_and_the_notional():
     assert 'Exposure' not in page
     assert '<b>Fees</b>' in page and '% of fills maker' in page
     assert '$3,744.00 (account balance)' in page
+    assert 'Fees %<br>of gross</th>' in page and '% of gross</b>' in page
 
 
 def test_the_report_reads_the_worst_and_best_points_on_capital_and_margin():

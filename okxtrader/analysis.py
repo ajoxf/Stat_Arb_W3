@@ -831,7 +831,18 @@ def attach_fills(journal, positions, fills):
     # The running tally, in the order the trades closed (the journal is
     # newest first).
     running = 0.0
+    gross_total = fees_on_gross = 0.0
     for row in reversed(journal or ()):
+        gross = row.get('gross_pnl')
+        # FEES AS A SHARE OF THE GROSS: what the costs took out of what
+        # the spread move made. Only for a move that made money - a share
+        # of a loss says nothing.
+        row['fees_pct_gross'] = (
+            round(100.0 * row['fee'] / gross, 2)
+            if row.get('fee') is not None and gross and gross > 0 else None)
+        if row.get('fee') is not None and gross is not None:
+            gross_total += gross
+            fees_on_gross += row['fee']
         if row.get('fee') is not None:
             running += row['fee']
             tally['trades'] += 1
@@ -845,6 +856,9 @@ def attach_fills(journal, positions, fills):
         tally['taker_fills'] += row.get('taker_fills') or 0
         row['cum_fees'] = round(running, 2) if tally['trades'] else None
     tally['fees'] = round(running, 2)
+    tally['gross'] = round(gross_total, 2)
+    tally['fees_pct_gross'] = (round(100.0 * fees_on_gross / gross_total, 2)
+                               if gross_total > 0 else None)
     tally['maker_fees'] = round(tally['maker_fees'], 2)
     tally['taker_fees'] = round(tally['taker_fees'], 2)
     return tally

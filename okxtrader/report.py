@@ -321,12 +321,16 @@ def render(body, names=None, days=7.0, pair_key=None, now=None,
         return ('' if t.get('fees_source', 'OKX') == 'OKX' or pnl != 'show'
                 else '~') + cash(fee, sign=False)
 
+    def fee_share(t):
+        value = t.get('fees_pct_gross')
+        return DASH if value is None else f'{value:.1f}%'
+
     rows = []
     for i, t in enumerate(trips, 1):
         rows.append(
             f'<tr><td class="no">{trade_ref(t)}</td>'
-            f'<td>{clock(t.get("opened_at"))}</td>'
-            f'<td>{clock(t.get("closed_at"))}</td>'
+            f'<td>{clock(t.get("opened_at"))}<br>'
+            f'<span class="closed">{clock(t.get("closed_at"))}</span></td>'
             f'<td class="l">{_e(name(t.get("pair_key")))}</td>'
             f'<td>{side(t.get("side"))}</td>'
             f'<td>{"Algo" if t.get("source") == "ALGO" else "Manual"}</td>'
@@ -338,7 +342,9 @@ def render(body, names=None, days=7.0, pair_key=None, now=None,
             + f'<td>{fills_text(t)}</td>'
             + ('' if hide else
                f'<td>{cash(t.get("gross_pnl"))}</td>'
-               f'<td>{fee_cell(t)}</td>'
+               f'<td>{fee_cell(t)}</td>')
+            + f'<td>{fee_share(t)}</td>'
+            + ('' if hide else
                f'<td class="{tone(t.get("pnl"))}"><b>{cash(t.get("pnl"))}</b>'
                '</td>') +
             f'<td class="{tone(t.get("pct_margin"))}">'
@@ -354,13 +360,14 @@ def render(body, names=None, days=7.0, pair_key=None, now=None,
                '</td>') +
             '</tr>')
     journal = ('<table class="journal"><thead><tr><th>Trade<br>no</th>'
-               '<th>Opened</th>'
-               '<th>Closed</th><th class="l">Ladder</th><th>Side</th>'
+               '<th>Opened<br>closed</th>'
+               '<th class="l">Ladder</th><th>Side</th>'
                '<th>Who</th><th>Size</th><th>Spread in → out</th>'
                '<th>Held</th><th class="l">Exit</th><th>Fills A/B<br>'
                'in → out</th>' +
-               ('' if hide else '<th>Gross</th><th>Fees</th>'
-                                '<th>Net P&amp;L</th>') +
+               ('' if hide else '<th>Gross</th><th>Fees</th>') +
+               '<th class="nw">Fees %<br>of gross</th>' +
+               ('' if hide else '<th>Net P&amp;L</th>') +
                '<th>On margin</th><th>On capital</th>' +
                ('' if hide else '<th>Notional value</th><th>Running</th>') +
                '</tr></thead><tbody>' +
@@ -375,8 +382,12 @@ def render(body, names=None, days=7.0, pair_key=None, now=None,
             (tally.get('taker_fills') or 0)
         parts = []
         if not hide:
+            parts.append(f'<b>Gross</b> {cash(tally.get("gross"))}')
             parts.append(f'<b>Fees</b> {cash(tally.get("fees"), sign=False)}'
-                         f' over {tally["trades"]} trade(s)')
+                         f' over {tally["trades"]} trade(s)' + (
+                             f' = <b>{tally["fees_pct_gross"]:.1f}% of '
+                             f'gross</b>' if tally.get('fees_pct_gross')
+                             is not None else ''))
             if tally.get('measured'):
                 parts.append(
                     f'<b>maker</b> {cash(tally.get("maker_fees"), sign=False)}'
@@ -504,7 +515,9 @@ trade(s), oldest first</small></h2>{journal}{fee_line}</section>
 {excursion}
 <footer class="notes"><b>Net P&amp;L</b> is after every fee. <b>Fills</b>:
 how OKX filled leg A / leg B at the entry and the exit (M maker, T taker).
-<b>Fees</b>: what OKX charged on the trade’s fills. <b>On margin</b>:
+<b>Fees</b>: what OKX charged on the trade’s fills. <b>Fees % of gross</b>:
+the fees as a share of what the spread move made (a dash where the move
+lost). <b>On margin</b>:
 net ÷ the margin both legs tied up at entry. <b>On capital</b>: net ÷
 the capital managed. <b>Max drawdown</b>: the worst fall of the running
 net from a peak, closed trades only. Funding is not included. Built from
@@ -714,6 +727,8 @@ td.l, th.l { text-align: left; }
 .journal th { white-space: normal; }
 .tally { margin: 6px 0 0; font-size: 10.5px; }
 td.no { font-weight: 700; color: var(--navy); }
+.journal .closed { color: var(--mute); }
+.journal th.nw { white-space: nowrap; }
 .excursion { margin-top: 2px; }
 .returns { font-size: 12px; max-width: 760px; }
 .returns td, .returns th { padding: 5px 10px; }

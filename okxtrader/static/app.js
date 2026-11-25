@@ -7946,11 +7946,15 @@ function anFeeCell(t) {
 }
 
 // THE TALLY under the journal: every fee, maker against taker.
-function feeTallyHtml(f) {
+function feeTallyHtml(f, cash) {
   if (!f || !f.trades) return '';
   var fills = (f.maker_fills || 0) + (f.taker_fills || 0);
-  return '<p class="an-fee-tally"><b>Fees</b> ' + money(f.fees) +
+  return '<p class="an-fee-tally">' + (cash && f.gross !== undefined
+      ? '<b>Gross</b> ' + cash(f.gross) + ' \u00b7 ' : '') +
+    '<b>Fees</b> ' + money(f.fees) +
     ' over ' + f.trades + ' trade(s)' +
+    (f.fees_pct_gross === null || f.fees_pct_gross === undefined ? ''
+      : ' = <b>' + fmt(f.fees_pct_gross, 1) + '% of gross</b>') +
     (f.measured ? ' \u00b7 <b>maker</b> ' + money(f.maker_fees) + ' (' +
       (f.maker_fills || 0) + ' fills) \u00b7 <b>taker</b> ' +
       money(f.taker_fees) + ' (' + (f.taker_fills || 0) + ' fills)' +
@@ -8711,9 +8715,14 @@ function anHeld(seconds) {
       '<th title="How OKX filled each leg: M maker, T taker, M+T both. ' +
       'Leg A / leg B, at the entry and at the exit">Fills A/B in \u2192 out' +
       '</th>' +
+      (pnlHidden ? '' : '<th title="The spread\u2019s move times the size, ' +
+        'before any fee">Gross P&amp;L</th>') +
       '<th title="The trading fees OKX charged on this trade\u2019s fills ' +
       '(a maker rebate is negative). ~ is the desk\u2019s own estimate, ' +
       'where OKX\u2019s fills are not in the journal">Fees</th>' +
+      '<th title="The fees as a share of the gross P&amp;L: what the costs ' +
+      'took out of what the spread move made. A dash where the move ' +
+      'itself lost">Fees % of gross</th>' +
       (pnlHidden ? '' : '<th>Net P&amp;L</th>') +
       '<th title="net P&amp;L \u00f7 the margin BOTH legs tied up at entry - ' +
       'the base the TP % and SL % are set on. NET: after every fee">' +
@@ -8728,7 +8737,7 @@ function anHeld(seconds) {
       (pnlHidden ? '' : '<th>Running</th>') +
       '</tr></thead><tbody>';
     if (!trips.length) {
-      html += '<tr><td colspan="25" class="hint">no closed trade in this ' +
+      html += '<tr><td colspan="27" class="hint">no closed trade in this ' +
         'window</td></tr>';
     }
     trips.forEach(function (t) {
@@ -8751,7 +8760,11 @@ function anHeld(seconds) {
         '</td><td>' + (t.leg_b.side || '') + ' ' + fmt(t.leg_b.entry, 3) +
         '</td><td>' + anHeld(t.held_sec) + '</td><td class="l">' +
         escapeHtml(t.exit_reason || DASH) + '</td>' +
-        anFillsCell(t) + anFeeCell(t) +
+        anFillsCell(t) +
+        (pnlHidden ? '' : '<td class="' + anSign(t.gross_pnl) + '">' +
+          pnlCash(t.gross_pnl) + '</td>') + anFeeCell(t) +
+        '<td>' + (t.fees_pct_gross === null || t.fees_pct_gross === undefined
+          ? DASH : fmt(t.fees_pct_gross, 1) + '%') + '</td>' +
         (pnlHidden ? '' : '<td class="' + anSign(t.pnl) + '">' +
           pnlCash(t.pnl) + '</td>') + pctCell(t.pct_margin, 2, t.margin_estimated) +
         pctCell(t.pct_notional, 3, false) +
@@ -8765,7 +8778,7 @@ function anHeld(seconds) {
           pnlCash(t.cum_pnl) + '</td>') + '</tr>';
     });
     html += '</tbody></table>';
-    html += feeTallyHtml(a.fee_tally);
+    html += feeTallyHtml(a.fee_tally, pnlHidden ? null : pnlCash);
 
     // 1. The summary.
     html += '<h4>Summary</h4><div class="an-tiles">' +
