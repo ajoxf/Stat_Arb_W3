@@ -223,6 +223,35 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
         return ('the engine is waiting — open Exchanges to fix its setup; '
                 'it starts by itself once that is right. ' + held[0])
 
+    def desk_capital(raw):
+        """THE CAPITAL returns are read against: the CAPITAL_MANAGED
+        setting when one is set, otherwise the BALANCE OKX holds now -
+        the equity of the accounts the ladders trade, added up.
+        (capital, 'set' | 'balance' | None)."""
+        try:
+            typed = max(0.0, float((raw.get('settings') or {}).get(
+                'CAPITAL_MANAGED') or 0.0))
+        except (TypeError, ValueError):
+            typed = 0.0
+        if typed:
+            return typed, 'set'
+        snapshot = status() or {}
+        accounts = snapshot.get('accounts') or {}
+        names = set()
+        for pair in (snapshot.get('pairs') or {}).values():
+            for leg in ('leg_a_account', 'leg_b_account'):
+                if (pair or {}).get(leg):
+                    names.add(pair[leg])
+        names = names or set(accounts)
+        total = 0.0
+        for name in names:
+            try:
+                total += float((accounts.get(name) or {}).get('equity')
+                               or 0.0)
+            except (TypeError, ValueError):
+                continue
+        return (round(total, 2), 'balance') if total > 0 else (0.0, None)
+
     def status():
         snapshot = read_status_file()
         if snapshot is None:
@@ -611,12 +640,9 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
         raw = cfg.load_raw(config_path)
         names = {key: (pair or {}).get('name') or key
                  for key, pair in (raw.get('pairs') or {}).items()}
-        try:
-            capital = max(0.0, float((raw.get('settings') or {}).get(
-                'CAPITAL_MANAGED') or 0.0))
-        except (TypeError, ValueError):
-            capital = 0.0
+        capital, capital_source = desk_capital(raw)
         body = analysis.report(positions, events, now=now, capital=capital)
+        body.setdefault('summary', {})['capital_source'] = capital_source
         analysis.number_journal(body.get('journal'), analysis.trade_numbers(
             db.positions_between(None, None)))
         # MAKER OR TAKER and THE FEES, per trade, from OKX's own fills.
@@ -1046,13 +1072,10 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
         raw = cfg.load_raw(config_path)
         names = {key: (pair or {}).get('name') or key
                  for key, pair in (raw.get('pairs') or {}).items()}
-        try:
-            capital = max(0.0, float((raw.get('settings') or {}).get(
-                'CAPITAL_MANAGED') or 0.0))
-        except (TypeError, ValueError):
-            capital = 0.0
+        capital, capital_source = desk_capital(raw)
         body = analysis.report(positions, events, shadows, excursions, now,
                                capital=capital)
+        body.setdefault('summary', {})['capital_source'] = capital_source
         # TRADE NO, over the whole record: a trade keeps its number in
         # every window and on every ladder filter.
         analysis.number_journal(body.get('journal'), analysis.trade_numbers(

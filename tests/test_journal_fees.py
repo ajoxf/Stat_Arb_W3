@@ -57,3 +57,44 @@ def test_a_fill_shared_by_two_trades_is_counted_once():
     fills = [fill('d1', 5, 'open', 'taker', -1.0)]
     tally = analysis.attach_fills(journal, positions, fills)
     assert tally['fees'] == 1.0
+
+
+# -- the capital: the account balance unless one is typed ---------------------
+
+import json
+import time
+
+from okxtrader.database import Store
+from okxtrader.webapp import create_app
+
+
+def _app(tmp_path, settings):
+    db_path = str(tmp_path / 'trader.db')
+    Store(db_path)
+    status = tmp_path / 'status.json'
+    status.write_text(json.dumps({
+        'at': time.time(),
+        'accounts': {'okx': {'equity': 3744.0}, 'other': {'equity': 99.0}},
+        'pairs': {'A|B': {'leg_a_account': 'okx',
+                          'leg_b_account': 'okx'}}}), encoding='utf-8')
+    (tmp_path / 'config.json').write_text(json.dumps(
+        {'accounts': {}, 'pairs': {}, 'settings': settings}),
+        encoding='utf-8')
+    return create_app(str(status), str(tmp_path / 'c.jsonl'),
+                      str(tmp_path / 'r.json'),
+                      str(tmp_path / 'config.json'), db_path=db_path)
+
+
+def test_with_nothing_typed_the_capital_is_the_account_balance(tmp_path):
+    body = _app(tmp_path, {}).test_client().get(
+        '/api/analysis').get_json()
+    # The accounts the ladders trade, not every account the desk knows.
+    assert body['summary']['capital'] == 3744.0
+    assert body['summary']['capital_source'] == 'balance'
+
+
+def test_a_typed_capital_wins(tmp_path):
+    body = _app(tmp_path, {'CAPITAL_MANAGED': 5000}).test_client().get(
+        '/api/analysis').get_json()
+    assert body['summary']['capital'] == 5000.0
+    assert body['summary']['capital_source'] == 'set'

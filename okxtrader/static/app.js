@@ -7871,7 +7871,16 @@
      * typed, until the next one reads it back. 0 / null: not set. */
     if (state.capitalManaged !== undefined) { return state.capitalManaged; }
     var s = (state.analysis || {}).summary || {};
+    // The account balance stands in when nothing is typed: it is the
+    // placeholder, not a saved setting.
+    if (s.capital_source === 'balance') { return null; }
     return s.capital || null;
+  }
+
+  function anBalanceCapital() {
+    var s = (state.analysis || {}).summary || {};
+    return s.capital_source === 'balance' && state.capitalManaged === undefined
+      ? s.capital : null;
   }
 
   function saveCapital(value) {
@@ -8609,9 +8618,14 @@ function anHeld(seconds) {
       'trade\u2019s return on capital and the capital it used are read ' +
       'against it; nothing is sized or sent from it.">Capital managed $' +
       '<input class="an-capital" type="number" min="0" step="100" ' +
-      'placeholder="not set" value="' +
+      'placeholder="' + (anBalanceCapital() ? escapeHtml(
+        Math.round(anBalanceCapital()).toLocaleString('en-US')) : 'not set') +
+      '" value="' +
       (anCapital() ? escapeHtml(String(anCapital())) : '') +
-      '"></label> \u00b7 <label title="Show the money each trade made, ' +
+      '">' + (anBalanceCapital() ? ' <small class="hint" title="Nothing ' +
+        'typed: the balance OKX holds now (the equity of the accounts ' +
+        'the ladders trade) is the capital. Type a figure to fix it ' +
+        'instead.">= account balance</small>' : '') + '</label> \u00b7 <label title="Show the money each trade made, ' +
       'mask it with dots, or leave the column out - for a screen or a ' +
       'report that others see. The percentages stay.">Net P&amp;L ' +
       '<select class="an-pnl">' + [['show', 'show'], ['mask', 'mask'],
@@ -8700,8 +8714,6 @@ function anHeld(seconds) {
       '<th title="The trading fees OKX charged on this trade\u2019s fills ' +
       '(a maker rebate is negative). ~ is the desk\u2019s own estimate, ' +
       'where OKX\u2019s fills are not in the journal">Fees</th>' +
-      '<th title="The fees added up, in the order the trades closed">' +
-      'Fees running</th>' +
       (pnlHidden ? '' : '<th>Net P&amp;L</th>') +
       '<th title="net P&amp;L \u00f7 the margin BOTH legs tied up at entry - ' +
       'the base the TP % and SL % are set on. NET: after every fee">' +
@@ -8716,7 +8728,7 @@ function anHeld(seconds) {
       (pnlHidden ? '' : '<th>Running</th>') +
       '</tr></thead><tbody>';
     if (!trips.length) {
-      html += '<tr><td colspan="26" class="hint">no closed trade in this ' +
+      html += '<tr><td colspan="25" class="hint">no closed trade in this ' +
         'window</td></tr>';
     }
     trips.forEach(function (t) {
@@ -8740,8 +8752,6 @@ function anHeld(seconds) {
         '</td><td>' + anHeld(t.held_sec) + '</td><td class="l">' +
         escapeHtml(t.exit_reason || DASH) + '</td>' +
         anFillsCell(t) + anFeeCell(t) +
-        '<td>' + (t.cum_fees === null || t.cum_fees === undefined ? DASH
-          : money(t.cum_fees)) + '</td>' +
         (pnlHidden ? '' : '<td class="' + anSign(t.pnl) + '">' +
           pnlCash(t.pnl) + '</td>') + pctCell(t.pct_margin, 2, t.margin_estimated) +
         pctCell(t.pct_notional, 3, false) +
