@@ -827,6 +827,80 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
                         'note': 'saved - the engine picks it up in a few '
                                 'seconds, no restart'})
 
+    # -- the economic calendar ------------------------------------------------
+
+    CALENDAR_KEYS = ('BLS_API_KEY', 'EIA_API_KEY')
+
+    def forecasts_path():
+        return os.path.join(os.path.dirname(os.path.abspath(status_path)),
+                            'econ_forecasts.json')
+
+    @app.post('/api/calendar/forecast')
+    def calendar_forecast():
+        """A forecast the trader typed for one figure of one release (from
+        investing.com, say): the surprise is worked out against it. Blank
+        clears it. No agency publishes forecasts."""
+        payload = request.get_json(silent=True) or {}
+        event = str(payload.get('event') or '').strip()
+        figure = str(payload.get('figure') or '').strip()
+        value = str(payload.get('value') or '').strip()
+        if not re.fullmatch(r'[a-z]+:\d{4}-\d{2}-\d{2}', event) or \
+                not re.fullmatch(r'[a-z_]+', figure):
+            return jsonify({'ok': False, 'error': 'which release and '
+                                                  'figure?'}), 400
+        from . import econcal
+        if value and econcal.number(value) is None:
+            return jsonify({'ok': False, 'error': f'{value} is not a figure '
+                            f'- e.g. 0.3%, 221K or -0.6M'}), 400
+        path = forecasts_path()
+        saved = read_json(path) or {}
+        row = saved.setdefault(event, {})
+        if value:
+            row[figure] = value
+        else:
+            row.pop(figure, None)
+            if not row:
+                saved.pop(event, None)
+        tmp = path + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(saved, f)
+        os.replace(tmp, path)
+        return jsonify({'ok': True, 'forecast': value or None})
+
+    @app.get('/api/calendar/keys')
+    def calendar_keys():
+        """Whether the BLS and EIA keys are saved - never their values."""
+        env_path = os.path.join(os.path.dirname(
+            os.path.abspath(config_path)) or '.', '.env')
+        try:
+            from dotenv import dotenv_values
+            saved = dotenv_values(env_path)
+        except Exception:
+            saved = {}
+        return jsonify({'ok': True, 'keys': {
+            k: bool(saved.get(k) or os.environ.get(k))
+            for k in CALENDAR_KEYS}})
+
+    @app.post('/api/calendar/keys')
+    def calendar_keys_save():
+        """The free BLS and EIA keys, into .env. Used from the next read,
+        no restart."""
+        payload = request.get_json(silent=True) or {}
+        env_path = os.path.join(os.path.dirname(
+            os.path.abspath(config_path)) or '.', '.env')
+        saved = []
+        for key in CALENDAR_KEYS:
+            value = str(payload.get(key) or '').strip()
+            if not value:
+                continue
+            if not re.fullmatch(r'[A-Za-z0-9_-]{8,128}', value):
+                return jsonify({'ok': False, 'error': f'{key} does not look '
+                                f'like a key'}), 400
+            cfg.write_env_value(env_path, key, value)
+            os.environ[key] = value
+            saved.append(key)
+        return jsonify({'ok': True, 'saved': saved})
+
     @app.delete('/api/mirror/accounts/<path:name>')
     def api_delete_mirror_account(name):
         """Remove a managed account - never while it holds a copy: its

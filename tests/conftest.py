@@ -647,6 +647,20 @@ def _no_coingecko(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_economic_calendar(monkeypatch):
+    """The calendar reads BLS, DOL and EIA on the trading PC. A
+    coordinator built in a test has it off; the tests of the calendar
+    itself switch it on, with agencies of their own."""
+    from okxtrader import config as cfg, econcal
+
+    def offline(*args, **kwargs):
+        raise ConnectionError('no network in tests')
+    monkeypatch.setitem(cfg.DEFAULT_SETTINGS, 'CALENDAR_ON', False)
+    monkeypatch.setattr(econcal, '_http_get', offline)
+    monkeypatch.setattr(econcal, '_http_post_json', offline)
+
+
+@pytest.fixture(autouse=True)
 def _working_orders(request, monkeypatch):
     """Working orders are held and crossed at the level by default. The
     tests of the old one-leg quote - its fills, hedges, pulls and the

@@ -376,6 +376,10 @@ DEFAULT_SETTINGS = {
     #: CoinGecko) is read for the Algo panel and Telegram, in seconds.
     #: 0 = not read at all. A reading only: nothing is decided from it.
     'BTC_DOMINANCE_SEC': 300.0,
+    # The economic calendar: the high-impact US releases (BLS, DOL, EIA)
+    # on the desk and in Telegram, and how long before one to warn.
+    'CALENDAR_ON': True,
+    'CALENDAR_ALERT_MIN': 15.0,
     #: How often the margin for one spread is re-priced from the
     #: terminals. It moves with the price, but slowly.
     'MARGIN_TTL_SEC': 60.0,

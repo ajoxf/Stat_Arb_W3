@@ -156,6 +156,8 @@ class Publisher:
             row.update(self.pair_extra)
         if getattr(self, 'btc_dominance', None) is not None:
             payload['btc_dominance'] = self.btc_dominance
+        if getattr(self, 'calendar', None) is not None:
+            payload['calendar'] = self.calendar
         for name, extra in self.accounts_extra.items():
             if extra is None:
                 payload['accounts'].pop(name, None)
@@ -7747,3 +7749,99 @@ def test_mae_and_mfe_are_read_on_the_capital(page):
     # The balance stands in for the capital: it is the placeholder.
     assert page.locator('.monitor .an-capital').get_attribute(
         'placeholder') == '4,000'
+
+
+# -- the economic calendar ------------------------------------------------------
+
+
+def calendar_snapshot(now, released=True):
+    """A week as the engine publishes it: claims out (with a typed
+    forecast), PCE-free - CPI due in 12 minutes, crude later."""
+    claims = {'id': 'claims:2026-11-25', 'release': 'claims',
+              'name': 'Jobless claims', 'agency': 'DOL', 'country': 'USD',
+              'impact': 3, 'at': now - 3600,
+              'status': 'released' if released else 'due',
+              'released_at': now - 3590, 'period': '2026-11-25',
+              'figures': [{'key': 'claims', 'name': 'Initial jobless claims',
+                           'unit': 'K',
+                           'actual': '209K' if released else None,
+                           'previous': '222K', 'forecast': '221K',
+                           'surprise': ('12K below forecast' if released
+                                        else None)}],
+              'spreads': {'A|B': {'name': 'ETH vs BTC', 'at': -31.124,
+                                  'after': -30.414, 'move': 0.71}}
+              if released else {}}
+    cpi = {'id': 'cpi:2026-11-25', 'release': 'cpi', 'name': 'CPI',
+           'agency': 'BLS', 'country': 'USD', 'impact': 3,
+           'at': now + 12 * 60, 'status': 'upcoming', 'released_at': None,
+           'period': None, 'spreads': {},
+           'figures': [
+               {'key': 'cpi_mm', 'name': 'CPI m/m', 'unit': '%',
+                'actual': None, 'previous': '0.3%', 'forecast': '0.3%',
+                'surprise': None},
+               {'key': 'core_cpi_mm', 'name': 'Core CPI m/m', 'unit': '%',
+                'actual': None, 'previous': '0.2%', 'forecast': None,
+                'surprise': None},
+               {'key': 'cpi_yy', 'name': 'CPI y/y', 'unit': '%',
+                'actual': None, 'previous': '3.0%', 'forecast': None,
+                'surprise': None}]}
+    crude = {'id': 'crude:2026-11-25', 'release': 'crude',
+             'name': 'Crude oil inventories', 'agency': 'EIA',
+             'country': 'USD', 'impact': 3, 'at': now + 42 * 60,
+             'status': 'upcoming', 'released_at': None, 'period': None,
+             'spreads': {},
+             'figures': [{'key': 'crude', 'name': 'Crude oil inventories',
+                          'unit': 'M', 'actual': None, 'previous': '1.5M',
+                          'forecast': None, 'surprise': None}]}
+    return {'events': [claims, cpi, crude], 'next': cpi,
+            'last': claims if released else None,
+            'sources': {'BLS': 'key saved', 'DOL': 'no key needed',
+                        'EIA': 'key saved'},
+            'errors': {}, 'now': now, 'alert_min': 15.0}
+
+
+def test_the_calendar_window_counts_down_and_shows_each_figure(page):
+    publisher = page.paths['publisher']
+    now = time.time()
+    publisher.calendar = calendar_snapshot(now)
+    try:
+        publisher.publish()
+        page.wait_for_selector('#cal-chip:not(.hidden)', timeout=WAIT)
+        chip = page.text_content('#cal-chip')
+        assert 'US CPI in 12 min' in chip or 'US CPI in 13 min' in chip
+        assert 'soon' in page.get_attribute('#cal-chip', 'class')
+        page.click('#open-calendar')
+        page.wait_for_selector('.window.econcal .ec-table', timeout=WAIT)
+        text = page.text_content('.window.econcal')
+        for word in ('US Initial jobless claims', '209K', '222K',
+                     '12K below forecast', 'US CPI', 'Core CPI m/m',
+                     'Crude oil inventories', '+0.710'):
+            assert word in text, word
+        forecast = page.locator('.window.econcal input.ec-fc').first
+        assert forecast.input_value() == '221K'
+    finally:
+        publisher.calendar = None
+        publisher.publish()
+        page.evaluate("() => { const s = window.MT5Trader.state; "
+                      "s.open = s.open.filter(i => i !== 'econcal:'); "
+                      "window.MT5Trader.render(); }")
+
+
+def test_a_release_that_lands_gets_a_box(page):
+    publisher = page.paths['publisher']
+    now = time.time()
+    page.evaluate('() => { window.MT5Calendar.local.seen = null; }')
+    publisher.calendar = calendar_snapshot(now, released=False)
+    try:
+        publisher.publish()
+        page.wait_for_function('() => window.MT5Calendar.local.seen !== null',
+                               timeout=WAIT)
+        publisher.calendar = calendar_snapshot(now, released=True)
+        publisher.publish()
+        page.wait_for_selector('.toast:has-text("RELEASED")', timeout=WAIT)
+        box = page.text_content('.toast:has-text("RELEASED")')
+        assert 'US Initial jobless claims 209K' in box
+        assert 'forecast 221K' in box
+    finally:
+        publisher.calendar = None
+        publisher.publish()

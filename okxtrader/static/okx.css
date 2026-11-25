@@ -367,3 +367,39 @@
 .an-liq-t { color: #d97706; }
 .an-liq-mt { color: #6b7280; }
 .an-fee-tally { margin: 6px 0 14px; font-size: 12px; }
+
+/* THE ECONOMIC CALENDAR: the window, and its countdown on the taskbar. */
+.window.econcal .ec-body { padding: 8px 10px; overflow: auto; font-size: 12px; }
+.ec-cards { display: flex; gap: 8px; margin-bottom: 8px; }
+.ec-card { flex: 1; border: 1px solid #d6dbe2; padding: 6px 8px; min-width: 0; }
+.ec-card.next { border-top: 3px solid #b42318; background: #fff6f5; }
+.ec-card.out { border-top: 3px solid #1f9d55; background: #f3fbf6; }
+.ec-card.move { border-top: 3px solid #16324f; background: #f5f7fa; }
+.ec-k { font-size: 10px; color: #667085; text-transform: uppercase; letter-spacing: .05em; }
+.ec-big { font-size: 15px; font-weight: 700; margin: 1px 0 2px; }
+.ec-card .up { color: #1f9d55; } .ec-card .down { color: #b42318; }
+.ec-table { width: 100%; }
+.ec-table tr.ec-new td { background: #f3fbf6; }
+.ec-table tr.ec-soon td { background: #fff6f5; }
+.ec-table tr.ec-done td { color: #475467; }
+.ec-table td.ec-star { color: #b42318; letter-spacing: -1px; }
+.ec-table .down { color: #b42318; }
+.ec-table input.ec-fc { width: 64px; text-align: right; font: inherit;
+  border: 1px solid #c9cfd8; padding: 0 3px; background: #fff; }
+.ec-sources { margin-top: 6px; color: #475467; font-size: 11px; }
+.ec-sources .down { color: #b42318; }
+.ec-keys { margin-top: 6px; display: flex; flex-wrap: wrap; align-items: center;
+  gap: 8px; font-size: 11px; }
+.ec-keys input { width: 150px; }
+.cal-chip { background: #b42318; color: #fff; border: 0; border-radius: 3px;
+  padding: 3px 10px; font-weight: 700; cursor: pointer; opacity: .85; }
+.cal-chip.soon { opacity: 1; animation: cal-pulse 1.6s ease-in-out infinite; }
+.cal-chip.hidden { display: none; }
+@keyframes cal-pulse { 50% { box-shadow: 0 0 0 3px rgba(180, 35, 24, .35); } }
+.ec-table { border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.ec-table th { background: #d9dde3; border: 1px solid #b9c0ca; padding: 3px 6px;
+  text-align: right; font-weight: 600; font-size: 11px; }
+.ec-table td { border: 1px solid #e1e5ea; padding: 2px 6px; text-align: right;
+  white-space: nowrap; }
+.ec-table th.l, .ec-table td.l { text-align: left; }
+.window.econcal .ec-body { background: #fff; }

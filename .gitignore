@@ -69,3 +69,7 @@ client_logins.json
 client_portal.secret
 data/okx_ledger_mirror_*.json
 client_payouts.json
+
+# The economic calendar: its readings and the forecasts typed in.
+econ_calendar.json
+econ_forecasts.json

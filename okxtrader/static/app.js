@@ -453,6 +453,7 @@
       : node.classList.contains('monitor') ? panelId('monitor')
         : node.classList.contains('settings') ? panelId('settings')
         : node.classList.contains('managed') ? panelId('managed')
+        : node.classList.contains('econcal') ? panelId('econcal')
           : node.classList.contains('chartwin')
             ? panelId('chart', node.dataset.pair)
           : node.classList.contains('calcwin')
@@ -755,7 +756,8 @@
   //: then scrolls sideways past every ladder to reach the one they
   //: wanted. They float over the ladders instead, in view, and can be
   //: dragged and resized like anything else.
-  var FLOATING_BY_DEFAULT = ['grid:', 'monitor:', 'settings:', 'managed:'];
+  var FLOATING_BY_DEFAULT = ['grid:', 'monitor:', 'settings:', 'managed:',
+                             'econcal:'];
 
   function floatByDefault(node, id) {
     var desktop = desktopBox();
@@ -9744,6 +9746,11 @@ function anHeld(seconds) {
     if (wanted[panelId('managed')] && window.MT5Managed) {
       window.MT5Managed.render();
     }
+    if (wanted[panelId('econcal')] && window.MT5Calendar) {
+      window.MT5Calendar.render();
+    }
+    // The taskbar's countdown, and the box when a release lands.
+    if (window.MT5Calendar) { window.MT5Calendar.tick(); }
 
     // Remove the panels that are no longer open.
     Array.prototype.forEach.call(document.querySelectorAll('.window'),
@@ -9959,7 +9966,8 @@ function anHeld(seconds) {
           : parts[0] === 'calc' ? pairName + ' · Calc'
             : parts[0] === 'grid' ? 'Market Grid'
               : parts[0] === 'settings' ? 'Exchanges'
-              : parts[0] === 'managed' ? 'Managed accounts' : 'Positions';
+              : parts[0] === 'managed' ? 'Managed accounts'
+              : parts[0] === 'econcal' ? 'Calendar' : 'Positions';
       var badge = '';
       if (parts[0] === 'ladder') {
         var row = state.snapshot.pairs[parts.slice(1).join(':')] || {};
@@ -10195,6 +10203,12 @@ function anHeld(seconds) {
     });
     el('open-managed').addEventListener('click', function () {
       openPanel(panelId('managed'));
+    });
+    el('open-calendar').addEventListener('click', function () {
+      openPanel(panelId('econcal'));
+    });
+    el('cal-chip').addEventListener('click', function () {
+      openPanel(panelId('econcal'));
     });
     el('kill').addEventListener('click', function () {
       ask('Cancel everything, on every ladder?',

@@ -100,6 +100,47 @@ def level_at(block):
     return lambda z: plain(float(mean) + float(z) * float(sigma), 3)
 
 
+def calendar_soon_text(event, now):
+    """ECONOMIC EVENT IN 15 MIN: what, when, the forecast if one was
+    typed and the last figure."""
+    minutes = max(1, int(round((event['at'] - now) / 60.0)))
+    rows = [('Release', f"US {event['name']} ({event['agency']})"),
+            ('At', time.strftime('%H:%M UTC', time.gmtime(event['at']))),
+            ('Impact', 'high (3 star)')]
+    for figure in event.get('figures') or ():
+        words = f"previous {figure.get('previous') or '—'}"
+        if figure.get('forecast'):
+            words = f"forecast {figure['forecast']} · " + words
+        rows.append((figure['name'], words))
+    return (title(f'ECONOMIC EVENT IN {minutes} MIN', now) + '\n'
+            + table(rows))
+
+
+def calendar_out_text(event, pairs):
+    """RELEASED: each figure against its previous (and the forecast,
+    when one was typed), then where the desk's spreads stand."""
+    rows = [('Release', f"US {event['name']} ({event['agency']})")]
+    for figure in event.get('figures') or ():
+        words = (figure.get('actual') or '—') + \
+            f"  (previous {figure.get('previous') or '—'}"
+        if figure.get('forecast'):
+            words += f", forecast {figure['forecast']}"
+        words += ')'
+        rows.append((figure['name'], words))
+        if figure.get('surprise'):
+            rows.append(('Surprise', figure['surprise']))
+    rows.append(None)
+    for key, row in sorted((pairs or {}).items()):
+        block = row.get('algo_block') or {}
+        rows.append((row.get('name') or key,
+                     plain(row.get('short_spread'), 3) + (
+                         f"  (z {plain(block.get('z_mid'), 2, True)})"
+                         if block.get('z_mid') is not None else '')
+                     + f"  · {net_words(row)}"))
+    return (title('RELEASED', event.get('released_at')) + '\n'
+            + table(rows))
+
+
 def mean_words(block):
     """'-17.583  (σ 4.26)': the Algo's band middle and its sigma, or a
     dash before the band has its candles."""
@@ -2162,6 +2203,7 @@ class AlertWatch:
         self.summary_sent = {}      # pair -> the day its summary went
         self.funding_told = None    # the funding time last announced
         self.liquidation = {}       # (account, inst, side) -> told at
+        self.calendar_told = set()  # (release id, 'soon' | 'out')
 
     def check(self, snapshot, events, price_problem, lookup=None):
         out = []
@@ -2329,6 +2371,10 @@ class AlertWatch:
                 ('Distance', f'{plain(dist, 1)}%'),
                 ('Account', p.get('account'))]))
 
+        # The economic calendar: a high-impact release is coming, and
+        # its figures when they land.
+        out += self._calendar(snapshot, pairs, now, first)
+
         # Once a day per ladder, at THAT ladder's close on the broker's
         # clock - an oil future and a gold CFD do not end the same day.
         # A 24/7 ladder's day is OKX's: it ends at 00:00 UTC.
@@ -2396,6 +2442,29 @@ class AlertWatch:
                 ('Event', kind), ('Ladder', name or '—'),
                 ('Detail', summary)])
         return None
+
+    def _calendar(self, snapshot, pairs, now, first):
+        cal = snapshot.get('calendar') or {}
+        lead = float(cal.get('alert_min') or 15.0) * 60.0
+        out = []
+        for event in cal.get('events') or ():
+            soon = (event['id'], 'soon')
+            told_out = (event['id'], 'out')
+            ahead = event['at'] - now
+            if event['status'] == 'upcoming' and 0 < ahead <= lead \
+                    and soon not in self.calendar_told:
+                self.calendar_told.add(soon)
+                if not first:
+                    out.append(calendar_soon_text(event, now))
+            if event['status'] == 'released' and told_out not in \
+                    self.calendar_told:
+                self.calendar_told.add(told_out)
+                # News: released since the bot has been looking, and
+                # within the last half hour.
+                if not first and now - (event.get('released_at') or 0) \
+                        <= 1800:
+                    out.append(calendar_out_text(event, pairs))
+        return out
 
     @staticmethod
     def _summary(snapshot, now=None):

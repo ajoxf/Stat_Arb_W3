@@ -1356,3 +1356,43 @@ def test_the_status_says_the_spread_at_which_each_side_arms_and_enters(bot):
     row['algo_block'].update(mean=None)
     say(bot, '/status')
     assert 'Arms H to L' not in bot.api.texts()[-1]
+
+
+# -- the economic calendar ------------------------------------------------------
+
+def _cal(now, status='upcoming', at_in=600):
+    return {'alert_min': 15.0, 'events': [{
+        'id': 'cpi:2027-01-15', 'release': 'cpi', 'name': 'CPI',
+        'agency': 'BLS', 'at': now + at_in, 'status': status,
+        'released_at': now if status == 'released' else None,
+        'figures': [{'key': 'cpi_mm', 'name': 'CPI m/m',
+                     'actual': '0.4%' if status == 'released' else None,
+                     'previous': '0.3%', 'forecast': '0.3%',
+                     'surprise': ('0.1 pt above forecast'
+                                  if status == 'released' else None)}]}]}
+
+
+def test_a_release_is_announced_ahead_and_again_when_it_lands():
+    clock = type('C', (), {'at': 1_800_000_000.0,
+                                     '__call__': lambda self: self.at})()
+    watch = tg.AlertWatch(clock=clock)
+    snapshot = {'engine': 'up', 'pairs': {KEY: row(short_spread=-31.124)}}
+    # Bearings: nothing said on the first look.
+    assert watch.check(dict(snapshot, calendar=_cal(clock.at, at_in=3600)),
+                       [], lambda r: None) == []
+    told = watch.check(dict(snapshot, calendar=_cal(clock.at)), [],
+                       lambda r: None)
+    [soon] = [t for t in told if 'ECONOMIC EVENT' in t]
+    assert 'ECONOMIC EVENT IN 10 MIN' in soon
+    assert 'US CPI (BLS)' in soon
+    assert 'forecast 0.3% · previous 0.3%' in soon
+    # Said once.
+    assert not [t for t in watch.check(dict(snapshot, calendar=_cal(
+        clock.at)), [], lambda r: None) if 'ECONOMIC' in t]
+    clock.at += 600
+    told = watch.check(dict(snapshot, calendar=_cal(clock.at, 'released',
+                                                    0)), [], lambda r: None)
+    [out] = [t for t in told if 'RELEASED' in t]
+    assert 'CPI m/m</b>  <code>0.4%  (previous 0.3%, forecast 0.3%)' in out
+    assert 'Surprise</b>  <code>0.1 pt above forecast' in out
+    assert 'Oil</b>  <code>-31.124' in out

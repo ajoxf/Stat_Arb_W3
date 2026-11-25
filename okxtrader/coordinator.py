@@ -144,6 +144,22 @@ class Coordinator:
         self.dominance = Dominance(
             every_sec=self.config.get('BTC_DOMINANCE_SEC', 300.0),
             clock=clock)
+        #: THE ECONOMIC CALENDAR: the high-impact US releases, their
+        #: figures from BLS / DOL / EIA the moment they land, and what
+        #: the spreads did. A reading only, on its own thread.
+        self.calendar = None
+        self._calendar_spreads = {}
+        if self.config.get('CALENDAR_ON', True):
+            try:
+                from .econcal import Calendar
+                here = os.path.dirname(os.path.abspath(status_path))
+                self.calendar = Calendar(
+                    os.path.join(here, 'econ_calendar.json'),
+                    os.path.join(here, 'econ_forecasts.json'),
+                    spreads=lambda: dict(self._calendar_spreads),
+                    env=self._calendar_env, clock=clock)
+            except Exception as e:                # the desk runs without it
+                logging.warning('economic calendar off: %s', e)
         self.chart_path = chart_path(status_path)
         self.clock = clock
         self.sleep = sleep
@@ -4536,12 +4552,52 @@ class Coordinator:
             'click_to_on_ms': list(self.executor.timings[-50:]),
             'pairs': pairs,
             'btc_dominance': self._btc_dominance(),
+            'calendar': self._economic_calendar(pairs),
             # None unless the mirror is switched on in config.json.
             'mirror': (self.mirror.snapshot()
                        if getattr(self, 'mirror', None) is not None
                        else None),
             'magic': MAGIC_NUMBER,
         }
+
+    def _calendar_env(self):
+        """The .env as it is NOW: a key saved from the Calendar window is
+        used on the next read, without a restart."""
+        values = dict(os.environ)
+        path = getattr(self.config, 'path', None)
+        if path:
+            try:
+                from dotenv import dotenv_values
+                values.update({k: v for k, v in dotenv_values(os.path.join(
+                    os.path.dirname(os.path.abspath(path)), '.env')).items()
+                    if v})
+            except Exception:
+                pass
+        return values
+
+    def _economic_calendar(self, pairs):
+        """The calendar's last reading, starting the next pass when one
+        is due. Each ladder's mid spread is handed over first, so a
+        release can note what the spreads did."""
+        calendar = getattr(self, 'calendar', None)
+        if calendar is None:
+            return None
+        try:
+            spreads = {}
+            for key, row in (pairs or {}).items():
+                lo, hi = row.get('long_spread'), row.get('short_spread')
+                if lo is not None and hi is not None:
+                    spreads[key] = {'name': row.get('name') or key,
+                                    'mid': round((lo + hi) / 2.0, 6)}
+            self._calendar_spreads = spreads
+            calendar.refresh_if_due()
+            snap = calendar.snapshot()
+            snap['alert_min'] = float(self.config.get('CALENDAR_ALERT_MIN',
+                                                      15.0))
+            return snap
+        except Exception as e:                       # a reading only
+            logging.info('calendar unavailable: %s', e)
+            return None
 
     def _btc_dominance(self):
         """The last BTC.D reading, starting the next read when it is
