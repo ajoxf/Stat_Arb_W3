@@ -238,6 +238,13 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
             logging.error('the fills could not be matched: %s', e)
             body['fee_tally'] = None
 
+    def make_okx_client(key, secret, passphrase, demo):
+        from .okx_api import OKXClient
+        maker = app.config.get('OKX_CLIENT_FACTORY')
+        if maker:
+            return maker(key, secret, passphrase, demo)
+        return OKXClient(key, secret, passphrase, demo=demo)
+
     def desk_capital(raw):
         """THE CAPITAL returns are read against: the CAPITAL_MANAGED
         setting when one is set, otherwise the BALANCE OKX holds now -
@@ -752,6 +759,109 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
         cfg.save_raw(config_path, raw)
         return jsonify({'ok': True, 'enabled': section['enabled'],
                         'open_window_sec': section['open_window_sec']})
+
+    @app.post('/api/mirror/discover')
+    def api_discover_mirror_account():
+        """CONNECT A MANAGED ACCOUNT FROM ITS KEY ALONE.
+
+        Tries the key on OKX live and on demo (a key works on one only),
+        and reads the account itself: its UID, the key's label and
+        permissions, what kind of account it is, and its equity. From
+        that: a name, whether it is demo, its capital, and the multiple -
+        CAPITAL-PROPORTIONAL, its equity over the master's, so a client
+        twice your size copies twice your size. Nothing is saved here;
+        the screen shows what was found and the trader adds it.
+        """
+        payload = request.get_json(silent=True) or {}
+        key, secret, phrase = (str(payload.get(f) or '').strip() for f in
+                               ('api_key', 'secret', 'passphrase'))
+        if not (key and secret and phrase):
+            return jsonify({'ok': False, 'error': 'the API key, secret and '
+                            'passphrase are all needed'}), 400
+        found = None
+        problems = []
+        for demo in (False, True):
+            client = make_okx_client(key, secret, phrase, demo)
+            try:
+                config = (client.get('/api/v5/account/config',
+                                     private=True) or [{}])[0]
+            except Exception as e:
+                problems.append(f"{'demo' if demo else 'live'}: {e}")
+                continue
+            try:
+                balance = (client.get('/api/v5/account/balance',
+                                      private=True) or [{}])[0]
+            except Exception as e:
+                balance = {}
+                problems.append(f'balance not read: {e}')
+            found = (demo, config, balance)
+            break
+        if found is None:
+            return jsonify({'ok': False, 'error': 'OKX did not accept this '
+                            'key on live or demo - check all three parts '
+                            'were copied in full', 'details': problems}), 400
+        demo, config, balance = found
+        kinds = {'0': 'main account', '1': 'standard sub-account',
+                 '2': 'managed trading sub-account',
+                 '5': 'custody trading sub-account'}
+        kind = str(config.get('type') if config.get('type') is not None
+                   else '')
+        perm = str(config.get('perm') or '')
+        try:
+            equity = float(balance.get('totalEq'))
+        except (TypeError, ValueError):
+            equity = None
+        master = master_equity()
+        multiple = (round(equity / master, 2)
+                    if equity and master else None)
+        uid = str(config.get('uid') or '')
+        label = str(config.get('label') or '')
+        name = re.sub(r'[^A-Za-z0-9 _-]', '', label).strip()[:40] or \
+            (f'client_{uid[-4:]}' if uid else 'client')
+        if not re.match(r'[A-Za-z0-9]', name):
+            name = 'client_' + name
+        taken = {str(r.get('name')) for r in (cfg.load_raw(config_path).get(
+            'mirror') or {}).get('followers') or ()}
+        base, n = name, 2
+        while name in taken:
+            name, n = f'{base}_{n}', n + 1
+        warnings = []
+        if 'trade' not in perm:
+            warnings.append('this key cannot TRADE: create it with the '
+                            'Trade permission')
+        if kind and kind != '2':
+            warnings.append(f'this is a {kinds.get(kind, "type " + kind)}, '
+                            f'not a managed trading sub-account')
+        if multiple is None:
+            warnings.append('the multiple could not be worked out (' + (
+                'no equity on this account' if not equity else
+                'your own balance is not read yet') + ') - set it by hand')
+        return jsonify({
+            'ok': True, 'demo': demo, 'uid': uid, 'label': label,
+            'name': name, 'kind': kinds.get(kind, kind or None),
+            'managed': kind == '2', 'can_trade': 'trade' in perm,
+            'permissions': perm, 'position_mode': config.get('posMode'),
+            'equity': equity, 'master_equity': master,
+            'multiple': multiple, 'warnings': warnings})
+
+    def master_equity():
+        """Your own equity, as the engine last read it: the accounts the
+        ladders trade, added up. None while it is not read."""
+        snapshot = status() or {}
+        accounts = snapshot.get('accounts') or {}
+        names = set()
+        for pair in (snapshot.get('pairs') or {}).values():
+            for leg in ('leg_a_account', 'leg_b_account'):
+                if (pair or {}).get(leg):
+                    names.add(pair[leg])
+        total = 0.0
+        for name in names or set(accounts):
+            try:
+                total += float((accounts.get(name) or {}).get('equity')
+                               or 0.0)
+            except (TypeError, ValueError):
+                continue
+        return round(total, 2) if total > 0 else None
 
     @app.post('/api/mirror/accounts/<path:name>')
     def api_save_mirror_account(name):

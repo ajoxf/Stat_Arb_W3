@@ -181,6 +181,70 @@
         payoutsHtml(a.name)) + '</div>';
   }
 
+  function connectHtml() {
+    /* ADD FROM THE KEY ALONE. Step 1: the three parts of the API key.
+     * Step 2: what OKX says the account is - its UID, demo or live,
+     * whether the key can trade, its equity and the multiple that
+     * follows from it - then Add. Every other setting starts at its
+     * default and is changed later by opening the account. */
+    var f = local.found;
+    if (!f) {
+      return '<div class="ma-form ma-connect">' +
+        '<div class="ma-sub">The API key of the client’s OKX Managed ' +
+        'Trading Sub-account <small>(OKX: Profile → API → Client ' +
+        'accounts → Create API key, with Trade). That is all: the desk ' +
+        'reads the rest from OKX.</small></div><div class="ma-grid">' +
+        field('API key', '<input type="password" class="ma-k" data-k=' +
+          '"api_key" autocomplete="new-password">') +
+        field('Secret', '<input type="password" class="ma-k" data-k=' +
+          '"secret" autocomplete="new-password">') +
+        field('Passphrase', '<input type="password" class="ma-k" data-k=' +
+          '"passphrase" autocomplete="new-password">') + '</div>' +
+        '<div class="ma-actions"><button class="ma-btn primary" ' +
+        'data-act="connect"' + (local.busy ? ' disabled' : '') + '>' +
+        (local.busy ? 'Connecting\u2026' : 'Connect') + '</button>' +
+        '<button class="ma-btn" data-act="cancel-new">Cancel</button>' +
+        (local.connectError ? '<span class="ma-bad">' +
+          escape(local.connectError) + '</span>' : '') + '</div></div>';
+    }
+    function fact(label, value, bad) {
+      return '<div><span>' + label + '</span><b class="' + (bad ? 'down'
+        : '') + '">' + value + '</b></div>';
+    }
+    return '<div class="ma-form ma-connect">' +
+      '<div class="ma-sub">Found on OKX <small>(read from the account ' +
+      'itself)</small></div><div class="ma-money ma-found">' +
+      fact('Account', escape(f.kind || '\u2014'), !f.managed) +
+      fact('UID', escape(f.uid || '\u2014')) +
+      fact('Key label', escape(f.label || '\u2014')) +
+      fact('Where', f.demo ? 'OKX demo' : 'LIVE \u2014 real money') +
+      fact('Can trade', f.can_trade ? '\u2713 yes' : '\u2717 no',
+           !f.can_trade) +
+      fact('Equity', usd(f.equity)) +
+      fact('Your equity', usd(f.master_equity)) +
+      fact('Multiple', f.multiple ? '\u00d7' + UI.fmt(f.multiple, 2)
+        : '\u2014', !f.multiple) +
+      '</div>' + (f.warnings || []).map(function (w) {
+        return '<div class="ma-bad">\u26a0 ' + escape(w) + '</div>';
+      }).join('') +
+      '<div class="ma-grid">' +
+      field('Name', '<input type="text" class="ma-new-name" maxlength="40" ' +
+        'value="' + escape(f.name) + '">', 'how this account is called on ' +
+        'the desk and in its reports') +
+      field('Multiple \u00d7', '<input type="number" min="0" step="0.01" ' +
+        'class="ma-new-multiple" value="' + (f.multiple ? escape(f.multiple)
+          : '') + '">', 'capital-proportional: its equity \u00f7 yours. A ' +
+        'client twice your size copies twice your size') + '</div>' +
+      '<div class="ma-hint">Starts following with: execution as the trade ' +
+      '(maker / taker), every ladder, no limits, no profit payout. Open ' +
+      'the account after adding to change any of them.</div>' +
+      '<div class="ma-actions"><button class="ma-btn primary" ' +
+      'data-act="add-found"' + (local.busy ? ' disabled' : '') +
+      '>Add account</button><button class="ma-btn" data-act="connect-back">' +
+      'Back</button><button class="ma-btn" data-act="cancel-new">Cancel' +
+      '</button></div></div>';
+  }
+
   function payoutsHtml(name) {
     /* PROFIT PAYOUTS: month by month, marked paid here - the client's
      * dashboard shows each as accruing, due or paid. */
@@ -326,11 +390,11 @@
       'account</button></div>';
     if (local.adding) {
       out += '<div class="ma-card open new"><div class="ma-head"><b>New ' +
-        'managed account</b></div>' + formHtml({}, true) + '</div>';
+        'managed account</b></div>' + connectHtml() + '</div>';
     }
     if (!accounts.length && !local.adding) {
       out += '<p class="hint">No managed account yet. Add one with its ' +
-        'multiple and API key, test it, then switch the copying on.</p>';
+        'API key: the desk reads everything else from OKX.</p>';
     }
     accounts.forEach(function (a) {
       var open = !!local.open[a.name];
@@ -410,8 +474,74 @@
         });
       return;
     }
-    if (act === 'add') { local.adding = true; draw(); return; }
-    if (act === 'cancel-new') { local.adding = false; draw(); return; }
+    if (act === 'add') {
+      local.adding = true;
+      local.found = null;
+      local.newKeys = null;
+      local.connectError = null;
+      draw();
+      return;
+    }
+    if (act === 'cancel-new') {
+      local.adding = false;
+      local.found = local.newKeys = null;
+      draw();
+      return;
+    }
+    if (act === 'connect-back') { local.found = null; draw(); return; }
+    if (act === 'connect') {
+      var keys = {};
+      Array.prototype.forEach.call(form.querySelectorAll('.ma-k'),
+        function (box) { keys[box.dataset.k] = box.value.trim(); });
+      if (!keys.api_key || !keys.secret || !keys.passphrase) {
+        local.connectError = 'all three parts of the key are needed';
+        draw();
+        return;
+      }
+      local.busy = true;
+      local.connectError = null;
+      draw();
+      post('/api/mirror/discover', keys).then(function (r) {
+        local.busy = false;
+        if (!r.ok) {
+          local.connectError = r.body.error || 'not connected';
+        } else {
+          local.found = r.body;
+          // Held in this page only, until Add sends them to .env.
+          local.newKeys = keys;
+        }
+        draw();
+      });
+      return;
+    }
+    if (act === 'add-found') {
+      var found = local.found || {};
+      var newName = (form.querySelector('.ma-new-name').value || '').trim();
+      var multiple = form.querySelector('.ma-new-multiple').value;
+      if (!newName) { UI.toast('Give the account a name'); return; }
+      if (!(Number(multiple) > 0)) {
+        UI.toast('Set the multiple: how much of each trade it takes');
+        return;
+      }
+      local.busy = true;
+      draw();
+      post('/api/mirror/accounts/' + encodeURIComponent(newName), {
+        'new': true, demo: !!found.demo, multiple: Number(multiple),
+        capital: found.equity || '', api_key: local.newKeys.api_key,
+        secret: local.newKeys.secret,
+        passphrase: local.newKeys.passphrase
+      }).then(function (r) {
+        local.busy = false;
+        if (!r.ok) { UI.toast(r.body.error || 'not added'); draw(); return; }
+        UI.toast(newName + ' added \u2014 the engine picks it up in a few ' +
+                 'seconds', 'ok');
+        local.adding = false;
+        local.found = local.newKeys = null;
+        local.open[newName] = true;
+        load();
+      });
+      return;
+    }
     if (act === 'edit') {
       local.open[name] = !local.open[name];
       draw();

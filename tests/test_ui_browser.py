@@ -7685,36 +7685,61 @@ def test_the_mirror_tab_shows_only_when_the_mirror_is_on(page):
         s.open = []; window.MT5Trader.render(); }""")
 
 
-def test_managed_accounts_are_set_up_from_their_own_window(page):
-    """Managed accounts, from the bottom bar: add one with its multiple and
-    API key, and it is listed - key saved, never shown back."""
+def test_managed_accounts_are_added_from_their_api_key_alone(page):
+    """Managed accounts, from the bottom bar: the three parts of the API
+    key, Connect - the desk shows what OKX says the account is and the
+    capital-proportional multiple - then Add. Listed, key saved, never
+    shown back."""
     page.errors.clear()
-    page.click('#open-managed')
-    page.wait_for_selector('.window.managed .ma-top', timeout=WAIT)
-    win = page.locator('.window.managed')
-    win.locator('[data-act="add"]').click()
-    form = win.locator('.ma-card.new .ma-form')
-    form.locator('[data-f="name"]').fill('client_ui')
-    form.locator('[data-f="multiple"]').fill('0.5')
-    form.locator('[data-f="capital"]').fill('10000')
-    form.locator('[data-f="max_margin"]').fill('800')
-    form.locator('[data-f="api_key"]').fill('ui-key-1')
-    form.locator('[data-f="secret"]').fill('ui-secret-1')
-    form.locator('[data-f="passphrase"]').fill('ui-pass-1')
-    form.locator('[data-act="save"]').click()
-    page.wait_for_function(
-        "() => document.querySelector('.window.managed .ma-body')"
-        ".textContent.includes('client_ui')", timeout=WAIT)
-    text = win.text_content()
-    assert 'key ✓' in text and '×0.50' in text and '$10,000' in text
-    assert 'ui-key-1' not in page.content()         # never shown back
-    # Opened to edit: the key fields are empty, saying it is saved.
-    placeholder = win.locator('.ma-card.open [data-f="api_key"]') \
-        .get_attribute('placeholder')
-    assert 'saved' in placeholder
-    assert page.errors == []
-    page.evaluate("() => window.MT5Trader.closePanel("
-                  "window.MT5Trader.panelId('managed'))")
+    found = {'ok': True, 'demo': True, 'uid': '448812345678',
+             'label': 'client_ui', 'name': 'client_ui',
+             'kind': 'managed trading sub-account', 'managed': True,
+             'can_trade': True, 'permissions': 'read_only,trade',
+             'equity': 5000.0, 'master_equity': 3744.0, 'multiple': 1.34,
+             'warnings': []}
+    asked = []
+
+    def discover(route):
+        asked.append(route.request.post_data_json)
+        route.fulfill(status=200, content_type='application/json',
+                      body=json.dumps(found))
+    page.route('**/api/mirror/discover', discover)
+    try:
+        page.click('#open-managed')
+        page.wait_for_selector('.window.managed .ma-top', timeout=WAIT)
+        win = page.locator('.window.managed')
+        win.locator('[data-act="add"]').click()
+        form = win.locator('.ma-card.new .ma-form')
+        # Only the key is asked for.
+        assert form.locator('input').count() == 3
+        form.locator('[data-k="api_key"]').fill('ui-key-1')
+        form.locator('[data-k="secret"]').fill('ui-secret-1')
+        form.locator('[data-k="passphrase"]').fill('ui-pass-1')
+        form.locator('[data-act="connect"]').click()
+        page.wait_for_selector('.window.managed .ma-found', timeout=WAIT)
+        assert asked == [{'api_key': 'ui-key-1', 'secret': 'ui-secret-1',
+                          'passphrase': 'ui-pass-1'}]
+        shown = win.locator('.ma-found').text_content()
+        for word in ('managed trading sub-account', '448812345678',
+                     'OKX demo', 'yes', '$5,000.00', '×1.34'):
+            assert word in shown, word
+        assert win.locator('.ma-new-multiple').input_value() == '1.34'
+        win.locator('[data-act="add-found"]').click()
+        page.wait_for_function(
+            "() => !document.querySelector('.window.managed .ma-card.new')"
+            " && document.querySelector('.window.managed .ma-body')"
+            ".textContent.includes('client_ui')", timeout=WAIT)
+        text = win.text_content()
+        assert 'key ✓' in text and '×1.34' in text and '$5,000' in text
+        assert 'ui-key-1' not in page.content()         # never shown back
+        placeholder = win.locator('.ma-card.open [data-f="api_key"]') \
+            .get_attribute('placeholder')
+        assert 'saved' in placeholder
+        assert page.errors == []
+    finally:
+        page.unroute('**/api/mirror/discover')
+        page.evaluate("() => window.MT5Trader.closePanel("
+                      "window.MT5Trader.panelId('managed'))")
 
 
 def test_mae_and_mfe_are_read_on_the_capital(page):

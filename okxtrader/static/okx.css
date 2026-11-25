@@ -403,3 +403,5 @@
   white-space: nowrap; }
 .ec-table th.l, .ec-table td.l { text-align: left; }
 .window.econcal .ec-body { background: #fff; }
+.window.managed .ma-bad { color: #b42318; margin: 4px 0; font-weight: 600; }
+.window.managed .ma-found b.down { color: #b42318; }
