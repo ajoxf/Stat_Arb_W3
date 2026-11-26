@@ -197,3 +197,60 @@ def test_each_trades_fees_break_down_by_leg_and_end():
     assert parts['exit_a'] == {'maker': 0.0, 'taker': 1.0}
     assert parts['exit_b'] == {'maker': 0.4, 'taker': 0.0}
     assert journal[0]['fee'] == 2.9
+
+
+# -- OKX's own ledger: the fees, and the account's balance -------------------
+
+def test_each_trade_is_checked_against_okxs_ledger_and_carries_the_balance():
+    positions = [position('P1', 1000, 11, 12), position('P2', 2000, 21, 22)]
+    journal = [{'position_id': 'P2', 'fees': 1.0},
+               {'position_id': 'P1', 'fees': 1.0}]
+    fills = [dict(fill('t1', 11, 'open', 'maker', -0.2), symbol='BTC-SWAP'),
+             dict(fill('t2', 12, 'close', 'taker', -0.5), symbol='ETH-SWAP'),
+             dict(fill('t3', 21, 'open', 'maker', -0.3), symbol='BTC-SWAP'),
+             dict(fill('t4', 22, 'close', 'maker', -0.3), symbol='ETH-SWAP')]
+    analysis.attach_fills(journal, positions, fills)
+    bills = [
+        {'account': 'main', 'bill_id': 'b0', 'ts_ms': 500, 'inst_id': '',
+         'trade_id': '', 'fee': 0.0, 'bal': 3500.0, 'bal_chg': 3500.0},
+        {'account': 'main', 'bill_id': 'b1', 'ts_ms': 900,
+         'inst_id': 'BTC-SWAP', 'trade_id': 't1', 'fee': -0.2,
+         'bal': 3499.8, 'bal_chg': -0.2},
+        {'account': 'main', 'bill_id': 'b2', 'ts_ms': 1000,
+         'inst_id': 'ETH-SWAP', 'trade_id': 't2', 'fee': -0.5,
+         'bal': 3520.3, 'bal_chg': 20.5},
+        # Funding between the trades: in the balance, in no trade.
+        {'account': 'main', 'bill_id': 'b3', 'ts_ms': 1500, 'inst_id':
+         'ETH-SWAP', 'trade_id': '', 'fee': 0.0, 'bal': 3519.9,
+         'bal_chg': -0.4},
+        {'account': 'main', 'bill_id': 'b4', 'ts_ms': 1900,
+         'inst_id': 'BTC-SWAP', 'trade_id': 't3', 'fee': -0.3,
+         'bal': 3519.6, 'bal_chg': -0.3},
+        {'account': 'main', 'bill_id': 'b5', 'ts_ms': 2000,
+         'inst_id': 'ETH-SWAP', 'trade_id': 't4', 'fee': -0.31,
+         'bal': 3544.29, 'bal_chg': 24.69}]
+    summary = analysis.attach_bills(journal, bills)
+    p2, p1 = journal
+    assert p1['bill_fees'] == 0.7 and p1['account_bal'] == 3520.3
+    # The ledger says 0.61 where the fills said 0.60: shown, not hidden.
+    assert p2['bill_fees'] == 0.61 and p2['account_bal'] == 3544.29
+    assert summary['opening'] == 0.0 and summary['latest'] == 3544.29
+    # Each fill: its own ledger fee beside it.
+    assert [f['bill_fee'] for f in p1['fee_fills']] == [0.2, 0.5]
+
+
+def test_each_fill_is_worked_through_contracts_size_price():
+    trade = dict(position('P1', 1000, 11, 12),
+                 leg_a={'position_tickets': [11], 'contract_size': 0.01},
+                 leg_b={'position_tickets': [12], 'contract_size': 0.1})
+    journal = [{'position_id': 'P1'}]
+    fills = [dict(fill('d1', 11, 'open', 'maker', -0.2), volume=33.0,
+                  price=60000.0, symbol='BTC-USDT-SWAP'),
+             dict(fill('d2', 12, 'open', 'taker', -0.4), volume=4.0,
+                  price=2000.0, symbol='ETH-USDT-SWAP')]
+    analysis.attach_fills(journal, [trade], fills)
+    first, second = journal[0]['fee_fills']
+    assert first['leg'] == 'A' and first['end'] == 'in'
+    assert first['notional'] == 19800.0              # 33 x 0.01 x 60,000
+    assert first['bp'] == round(0.2 / 19800 * 1e4, 3)
+    assert second['kind'] == 'taker' and second['notional'] == 800.0

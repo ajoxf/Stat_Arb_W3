@@ -475,3 +475,16 @@ def test_a_release_still_waiting_is_not_next_for_a_day(tmp_path):
     clock.at = utc(2026, 11, 26, 9, 0)              # a day on, still due
     cal.step()
     assert cal.snapshot()['next']['id'] != 'claims:2026-11-25'
+
+
+def test_the_account_ledger_is_kept_by_bill_id(tmp_path):
+    from okxtrader.database import Store
+    store = Store(str(tmp_path / 'x.db'))
+    rows = [{'billId': 'b1', 'ts': '1000', 'type': '2', 'instId': 'BTC',
+             'balChg': '-0.2', 'bal': '3499.8', 'fee': '-0.2',
+             'tradeId': 't1'}]
+    assert store.record_bills('okx', rows) == 1
+    store.record_bills('okx', rows)                   # again: no double
+    [bill] = store.bills()
+    assert bill['bal'] == 3499.8 and bill['trade_id'] == 't1'
+    assert bill['fee'] == -0.2 and bill['ts_ms'] == 1000

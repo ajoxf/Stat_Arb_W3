@@ -367,3 +367,23 @@ def test_each_perpetual_family_is_priced_on_its_own_fee_group(broker):
     assert broker.fees_bps('ETH-USDT-SWAP') == (1.5, 5.0)
     assert broker.fees_bps('BTC-USDT-SWAP') == (2.0, 5.0)   # cached
     assert asked == ['BTC-USDT', 'ETH-USDT']
+
+
+def test_the_account_ledger_is_read_page_by_page_and_from_the_archive(broker):
+    import time as _time
+    calls = []
+
+    def get(path, params=None, private=False):
+        calls.append((path, params.get('after')))
+        if path == '/api/v5/account/bills':
+            if params.get('after') is None:
+                return [{'billId': str(1000 - i), 'ts': '1', 'bal': '1'}
+                        for i in range(100)]
+            return [{'billId': '1', 'ts': '1', 'bal': '1'}]
+        return [{'billId': 'a1', 'ts': '1', 'bal': '1'}]
+    broker.client.get = get
+    rows = broker.account_bills((_time.time() - 30 * 86400) * 1000)
+    assert len(rows) == 102
+    assert calls[0] == ('/api/v5/account/bills', None)
+    assert calls[1] == ('/api/v5/account/bills', '901')
+    assert calls[2][0] == '/api/v5/account/bills-archive'

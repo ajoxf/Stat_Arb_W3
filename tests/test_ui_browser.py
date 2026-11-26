@@ -7928,3 +7928,57 @@ def test_the_sizing_tab_prices_fees_at_the_accounts_own_tier(page):
         publisher.publish()
         page.evaluate("""() => { const s = window.MT5Trader.state;
             s.sizing = null; s.open = []; window.MT5Trader.render(); }""")
+
+
+def test_a_trades_fees_open_their_calculation_and_the_account_runs(page):
+    page.errors.clear()
+    page.evaluate("""() => {
+        const s = window.MT5Trader.state;
+        s.open = ['monitor:']; s.monitorTab = 'analysis';
+        delete s.capitalManaged;
+        s.analysis = {ok: true, names: {'A|B': 'ETH vs BTC'},
+          summary: {count: 1, closed: 1, capital: 3744,
+                    capital_source: 'balance'},
+          drawdown: {}, calibration: {}, shadow: {}, signals: [],
+          excursion: [],
+          account: {opening: 3655.44, latest: 3744.02, bills: 9},
+          fee_tally: {fees: 56.38, trades: 1, measured: 1,
+                      expected_bp: {maker: 4, taker: 10}},
+          journal: [{position_id: 'P1', trade_no: 131, pair_key: 'A|B',
+            side: 'SELL', closed_at: 1764000000, source: 'ALGO',
+            quantity: 331.31, exit: {}, leg_a: {side: 'BUY', entry: 60554},
+            leg_b: {side: 'SELL', entry: 1685.84}, pnl: 33.97,
+            cum_pnl: 124.30, gross_pnl: 90.35, fee: 56.38, fees: 56.38,
+            fees_source: 'OKX', maker_fees: 18.34, taker_fees: 38.04,
+            notional: 83893.30, fees_bp_notional: 6.7,
+            bill_fees: 56.38, bills_matched: 6, account_bal: 3744.02,
+            fee_parts: {entry_a: {maker: 1.48, taker: 17.15},
+                        entry_b: {maker: 8.39, taker: 0},
+                        exit_a: {maker: 0, taker: 20.89},
+                        exit_b: {maker: 8.47, taker: 0}},
+            fee_fills: [
+              {leg: 'A', end: 'in', kind: 'maker', symbol: 'BTC-USDT-SWAP',
+               contracts: 12.2, contract_size: 0.01, price: 60554.0,
+               notional: 7387.59, fee: 1.48, bp: 2.0, bill_fee: 1.48},
+              {leg: 'A', end: 'in', kind: 'taker', symbol: 'BTC-USDT-SWAP',
+               contracts: 56.6, contract_size: 0.01, price: 60601.2,
+               notional: 34300.28, fee: 17.15, bp: 5.0, bill_fee: 17.15}]}]};
+        s.analysisAt = Date.now() + 1e9;
+        window.MT5Trader.render();
+    }""")
+    page.wait_for_selector('.monitor .an-fee-link', timeout=WAIT)
+    journal = page.text_content('.monitor .analysis')
+    assert 'OKX account: opening $3,655.44' in journal
+    assert 'now $3,744.02' in journal
+    assert page.text_content('.monitor td.an-acct') == '$3,744.02'
+    page.click('.monitor .an-fee-link')
+    page.wait_for_selector('#fee-detail .fd-table', timeout=WAIT)
+    box = page.text_content('#fee-detail')
+    for word in ('Trade #131', '12.20 × 0.0100 × 60554.00', '$7,387.59',
+                 '2.00 bp', 'Leg A in', 'taker $17.15',
+                 '✓ the same as the fills', 'every fill maker $33.56',
+                 'net $33.97'):
+        assert word in box, word
+    page.keyboard.press('Escape')
+    assert page.locator('#fee-detail').count() == 0
+    assert page.errors == []

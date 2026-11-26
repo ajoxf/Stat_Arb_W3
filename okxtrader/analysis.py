@@ -809,8 +809,10 @@ def trade_fees(positions, fills):
                 f = dict(f, _leg=leg)
                 found.append(f)
             seen.update((f.get('account'), f.get('deal_id')) for f in mine)
-        # THE BREAKDOWN: each leg and end, maker and taker apart.
+        # THE BREAKDOWN: each leg and end, maker and taker apart - and
+        # every fill, worked through.
         parts = {}
+        detail = []
         maker = taker = 0.0
         n_maker = n_taker = 0
         priced = False
@@ -834,7 +836,28 @@ def trade_fees(positions, fills):
                 '_' + f['_leg']
             part = parts.setdefault(label, {'maker': 0.0, 'taker': 0.0})
             part['maker' if kind == 'maker' else 'taker'] += cost
+            leg_row = position.get('leg_' + f['_leg']) or {}
+            try:
+                size = float(leg_row.get('contract_size') or 0.0)
+                notional = float(f.get('volume') or 0.0) * size * \
+                    float(f.get('price') or 0.0)
+            except (TypeError, ValueError):
+                size, notional = 0.0, 0.0
+            detail.append({
+                'leg': f['_leg'].upper(), 'end': 'in' if label.startswith(
+                    'entry') else 'out', 'kind': kind or '?',
+                'symbol': f.get('symbol'), 'deal_id': f.get('deal_id'),
+                'account': f.get('account'),
+                'at_ms': f.get('broker_time_ms'),
+                'contracts': f.get('volume'), 'contract_size': size or None,
+                'price': f.get('price'),
+                'notional': round(notional, 2) if notional else None,
+                'fee': round(cost, 6),
+                'bp': (round(cost / notional * 1e4, 3) if notional
+                       else None)})
+        detail.sort(key=lambda d: (d['at_ms'] or 0, d['leg']))
         out[position.get('position_id')] = {
+            'detail': detail,
             'parts': {k: {m: round(v, 4) for m, v in p.items()}
                       for k, p in parts.items()},
             'fills': fills_of, 'maker': maker, 'taker': taker,
@@ -888,6 +911,7 @@ def attach_fills(journal, positions, fills):
         n_maker, n_taker = got['n_maker'], got['n_taker']
         priced = got['priced']
         row['fee_parts'] = got.get('parts') or {}
+        row['fee_fills'] = got.get('detail') or []
         row['fills'] = fills_of
         notional = row.get('notional')
         row['maker_fills'], row['taker_fills'] = n_maker, n_taker
@@ -947,6 +971,47 @@ def attach_fills(journal, positions, fills):
     tally['maker_fees'] = round(tally['maker_fees'], 2)
     tally['taker_fees'] = round(tally['taker_fees'], 2)
     return tally
+
+
+def attach_bills(journal, bills):
+    """OKX'S OWN LEDGER beside each trade: the fees its bills charged
+    (the check on the fills' figure) and the ACCOUNT BALANCE after its
+    last fill - OKX's own `bal`, so the last one is what the account
+    shows. Each fill is found in the ledger by its trade id on its
+    instrument. Returns {'opening', 'latest', 'latest_at', 'bills'}."""
+    by_trade = {}
+    for b in bills or ():
+        if b.get('trade_id'):
+            by_trade[(b.get('account'), b.get('inst_id'),
+                      str(b.get('trade_id')))] = b
+    for row in journal or ():
+        matched = []
+        for f in row.get('fee_fills') or ():
+            b = by_trade.get((f.get('account'), f.get('symbol'),
+                              str(f.get('deal_id'))))
+            f['bill_fee'] = None if b is None or b.get('fee') is None \
+                else round(-float(b['fee']), 6)
+            if b is not None:
+                matched.append(b)
+        row['bill_fees'] = (round(sum(-float(b['fee'] or 0.0)
+                                      for b in matched), 4)
+                            if matched else None)
+        row['bills_matched'] = len(matched)
+        last = max(matched, key=lambda b: (b.get('ts_ms') or 0,
+                                           str(b.get('bill_id'))),
+                   default=None)
+        row['account_bal'] = None if last is None else last.get('bal')
+    ordered = sorted((b for b in bills or () if b.get('bal') is not None),
+                     key=lambda b: (b.get('ts_ms') or 0, str(b.get('bill_id'))))
+    if not ordered:
+        return {'opening': None, 'latest': None, 'latest_at': None,
+                'bills': 0}
+    first, last = ordered[0], ordered[-1]
+    return {'opening': round(float(first['bal']) -
+                             float(first.get('bal_chg') or 0.0), 2),
+            'opening_at': first.get('ts_ms'),
+            'latest': round(float(last['bal']), 2),
+            'latest_at': last.get('ts_ms'), 'bills': len(ordered)}
 
 
 def number_trades(body, numbers):

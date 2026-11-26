@@ -91,6 +91,31 @@ CREATE TABLE IF NOT EXISTS fills (
 );
 
 CREATE INDEX IF NOT EXISTS fills_time ON fills (broker_time_ms);
+
+-- OKX'S OWN ACCOUNT LEDGER: every change to the trading account's
+-- balance - each fill's P&L and fee, funding, transfers - with the
+-- balance AFTER it. The one record that tallies with the account to the
+-- cent: a trade's fees are its bills' fees, and the account's running
+-- balance is the last bill's `bal`.
+CREATE TABLE IF NOT EXISTS account_bills (
+    account         TEXT NOT NULL,
+    bill_id         TEXT NOT NULL,
+    ts_ms           INTEGER,
+    type            TEXT,
+    sub_type        TEXT,
+    inst_id         TEXT,
+    ccy             TEXT,
+    bal_chg         REAL,
+    bal             REAL,
+    pnl             REAL,
+    fee             REAL,
+    sz              REAL,
+    px              REAL,
+    trade_id        TEXT,
+    ord_id          TEXT,
+    PRIMARY KEY (account, bill_id)
+);
+CREATE INDEX IF NOT EXISTS account_bills_time ON account_bills (ts_ms);
 CREATE INDEX IF NOT EXISTS fills_pair ON fills (pair_key, broker_time_ms);
 
 -- EVERY POSITION TICKET THIS SYSTEM HAS EVER HELD, and the one table
@@ -684,6 +709,55 @@ class Store:
                      row.get('comment'), pair_key, leg))
                 written += 1
         return written
+
+    def record_bills(self, account, rows):
+        """OKX's account bills, as `OKXBroker.account_bills` reads them.
+        Idempotent by bill id."""
+        written = 0
+        with self._connect() as connection:
+            for r in rows or ():
+                bill_id = str(r.get('billId') or '')
+                if not bill_id:
+                    continue
+
+                def num(key):
+                    try:
+                        value = r.get(key)
+                        return None if value in (None, '') else float(value)
+                    except (TypeError, ValueError):
+                        return None
+                connection.execute(
+                    """INSERT OR REPLACE INTO account_bills
+                       (account, bill_id, ts_ms, type, sub_type, inst_id,
+                        ccy, bal_chg, bal, pnl, fee, sz, px, trade_id,
+                        ord_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (account, bill_id, int(float(r.get('ts') or 0)),
+                     str(r.get('type') or ''), str(r.get('subType') or ''),
+                     r.get('instId') or '', r.get('ccy') or '',
+                     num('balChg'), num('bal'), num('pnl'), num('fee'),
+                     num('sz'), num('px'), str(r.get('tradeId') or ''),
+                     str(r.get('ordId') or '')))
+                written += 1
+        return written
+
+    def bills(self, since_ms=None, until_ms=None, account=None):
+        """The account bills, oldest first."""
+        where, params = [], []
+        if since_ms is not None:
+            where.append('ts_ms >= ?')
+            params.append(since_ms)
+        if until_ms is not None:
+            where.append('ts_ms <= ?')
+            params.append(until_ms)
+        if account:
+            where.append('account = ?')
+            params.append(account)
+        clause = ('WHERE ' + ' AND '.join(where)) if where else ''
+        with self._connect() as connection:
+            rows = connection.execute(
+                f'SELECT * FROM account_bills {clause} '
+                f'ORDER BY ts_ms, bill_id', params).fetchall()
+        return [dict(row) for row in rows]
 
     def fills(self, pair_key=None, account=None, ours_only=False,
               since_ms=None, limit=500):

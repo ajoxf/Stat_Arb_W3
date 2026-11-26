@@ -258,6 +258,18 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
         except Exception as e:
             logging.error('the fills could not be matched: %s', e)
             body['fee_tally'] = None
+        # OKX's own ledger: each trade's fees as its bills charged them,
+        # and the account's balance after it - from the start of the
+        # window, so the first row's opening balance is the account's.
+        try:
+            first = min((p.get('opened_at') or now for p in positions),
+                        default=now)
+            body['account'] = analysis.attach_bills(
+                body.get('journal'),
+                db.bills(since_ms=int((first - 60.0) * 1000)))
+        except Exception as e:
+            logging.error('the account ledger could not be read: %s', e)
+            body['account'] = None
 
     def start_capital(balance, closed):
         """The capital at the START of a period, from the balance now:

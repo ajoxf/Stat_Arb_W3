@@ -418,3 +418,41 @@
 .cal-note-x { flex: 0 0 auto; border: 0; background: none; color: #667085;
   font-size: 14px; line-height: 14px; padding: 0 0 0 2px; cursor: pointer; }
 .cal-note-x:hover { color: #b42318; }
+
+/* THE ANALYSIS TABLES, one even surface: white rows, a light band on
+   every other one and on the row under the pointer, a plain header. The
+   cells had no background of their own, so the window's grey showed
+   through in patches. */
+.monitor .an-table { background: #fff; }
+.monitor .an-table thead th { background: #e9edf2; color: #1f2933;
+  border-color: #cfd6df; }
+.monitor .an-table tbody td { background: #fff; border-color: #e3e7ec; }
+.monitor .an-table tbody tr:nth-child(even) td { background: #f6f8fa; }
+.monitor .an-table tbody tr:hover td { background: #eef4fb; }
+.monitor .an-table td.an-acct { font-weight: 600; color: #16324f; }
+.an-fee-link { color: #16324f; text-decoration: underline dotted; cursor: pointer; }
+.an-fee-link:hover { color: #0b5cad; text-decoration: underline; }
+
+/* The fee calculation of one trade: a small window over the desk. */
+.fd-shade { position: fixed; inset: 0; z-index: 9500; background: rgba(15, 23, 42, .25);
+  display: flex; align-items: flex-start; justify-content: center; padding-top: 80px; }
+.fd-box { background: #fff; border: 1px solid #c9d1db; border-radius: 4px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .25); padding: 10px 14px; max-width: 920px;
+  max-height: 75vh; overflow: auto; font-size: 12px; color: #1f2933; }
+.fd-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px; }
+.fd-head span { color: #667085; }
+.fd-x { margin-left: auto; border: 0; background: none; font-size: 18px; line-height: 16px;
+  color: #667085; cursor: pointer; }
+.fd-x:hover { color: #b42318; }
+.fd-table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+.fd-table th { background: #e9edf2; border: 1px solid #cfd6df; padding: 3px 6px;
+  font-weight: 600; font-size: 11px; text-align: right; }
+.fd-table td { border: 1px solid #e3e7ec; padding: 2px 6px; text-align: right;
+  white-space: nowrap; }
+.fd-table th:first-child, .fd-table td:first-child { text-align: left; }
+.fd-table tbody.fd-sub td { background: #f6f8fa; color: #344054; }
+.fd-table tfoot td { background: #eef2f6; font-weight: 600; }
+.fd-table .up { color: #1f9d55; } .fd-table .warn { color: #d97706; }
+.fd-check { margin: 8px 0 2px; font-weight: 600; }
+.fd-check.up { color: #1f9d55; } .fd-check.down { color: #b42318; }
+.fd-note { margin: 4px 0; color: #475467; }

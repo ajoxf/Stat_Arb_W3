@@ -1573,6 +1573,37 @@ class OKXBroker:
         out.sort(key=lambda o: -o['updated_ms'])
         return out
 
+    def account_bills(self, since_ms, pages=30):
+        """OKX's ACCOUNT LEDGER from `since_ms`: every balance change of
+        the trading account with the balance after it (`bal`). The last
+        7 days from /account/bills, older from /account/bills-archive
+        (3 months), 100 a page, newest first, paged back by bill id.
+        None if OKX would not answer."""
+        out, seen = [], set()
+        week_ago = (time.time() - 7 * 86400 + 600) * 1000
+        paths = ['/api/v5/account/bills']
+        if since_ms < week_ago:
+            paths.append('/api/v5/account/bills-archive')
+        try:
+            for path in paths:
+                after = None
+                for _ in range(pages):
+                    params = {'limit': '100', 'begin': str(int(since_ms))}
+                    if after:
+                        params['after'] = after
+                    rows = self.client.get(path, params, private=True) or []
+                    fresh = [r for r in rows if r.get('billId') not in seen]
+                    for r in fresh:
+                        seen.add(r.get('billId'))
+                    out.extend(fresh)
+                    if len(rows) < 100:
+                        break
+                    after = rows[-1].get('billId')
+        except OKXError as exc:
+            self.last_error = str(exc)
+            return None if not out else out
+        return out
+
     def order_log(self, hours=24):
         """Every fill OKX reports on this account in the window — ours and
         the trader's own clicks on the OKX app alike — keyed exactly as

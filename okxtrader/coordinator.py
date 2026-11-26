@@ -4682,6 +4682,7 @@ class Coordinator:
             self.run_session_cutoff()
             self.reconcile_if_due()
             self.journal_if_due()
+            self.bills_if_due(background=True)
             elapsed = self.clock() - began
             self.sleep(max(0.0, interval - elapsed))
 
@@ -4789,6 +4790,59 @@ class Coordinator:
                 logging.debug('journal: %s could not be read this pass', name)
                 continue
             written += self.store.record_fills(name, rows, self.resolve_leg)
+        return written
+
+    def bills_if_due(self, background=False):
+        """OKX's account ledger into the journal, once a minute: the last
+        day each time, and - the first time - back to the start of the
+        record (OKX keeps three months), so a trade's account balance
+        and its fees tally with OKX to the cent."""
+        if self.store is None:
+            return None
+        every = float(self.config.get('BILLS_INTERVAL_SEC', 60.0) or 0.0)
+        if every <= 0:
+            return None
+        now = self.clock()
+        last = getattr(self, '_last_bills', None)
+        if last is not None and now - last < every:
+            return None
+        if getattr(self, '_bills_busy', False):
+            return None
+        self._last_bills = now
+        first = not getattr(self, '_bills_backfilled', False)
+        since = (now - (89 if first else 1) * 86400.0) * 1000
+        if background:
+            # On a thread of its own: three months of ledger is many pages,
+            # and the poll that moves the prices never waits for it.
+            self._bills_busy = True
+
+            def run():
+                try:
+                    self._read_bills(since)
+                except Exception as e:
+                    logging.warning('bills: %s', e)
+                finally:
+                    self._bills_busy = False
+            threading.Thread(target=run, daemon=True,
+                             name='okx-bills').start()
+            return None
+        return self._read_bills(since)
+
+    def _read_bills(self, since):
+        written = 0
+        for name, leg in self.legs.items():
+            broker = getattr(leg, 'broker', None)
+            if broker is None or not hasattr(broker, 'account_bills'):
+                continue
+            try:
+                rows = broker.account_bills(since)
+            except Exception as e:
+                logging.info('bills: %s would not answer: %s', name, e)
+                continue
+            if rows is None:
+                continue
+            written += self.store.record_bills(name, rows)
+        self._bills_backfilled = True
         return written
 
     def resolve_leg(self, account, symbol, ticket=None):
