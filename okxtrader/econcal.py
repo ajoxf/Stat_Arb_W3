@@ -518,6 +518,11 @@ class Calendar:
         day = ny_day(at)
         text = self._fetch(DOL_RELEASE_URL.format(date=f'{day:%Y%m%d}'))
         found = dol_claims(text) if text else None
+        if text and not found and len(text) > 2000:
+            # A page that IS there but does not read: said, never left
+            # to look like a release that has not come out.
+            raise ValueError(f'DOL release of {day:%d %b} read, but its '
+                             f'claims figure was not found in it')
         if found:                       # people -> thousands, as 'K'
             found = (found[0] / 1000.0, None if found[1] is None
                      else found[1] / 1000.0)

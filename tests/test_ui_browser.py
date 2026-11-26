@@ -7831,12 +7831,19 @@ def test_the_calendar_window_counts_down_and_shows_each_figure(page):
     publisher = page.paths['publisher']
     now = time.time()
     publisher.calendar = calendar_snapshot(now)
+    page.evaluate('() => { window.MT5Calendar.local.warned = {}; }')
     try:
         publisher.publish()
-        page.wait_for_selector('#cal-chip:not(.hidden)', timeout=WAIT)
-        chip = page.text_content('#cal-chip')
-        assert 'US CPI in 12 min' in chip or 'US CPI in 13 min' in chip
-        assert 'soon' in page.get_attribute('#cal-chip', 'class')
+        # Nothing on the taskbar: a box, once, inside the alert time.
+        assert page.locator('#cal-chip').count() == 0
+        page.wait_for_selector('.toast:has-text("US CPI (BLS) in")',
+                               timeout=WAIT)
+        box = page.text_content('.toast:has-text("US CPI (BLS) in")')
+        assert 'in 12 min' in box or 'in 13 min' in box
+        assert 'CPI m/m previous 0.3%, forecast 0.3%' in box
+        publisher.publish()
+        page.wait_for_timeout(600)
+        assert page.locator('.toast:has-text("US CPI (BLS) in")').count() == 1
         page.click('#open-calendar')
         page.wait_for_selector('.window.econcal .ec-table', timeout=WAIT)
         text = page.text_content('.window.econcal')

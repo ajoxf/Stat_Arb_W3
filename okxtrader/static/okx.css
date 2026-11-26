@@ -391,11 +391,6 @@
 .ec-keys { margin-top: 6px; display: flex; flex-wrap: wrap; align-items: center;
   gap: 8px; font-size: 11px; }
 .ec-keys input { width: 150px; }
-.cal-chip { background: #b42318; color: #fff; border: 0; border-radius: 3px;
-  padding: 3px 10px; font-weight: 700; cursor: pointer; opacity: .85; }
-.cal-chip.soon { opacity: 1; animation: cal-pulse 1.6s ease-in-out infinite; }
-.cal-chip.hidden { display: none; }
-@keyframes cal-pulse { 50% { box-shadow: 0 0 0 3px rgba(180, 35, 24, .35); } }
 .ec-table { border-collapse: collapse; font-variant-numeric: tabular-nums; }
 .ec-table th { background: #d9dde3; border: 1px solid #b9c0ca; padding: 3px 6px;
   text-align: right; font-weight: 600; font-size: 11px; }

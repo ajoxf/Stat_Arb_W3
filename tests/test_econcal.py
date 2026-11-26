@@ -385,3 +385,14 @@ def test_the_keys_go_to_env_and_are_never_shown(tmp_path, monkeypatch):
     assert 'abcdef123456' not in json.dumps(body)
     assert client.post('/api/calendar/keys', json={
         'EIA_API_KEY': 'no spaces allowed'}).status_code == 400
+
+
+def test_a_dol_page_that_does_not_read_is_said_not_waited_on(tmp_path):
+    clock = Clock(utc(2026, 11, 25, 13, 30))
+    agencies = Agencies()
+    agencies.pages['eta20261125'] = '<html>' + 'x' * 5000 + '</html>'
+    cal = calendar(tmp_path, clock, agencies)
+    cal.step()
+    clock.at += 10
+    cal.step()
+    assert 'claims figure was not found' in cal.snapshot()['errors']['DOL']

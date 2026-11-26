@@ -15,7 +15,7 @@
 
   var UI = window.MT5Trader;
   var DASH = '—';
-  var local = {seen: null, keys: null, error: null};
+  var local = {seen: null, warned: {}, keys: null, error: null};
 
   function escape(value) {
     return String(value === null || value === undefined ? '' : value)
@@ -70,23 +70,24 @@
 
   function tick() {
     var cal = calendar();
-    var chip = document.getElementById('cal-chip');
-    if (chip) {
-      var next = cal && cal.next;
-      var now = nowSec(cal);
-      if (next && next.at - now < 3 * 3600) {
-        var soon = next.at - now <= (cal.alert_min || 15) * 60;
-        chip.textContent = '★★★ US ' + next.name + ' ' +
-          (next.status === 'due' ? 'awaiting figures' :
-            'in ' + countdown(next.at - now));
-        chip.className = 'cal-chip' + (soon ? ' soon' : '');
-        chip.title = 'Next high-impact release: ' + next.name + ' (' +
-          next.agency + ') at ' + hhmm(next.at) + ' UTC. Click for the ' +
-          'calendar.';
-      } else {
-        chip.className = 'cal-chip hidden';
-      }
-    }
+    if (!cal) { return; }
+    // A release ABOUT TO LAND: one box, once, when it is within the
+    // alert time (15 min) - nothing kept on the taskbar.
+    var now = nowSec(cal);
+    var lead = (cal.alert_min || 15) * 60;
+    (cal.events || []).forEach(function (e) {
+      if (e.status !== 'upcoming' || local.warned[e.id]) { return; }
+      var ahead = e.at - now;
+      if (ahead <= 0 || ahead > lead) { return; }
+      local.warned[e.id] = true;
+      UI.toast('\u2605\u2605\u2605 US ' + e.name + ' (' + e.agency + ') in ' +
+        countdown(ahead) + ', at ' + hhmm(e.at) + ' UTC \u00b7 ' +
+        (e.figures || []).map(function (f) {
+          return f.name + ' previous ' + (f.previous || DASH) +
+            (f.forecast ? ', forecast ' + f.forecast : '');
+        }).join(' \u00b7 '), 'ok');
+      if (UI.sound) { UI.sound('placed'); }
+    });
     if (!cal) { return; }
     // A NEW release: a box and a sound. The first look only takes its
     // bearings - figures already out when the page opened are not news.

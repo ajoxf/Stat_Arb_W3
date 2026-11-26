@@ -9799,7 +9799,7 @@ function anHeld(seconds) {
     if (wanted[panelId('econcal')] && window.MT5Calendar) {
       window.MT5Calendar.render();
     }
-    // The taskbar's countdown, and the box when a release lands.
+    // A box before a release, and another when it lands.
     if (window.MT5Calendar) { window.MT5Calendar.tick(); }
 
     // Remove the panels that are no longer open.
@@ -10255,9 +10255,6 @@ function anHeld(seconds) {
       openPanel(panelId('managed'));
     });
     el('open-calendar').addEventListener('click', function () {
-      openPanel(panelId('econcal'));
-    });
-    el('cal-chip').addEventListener('click', function () {
       openPanel(panelId('econcal'));
     });
     el('kill').addEventListener('click', function () {
