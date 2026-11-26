@@ -1907,16 +1907,12 @@
   //
   // The sizing sheet, live: capital in hand down the side, what it
   // means per trade, a month and in a run of losses. Worked out here
-  // from the ETH vs BTC ladder's own prices, beta and leverage and OKX's
-  // UAE (AED) futures fee schedule. A planning table only.
+  // from the ETH vs BTC ladder's own prices, beta and leverage, and the
+  // fees of THIS account's own OKX tier. A planning table only.
 
-  //: OKX UAE futures fee tiers: 30-day volume floor (AED), maker and
-  //: taker in bp. From okx.com/en-ae/fees, 23 Nov 2026.
-  var SZ_TIERS = [['Regular', 0, 10, 25], ['VIP 1', 100e6, 5, 12.5],
-                  ['VIP 2', 200e6, 4, 10], ['VIP 3', 500e6, 2.5, 9],
-                  ['VIP 4', 1250e6, 1.5, 8.5], ['VIP 5', 2160e6, 0.8, 8],
-                  ['VIP 6', 3600e6, 0, 7.5]];
-  var SZ_AED_USD = 1 / 3.6725;
+  //: Before the engine has read the account's own rates: OKX's regular
+  //: USDT-margined perpetual rates (0.020% maker, 0.050% taker).
+  var SZ_REGULAR = {level: 'Regular', maker: 2.0, taker: 5.0, live: false};
   var SZ_WINS = [55, 60, 62.5, 65, 70, 75, 80];
   var SZ_LOSS_SHARES = [5, 10, 15, 20, 25, 30, 35];
 
@@ -1943,11 +1939,40 @@
     var beta = (found || {}).hedge_ratio;
     var lev = Math.min((found || {}).leverage_a || 20,
                        (found || {}).leverage_b || 20) || 20;
+    var fee = accountFees(found);
     if (a && b && beta) {
-      return {per: b + beta * a, lev: lev, live: true, eth: b, btc: a};
+      return {per: b + beta * a, lev: lev, live: true, eth: b, btc: a,
+              fee: fee};
     }
     return {per: 1720 + 0.028402 * 61400, lev: 20, live: false,
-            eth: 1720, btc: 61400};
+            eth: 1720, btc: 61400, fee: fee};
+  }
+
+  function accountFees(row) {
+    /* THE ACCOUNT'S OWN TIER: maker and taker in bp, as OKX reports them
+     * for this account (both legs averaged), and its level. They follow
+     * the tier: when OKX moves the account up a level, the next read
+     * has the new rates. Before the first read: the regular rates. */
+    var rates = [];
+    Object.keys((row || {}).fee_bps || {}).forEach(function (leg) {
+      var r = row.fee_bps[leg];
+      if (r && isFinite(r.maker) && isFinite(r.taker)) { rates.push(r); }
+    });
+    if (!rates.length) { return SZ_REGULAR; }
+    var avg = function (k) {
+      return rates.reduce(function (t, r) { return t + Number(r[k]); }, 0) /
+        rates.length;
+    };
+    return {level: feeLevelName((row || {}).fee_level), maker: avg('maker'),
+            taker: avg('taker'), live: true};
+  }
+
+  function feeLevelName(level) {
+    /* OKX calls its regular levels Lv1, Lv2... and its VIP tiers VIP 1,
+     * VIP 2...: a regular level is said as one, never as a VIP tier. */
+    if (!level) { return DASH; }
+    var text = String(level);
+    return /^lv/i.test(text) ? text + ' (regular)' : text;
   }
 
   function sizingRow(capital, cfg, mk) {
@@ -1962,10 +1987,10 @@
     var point = position / mk.per;
     var perMonth = cfg.perDay * 30;
     var volume = position * 2 * perMonth;
-    var tier = SZ_TIERS[0];
-    SZ_TIERS.forEach(function (t) {
-      if (volume >= t[1] * SZ_AED_USD) { tier = t; }
-    });
+    // The fees of the account's OWN tier, as OKX reports it - not a
+    // table: a tier the account has not reached is not its price.
+    var fee = mk.fee || SZ_REGULAR;
+    var tier = [fee.level, 0, fee.maker, fee.taker];
     var takerShare = (100 - cfg.makerPct) / 100;
     var perTradeVolume = position * 2;
     var fees = perTradeVolume * ((1 - takerShare) * tier[2] +
@@ -2501,7 +2526,7 @@
       '<th>Position (both legs)</th><th>$ / point</th>' +
       '<th>Target</th><th>Stop</th><th>Target move (pts)</th>' +
       '<th>Stop move (pts)</th>' +
-      '<th>30-day volume</th><th>AED tier</th><th>Maker / Taker (bp)</th>' +
+      '<th>30-day volume</th><th>Fee tier</th><th>Maker / Taker (bp)</th>' +
       '<th>Fees / trade</th><th>Break-even win</th>' +
       '<th>Net P&amp;L</th><th>Return on capital</th>' +
       '<th>Return on margin</th>' +
@@ -2527,8 +2552,9 @@
         (r.stopPts || 0).toFixed(1) + '</td><td>' + (r.volume >= 1e9
           ? '$' + (r.volume / 1e9).toFixed(2) + 'B'
           : '$' + Math.round(r.volume / 1e6).toLocaleString('en-US') + 'M') +
-        '</td><td>' + r.tier[0] + '</td><td>' + r.tier[2] + ' / ' +
-        r.tier[3] + '</td><td>' + usd(r.fees) + '</td><td class="' + beCls +
+        '</td><td>' + escapeHtml(r.tier[0]) + '</td><td>' +
+        fmt(r.tier[2], 1) + ' / ' + fmt(r.tier[3], 1) + '</td><td>' +
+        usd(r.fees) + '</td><td class="' + beCls +
         '">' + (r.breakEven === null ? DASH : r.breakEven.toFixed(1) + '%') +
         '</td><td class="' + cls + '">' + (r.month >= 0 ? '+' : '−') +
         k(r.month) + '</td><td class="' + cls + '">' +
@@ -2542,14 +2568,17 @@
     html += '</tbody></table></div><div class="sz-notes">' +
       '<b>Target</b> is the profit after every cost; <b>Stop</b> is the ' +
       'whole loss, costs included. <b>Fees</b> follow the maker / taker ' +
-      'mix at the row’s VIP tier; they set how far the spread must ' +
+      'mix at this account’s own OKX fee tier' + (mk.fee && mk.fee.live
+        ? '' : ' (not read yet: the regular rates)') + ', the rates OKX ' +
+      'reports for it - when OKX moves the account up a tier, they follow. ' +
+      'They set how far the spread must ' +
       'move: target + fees to win, stop − fees before the stop. ' +
       '<b>Break-even win</b> = stop ÷ (target + stop). <b>Stop move ' +
       'in red:</b> the fees alone use up the stop. ' +
       '<b>$ / point:</b> P&amp;L ' +
       'for one point of spread (−20 → −19). <b>Volume</b> = ' +
-      'position × 2 × trades; VIP 5 ≥ $588M, VIP 6 ≥ ' +
-      '$980M a month. <b>Not included:</b> slippage on stops, funding.' +
+      'position × 2 × trades. <b>Not included:</b> slippage on stops, ' +
+      'funding.' +
       '</div></div>';
     return html;
   }
@@ -4056,7 +4085,7 @@
             input.placeholder = vip === undefined || vip === null
               ? 'OKX fees' : Number(vip).toFixed(4);
             input.title = 'Blank: the commission per lot per side at your ' +
-              'OKX VIP fees' + (vip === undefined || vip === null ? ''
+              'own OKX fee tier' + (vip === undefined || vip === null ? ''
                 : ' (' + Number(vip).toFixed(4) + ' USDT)') +
               ', re-read hourly. Type a number only to override it.';
           }
@@ -4841,8 +4870,8 @@
   }
 
   function okxAccountWords(row) {
-    /* 'OKX VIP Lv1 · fees A 2.0/5.0 B 2.0/5.0 bp · lev A 10x B 10x' */
-    var parts = ['OKX VIP ' + (row.fee_level ? String(row.fee_level) : DASH)];
+    /* 'OKX Lv1 (regular) · fees A 2.0/5.0 B 2.0/5.0 bp · lev A 10x B 10x' */
+    var parts = ['OKX ' + feeLevelName(row.fee_level)];
     var fees = row.fee_bps || {};
     function rate(leg) {
       var f = fees[leg];
@@ -6771,8 +6800,8 @@
     node.querySelector('.monitor-note').textContent =
       state.monitorTab === 'sizing'
       ? 'A planning table, worked out here from the live prices, beta and ' +
-        'leverage of the ETH vs BTC ladder and OKX\u2019s UAE (AED) ' +
-        'futures fee schedule. Target is the profit after every cost; ' +
+        'leverage of the ETH vs BTC ladder, and the fees of this ' +
+        'account\u2019s own OKX tier. Target is the profit after every cost; ' +
         'stop is the whole loss. Nothing here sends an order.'
       : state.monitorTab === 'mirror'
       ? 'The Algo\u2019s trades, copied into each follower account at its ' +

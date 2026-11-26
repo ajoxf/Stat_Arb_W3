@@ -346,3 +346,24 @@ def test_candles_carry_their_volume_in_usdt(broker):
     USDT - the same unit on both legs, for the volume profile."""
     bars = broker.rates('BTC-USDT-SWAP', 5, 10)
     assert bars and all(b['volume'] == 7800000.0 for b in bars)
+
+
+def test_each_perpetual_family_is_priced_on_its_own_fee_group(broker):
+    """OKX prices families in fee groups of their own: ETH's rate is
+    asked for ETH, never taken from BTC's answer an hour old."""
+    real = broker.client.get
+    asked = []
+
+    def get(path, params=None, private=False):
+        if path == '/api/v5/account/trade-fee':
+            asked.append(params.get('instFamily'))
+            maker = {'BTC-USDT': '-0.0002', 'ETH-USDT': '-0.00015'}[
+                params['instFamily']]
+            return [{'makerU': maker, 'takerU': '-0.0005'}]
+        return real(path, params, private=private)
+    broker.client.get = get
+    broker._fee_cache.clear()
+    assert broker.fees_bps('BTC-USDT-SWAP') == (2.0, 5.0)
+    assert broker.fees_bps('ETH-USDT-SWAP') == (1.5, 5.0)
+    assert broker.fees_bps('BTC-USDT-SWAP') == (2.0, 5.0)   # cached
+    assert asked == ['BTC-USDT', 'ETH-USDT']

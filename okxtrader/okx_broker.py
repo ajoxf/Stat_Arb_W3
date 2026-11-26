@@ -169,7 +169,7 @@ class OKXBroker:
         self._book_cache = {}                  # instId -> (at, rows)
         self._pos_cache = None                 # (at, rows)
         self._bal_cache = None                 # (at, row)
-        self._fee_cache = {}                   # instType -> (at, (m, t))
+        self._fee_cache = {}       # (instType, family) -> (at, (m, t))
         self._lever_cache = {}                 # instId -> (at, lever)
         self._borrow_cache = {}                # ccy -> (at, hourly rate)
         self._funding_cache = {}               # instId -> (at, row)
@@ -723,15 +723,19 @@ class OKXBroker:
         if kind is None:
             return None
         now = time.time()
-        cached = self._fee_cache.get(kind)
-        if cached and now - cached[0] < 3600:
-            return cached[1]
         params = {'instType': kind}
         row = self._inst(symbol) or {}
         if kind == 'SPOT':
             params['instId'] = symbol
         elif row.get('instFamily'):
             params['instFamily'] = row['instFamily']
+        # Kept per FAMILY, not per type: OKX prices BTC-USDT, ETH-USDT and
+        # SOL-USDT perpetuals in fee groups of their own, and the first
+        # family read in the hour used to price every other one.
+        cache_key = (kind, params.get('instFamily') or params.get('instId'))
+        cached = self._fee_cache.get(cache_key)
+        if cached and now - cached[0] < 3600:
+            return cached[1]
         try:
             rows = self.client.get('/api/v5/account/trade-fee', params,
                                    private=True)
@@ -746,7 +750,7 @@ class OKXBroker:
                   if kind != 'SPOT' and rows[0].get('takerU')
                   else _f(rows[0].get('taker'), 0.0)) * 10000.0
         result = (round(maker, 4), round(taker, 4))
-        self._fee_cache[kind] = (now, result)
+        self._fee_cache[cache_key] = (now, result)
         return result
 
     def borrow_rate(self, ccy):

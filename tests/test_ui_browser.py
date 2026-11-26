@@ -7441,19 +7441,21 @@ def test_the_sizing_tab_is_the_sheet_live_with_a_win_rate_toggle(page):
     typed('stopBase', 'margin', '+24.3% of capital')
     typed('stopBase', 'capital', '+5.4% of capital')
     # The target is net of every cost and the stop the whole loss, so the
-    # maker / taker mix leaves the P&L alone: it sets the fees (half taker
-    # at VIP 3: 5.75 bp on $2.4M = $1,380) and so how far the spread must
+    # maker / taker mix leaves the P&L alone: it sets the fees - at the
+    # ACCOUNT'S OWN tier (not read here: the regular 2.0 / 5.0 bp), half
+    # taker is 3.5 bp on $2.4M = $840 - and so how far the spread must
     # move to reach each.
-    typed('makerPct', '50', 'fees $1,380')
+    typed('makerPct', '50', 'fees $840')
     summary = page.text_content('.monitor .sz-sum')
     assert '+5.4% of capital' in summary
     assert 'break-even win rate 62.5%' in summary
     hundred = rows.nth(5).locator('td')
-    assert hundred.nth(13).text_content() == '$1,380'
-    # $346 a point: (900 + 1,380) / 346 = 6.6 pts to the target, (1,500 -
-    # 1,380) / 346 = 0.3 pts to the stop.
-    assert hundred.nth(8).text_content() == '6.6'
-    assert hundred.nth(9).text_content() == '0.3'
+    assert hundred.nth(13).text_content() == '$840'
+    assert hundred.nth(11).text_content() == 'Regular'
+    # $346 a point: (900 + 840) / 346 = 5.0 pts to the target, (1,500 -
+    # 840) / 346 = 1.9 pts to the stop.
+    assert hundred.nth(8).text_content() == '5.0'
+    assert hundred.nth(9).text_content() == '1.9'
     # 30% free capital: $70k margin at 20x.
     typed('makerPct', '100', '+5.4% of capital')
     typed('freePct', '30', '+14.2% of capital')
@@ -7870,3 +7872,42 @@ def test_a_release_that_lands_gets_a_box(page):
     finally:
         publisher.calendar = None
         publisher.publish()
+
+
+def test_the_sizing_tab_prices_fees_at_the_accounts_own_tier(page):
+    """The Sizing tab's fees are the rates OKX reports for THIS account,
+    at its own tier - a VIP tier the account has not reached is not its
+    price - and a regular level is said as one."""
+    page.errors.clear()
+    publisher = page.paths['publisher']
+    publisher.pair_extra = dict(publisher.pair_extra, symbol_a='BTC-USDT-SWAP',
+                                symbol_b='ETH-USDT-SWAP', fee_level='VIP 1',
+                                fee_bps={'a': {'maker': 1.6, 'taker': 4.5},
+                                         'b': {'maker': 1.6, 'taker': 4.5}})
+    try:
+        publisher.publish()
+        page.evaluate("""() => { const s = window.MT5Trader.state;
+            s.open = ['monitor:']; s.monitorTab = 'sizing'; s.sizing = null;
+            window.MT5Trader.render(); }""")
+        row = page.locator('.monitor .sz-table tbody tr').nth(5)
+        page.wait_for_function(
+            "() => { const r = document.querySelectorAll("
+            "'.monitor .sz-table tbody tr')[5]; return r && "
+            "r.textContent.includes('VIP 1'); }", timeout=WAIT)
+        cells = row.locator('td')
+        assert cells.nth(11).text_content() == 'VIP 1'
+        assert cells.nth(12).text_content() == '1.6 / 4.5'
+        # All maker: 1.6 bp on $2.4M.
+        assert cells.nth(13).text_content() == '$384'
+        publisher.pair_extra = dict(publisher.pair_extra, fee_level='Lv1')
+        publisher.publish()
+        page.wait_for_function(
+            "() => document.querySelector('.monitor .sz-table')"
+            ".textContent.includes('Lv1 (regular)')", timeout=WAIT)
+        assert page.errors == []
+    finally:
+        for key in ('symbol_a', 'symbol_b', 'fee_level', 'fee_bps'):
+            publisher.pair_extra.pop(key, None)
+        publisher.publish()
+        page.evaluate("""() => { const s = window.MT5Trader.state;
+            s.sizing = null; s.open = []; window.MT5Trader.render(); }""")
