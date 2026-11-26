@@ -8128,16 +8128,27 @@ document.addEventListener('click', function (e) {
 // lots (contracts) x contract size x average price = notional, and the
 // total. Opened from the figure; closed by x, Esc or a click outside.
 function volumeDetailHtml(c, label) {
+  function line(sym, end, x, size, sub) {
+    // The instrument named on its first line; its total line bold.
+    return '<tr' + (sub ? '' : ' class="fd-sym"') + '><td>' +
+      (sym ? escapeHtml(sym) : '') + '</td><td>' + end + '</td><td>' +
+      x.deals + '</td><td>' + fmt(x.lots, 2) + '</td><td>' +
+      (size === null || size === undefined ? DASH : fmt(size, 4)) +
+      '</td><td>' + (size ? fmt(x.lots * size, 4) : DASH) + '</td><td>' +
+      (x.price === null || x.price === undefined ? DASH
+        : fmt(x.price, 2)) + '</td><td>' + (sub ? '' : '<b>') +
+      money(x.notional) + (sub ? '' : '</b>') + '</td></tr>';
+  }
   var lines = Object.keys(c.symbols || {}).sort().map(function (sym) {
     var x = c.symbols[sym];
-    return '<tr><td>' + escapeHtml(sym) + '</td><td>' + x.deals +
-      '</td><td>' + fmt(x.lots, 2) + '</td><td>' + (x.size === null ||
-        x.size === undefined ? DASH : fmt(x.size, 4)) + '</td><td>' +
-      (x.size ? fmt(x.lots * x.size, 4) : DASH) + '</td><td>' +
-      (x.price === null || x.price === undefined ? DASH : fmt(x.price, 2)) +
-      '</td><td><b>' + (x.unpriced >= x.deals ? DASH
-        : money(x.notional)) + '</b>' + (x.unpriced ? ' <span class="down">(' +
-        x.unpriced + ' not priced)</span>' : '') + '</td></tr>';
+    // Each instrument: its opening deals, its closing deals, and both.
+    return (x.open ? line(sym, 'open', x.open, x.size, true) +
+      line('', 'close', x.close, x.size, true) : '') +
+      line(x.open ? '' : sym, x.open ? 'total' : 'both', x, x.size,
+           false) +
+      (x.unpriced ? '<tr><td></td><td colspan="7" class="down">' +
+        x.unpriced + ' deal(s) not priced: contract size unknown</td></tr>'
+        : '');
   }).join('');
   return '<div class="fd-head"><b>Notional traded \u00b7 ' +
     escapeHtml(label) + '</b><button class="fd-x" title="Close">\u00d7' +
@@ -8147,13 +8158,23 @@ function volumeDetailHtml(c, label) {
     '<b>A lot</b> is one contract: on BTC-USDT-SWAP one contract is 0.01 ' +
     'BTC, on ETH-USDT-SWAP 0.1 ETH. <b>Notional</b> = lots \u00d7 contract ' +
     'size \u00d7 price, deal by deal, entries and exits of both legs.</p>' +
-    '<table class="fd-table"><thead><tr><th>Instrument</th><th>Deals</th>' +
+    '<table class="fd-table"><thead><tr><th>Instrument</th><th>Open / ' +
+    'close</th><th>Deals</th>' +
     '<th>Lots (contracts)</th><th>Contract size</th><th>Coins ' +
     '(lots \u00d7 size)</th><th>Average price</th><th>Notional</th>' +
-    '</tr></thead><tbody>' + lines + '</tbody><tfoot><tr><td>Total</td>' +
+    '</tr></thead><tbody>' + lines + '</tbody><tfoot>' + (c.open
+      ? '<tr><td>Opening deals</td><td>open</td><td>' + c.open.fills +
+        '</td><td>' + fmt(c.open.lots, 2) + '</td><td></td><td></td>' +
+        '<td></td><td>' + money(c.open.notional) + '</td></tr>' +
+        '<tr><td>Closing deals</td><td>close</td><td>' + c.close.fills +
+        '</td><td>' + fmt(c.close.lots, 2) + '</td><td></td><td></td>' +
+        '<td></td><td>' + money(c.close.notional) + '</td></tr>' : '') +
+    '<tr><td>Total</td><td>both</td>' +
     '<td>' + c.fills + '</td><td>' + fmt(c.lots, 2) + '</td><td></td>' +
     '<td></td><td></td><td><b>' + money(c.notional) + '</b></td></tr>' +
-    '</tfoot></table><p class="fd-note">Leg A ' + money(c.a) + ' + leg B ' +
+    '</tfoot></table><p class="fd-note">Volume counts EVERY deal, the ' +
+    'ones that open a position and the ones that close it: 1 lot bought ' +
+    'and then sold to close is 2 lots. Leg A ' + money(c.a) + ' + leg B ' +
     money(c.b) + '. The average price is the notional \u00f7 the coins: ' +
     'each deal is priced at its own fill price.</p>';
 }
@@ -8751,7 +8772,9 @@ function anHeld(seconds) {
           ' not priced">*</sup>' : '') +
         '<div class="hint">' + c.fills + ' deal' +
         (c.fills === 1 ? '' : 's') + ' \u00b7 ' + fmt(c.lots, 2) +
-        ' lots</div></a></td>';
+        ' lots</div>' + (c.open ? '<div class="hint">open ' +
+          compactNumber(c.open.notional) + ' \u00b7 close ' +
+          compactNumber(c.close.notional) + '</div>' : '') + '</a></td>';
     }
     html += '<table class="an-table an-notional"><thead><tr>' +
       '<th class="l">Ladder</th>' + periods.map(function (p) {

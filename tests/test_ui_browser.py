@@ -7991,12 +7991,23 @@ def test_a_volume_figure_opens_its_calculation(page):
         const s = window.MT5Trader.state;
         s.open = ['monitor:']; s.monitorTab = 'analysis';
         const c = {notional: 167781.4, lots: 631.52, fills: 58, unpriced: 0,
-          a: 84101.2, b: 83680.2, symbols: {
+          a: 84101.2, b: 83680.2,
+          open: {notional: 83893.3, lots: 315.76, fills: 29},
+          close: {notional: 83888.1, lots: 315.76, fills: 29},
+          symbols: {
             'BTC-USDT-SWAP': {deals: 30, lots: 138.92, size: 0.01,
-                              price: 60539.4, notional: 84101.2, unpriced: 0},
+                              price: 60539.4, notional: 84101.2, unpriced: 0,
+                              open: {deals: 15, lots: 69.46, price: 60554.0,
+                                     notional: 42060.8},
+                              close: {deals: 15, lots: 69.46,
+                                      price: 60524.8, notional: 42040.4}},
             'ETH-USDT-SWAP': {deals: 28, lots: 492.6, size: 0.1,
                               price: 1698.76, notional: 83680.2,
-                              unpriced: 0}}};
+                              unpriced: 0,
+                              open: {deals: 14, lots: 246.3, price: 1698.8,
+                                     notional: 41832.5},
+                              close: {deals: 14, lots: 246.3,
+                                      price: 1698.7, notional: 41847.7}}}};
         s.analysis = {ok: true, names: {'A|B': 'ETH vs BTC perps'},
           summary: {count: 0}, drawdown: {}, calibration: {}, shadow: {},
           signals: [], excursion: [], journal: [],
@@ -8007,10 +8018,15 @@ def test_a_volume_figure_opens_its_calculation(page):
         window.MT5Trader.render();
     }""")
     page.wait_for_selector('.monitor .an-vol-link', timeout=WAIT)
+    # Under each figure: its opening and closing deals apart.
+    assert 'open 83.89K · close 83.89K' in page.text_content(
+        '.monitor .an-vol-link')
     page.click('.monitor .an-vol-link')
     page.wait_for_selector('#fee-detail .fd-table', timeout=WAIT)
     box = page.text_content('#fee-detail')
-    for word in ('ETH vs BTC perps · Today', 'A deal is one fill',
+    for word in ('Opening deals', 'Closing deals', '$83,893.30',
+                 '$42,060.80', '60554.00', '1 lot bought and then sold',
+                 'ETH vs BTC perps · Today', 'A deal is one fill',
                  'A lot is one contract', 'BTC-USDT-SWAP', '138.92',
                  '0.0100', '1.3892', '60539.40', '$84,101.20',
                  '$167,781.40'):

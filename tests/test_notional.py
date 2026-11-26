@@ -255,3 +255,18 @@ def test_each_figure_carries_its_working_instrument_by_instrument():
     # 0.5 x 1000 x 60 + 1.5 x 1000 x 62 = 123,000 on 2,000 barrels: 61.5.
     assert wti['notional'] == 123000.0 and wti['price'] == 61.5
     assert today['UKOIL_F7']['notional'] == 14000.0
+
+
+def test_volume_is_split_into_opening_and_closing_deals():
+    """1 lot bought and sold to close is 2 lots of volume: one opening,
+    one closing - each with its own notional."""
+    out = analysis.notional_traded(
+        [dict(deal(2, 1.0, 60.0), entry='open'),
+         dict(deal(1, 1.0, 62.0), entry='close')], SIZES, NOW)
+    today = out['total']['today']
+    assert today['fills'] == 2 and today['lots'] == 2.0
+    assert today['open'] == {'notional': 60000.0, 'lots': 1.0, 'fills': 1}
+    assert today['close'] == {'notional': 62000.0, 'lots': 1.0, 'fills': 1}
+    wti = today['symbols']['USOIL_F7']
+    assert wti['open']['price'] == 60.0 and wti['close']['price'] == 62.0
+    assert wti['open']['deals'] == 1 and wti['close']['notional'] == 62000.0

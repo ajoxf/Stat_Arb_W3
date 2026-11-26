@@ -463,3 +463,5 @@
 .an-vol-link { color: inherit; text-decoration: none; cursor: pointer; }
 .an-vol-link b { text-decoration: underline dotted; }
 .an-vol-link:hover b { color: #0b5cad; text-decoration: underline; }
+
+.fd-table tr.fd-sym td { background: #f6f8fa; border-bottom-color: #cfd6df; }

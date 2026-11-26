@@ -1264,8 +1264,12 @@ def notional_traded(fills, sizes, now, date=None, date_ms=None):
         # `symbols`: the working, instrument by instrument - deals, lots
         # (contracts), the contract size and the notional - so a total
         # can be checked line by line.
+        # `open` / `close`: the same, the deals that opened a position
+        # apart from those that closed one.
         return {'notional': 0.0, 'lots': 0.0, 'fills': 0, 'unpriced': 0,
-                'a': 0.0, 'b': 0.0, 'symbols': {}}
+                'a': 0.0, 'b': 0.0, 'symbols': {},
+                'open': {'notional': 0.0, 'lots': 0.0, 'fills': 0},
+                'close': {'notional': 0.0, 'lots': 0.0, 'fills': 0}}
 
     def cells():
         return {k: cell() for k, _ in periods}
@@ -1285,22 +1289,33 @@ def notional_traded(fills, sizes, now, date=None, date_ms=None):
                                   cells())
         account = by_account.setdefault(fill.get('account') or '?', cells())
         leg = (fill.get('leg') or '').lower()
+        end = 'close' if str(fill.get('entry') or '').lower() in (
+            'close', 'out') else 'open'
         for period, _label in periods:
             if not in_period(period, at, stamp):
                 continue
             for target in (pair[period], account[period], total[period]):
                 target['fills'] += 1
                 target['lots'] += volume
+                side = target[end]
+                side['fills'] += 1
+                side['lots'] += volume
                 one = target['symbols'].setdefault(
                     fill.get('symbol') or '?',
                     {'deals': 0, 'lots': 0.0, 'size': size,
-                     'notional': 0.0, 'unpriced': 0})
+                     'notional': 0.0, 'unpriced': 0,
+                     'open': {'deals': 0, 'lots': 0.0, 'notional': 0.0},
+                     'close': {'deals': 0, 'lots': 0.0, 'notional': 0.0}})
                 one['deals'] += 1
                 one['lots'] += volume
+                one[end]['deals'] += 1
+                one[end]['lots'] += volume
                 if notional is None:
                     one['unpriced'] += 1
                 else:
                     one['notional'] += notional
+                    one[end]['notional'] += notional
+                    side['notional'] += notional
                 if notional is None:
                     target['unpriced'] += 1
                     continue
@@ -1312,7 +1327,17 @@ def notional_traded(fills, sizes, now, date=None, date_ms=None):
         for c in group.values():
             for name in ('notional', 'lots', 'a', 'b'):
                 c[name] = round(c[name], 2)
+            for side in (c['open'], c['close']):
+                side['notional'] = round(side['notional'], 2)
+                side['lots'] = round(side['lots'], 4)
             for one in c['symbols'].values():
+                for side in (one['open'], one['close']):
+                    side['notional'] = round(side['notional'], 2)
+                    side['lots'] = round(side['lots'], 4)
+                    side['price'] = (round(side['notional'] / (
+                        side['lots'] * one['size']), 4)
+                        if side['lots'] and one['size'] and
+                        not one['unpriced'] else None)
                 # The average price the notional implies: notional over
                 # lots x contract size - the line reads as a product.
                 priced = one['lots'] if not one['unpriced'] else None
