@@ -318,8 +318,18 @@ def render(body, names=None, days=7.0, pair_key=None, now=None,
         if fee is None:
             return DASH
         # ~ : the desk's estimate, where OKX's fills are not recorded.
-        return ('' if t.get('fees_source', 'OKX') == 'OKX' or pnl != 'show'
-                else '~') + cash(fee, sign=False)
+        return ('' if str(t.get('fees_source', 'OKX')).startswith('OKX')
+                or pnl != 'show' else '~') + cash(fee, sign=False)
+
+    def jcash(x, sign=True):
+        # In the journal, $100,000 and more without the cents: a column of
+        # six-figure amounts is read to the dollar, and the cents pushed
+        # the table past the page.
+        if pnl != 'show' or x is None or abs(x) < 100000:
+            return cash(x, sign)
+        text = f'${abs(round(x)):,.0f}'
+        return text if not sign else (
+            ('+' if x > 0 else '−' if x < 0 else '') + text)
 
     def capital_used(t):
         # The margin both legs tied up at entry, as a share of the
@@ -348,11 +358,11 @@ def render(body, names=None, days=7.0, pair_key=None, now=None,
             f'<td class="l">{_e(t.get("exit_reason") or DASH)}</td>'
             + f'<td>{fills_text(t)}</td>'
             + ('' if hide else
-               f'<td>{cash(t.get("gross_pnl"))}</td>'
+               f'<td>{jcash(t.get("gross_pnl"))}</td>'
                f'<td>{fee_cell(t)}</td>')
             + f'<td>{fee_share(t)}</td>'
             + ('' if hide else
-               f'<td class="{tone(t.get("pnl"))}"><b>{cash(t.get("pnl"))}</b>'
+               f'<td class="{tone(t.get("pnl"))}"><b>{jcash(t.get("pnl"))}</b>'
                '</td>') +
             f'<td class="{tone(t.get("pct_margin"))}">'
             f'{pct(t.get("pct_margin"))}</td>'
@@ -364,7 +374,9 @@ def render(body, names=None, days=7.0, pair_key=None, now=None,
                          MASK if pnl != 'show' else
                          f'${t["notional"]:,.0f}') + '</td>')
             + ('' if hide else
-               f'<td class="{tone(t.get("cum_pnl"))}">{cash(t.get("cum_pnl"))}'
+               f'<td class="{tone(t.get("cum_pnl"))}">{jcash(t.get("cum_pnl"))}'
+               '</td>'
+               f'<td class="acct">{jcash(t.get("account_bal"), sign=False)}'
                '</td>') +
             '</tr>')
     journal = ('<table class="journal"><thead><tr><th>Trade<br>no</th>'
@@ -378,12 +390,26 @@ def render(body, names=None, days=7.0, pair_key=None, now=None,
                ('' if hide else '<th>Net P&amp;L</th>') +
                '<th>On margin</th><th>On capital</th>'
                '<th class="nw">% of capital<br>used</th>' +
-               ('' if hide else '<th>Notional value</th><th>Running</th>') +
+               ('' if hide else '<th>Notional value</th><th>Running</th>'
+                                '<th>Account</th>') +
                '</tr></thead><tbody>' +
-               (''.join(rows) or '<tr><td colspan="19">No closed trade in '
+               (''.join(rows) or '<tr><td colspan="20">No closed trade in '
                                  'this period.</td></tr>') +
                '</tbody></table>')
 
+    acct = body.get('account') or {}
+    account_line = ''
+    if acct.get('opening') is not None and not hide:
+        account_line = (f' · OKX account: opening '
+                        f'{cash(acct["opening"], sign=False)} → now '
+                        f'{cash(acct.get("latest"), sign=False)} '
+                        f'(OKX’s ledger)')
+        rec = acct.get('reconcile') or {}
+        if rec:
+            account_line += (f' · balance check: OKX now '
+                             f'{cash(rec.get("okx_balance"), sign=False)} '
+                             + ('✓' if rec.get('ok') else
+                                f'({cash(rec.get("gap"))} apart)'))
     tally = body.get('fee_tally') or {}
     fee_line = ''
     if tally.get('trades'):
@@ -527,11 +553,13 @@ for the colours.</span></div>
   <div><span>Capital used / trade</span><b>{'' if s.get('capital_used_avg') is None else f"{s['capital_used_avg']:.1f}% avg · {s.get('capital_used_max') or 0:.1f}% max"}</b></div></div></div>
 </section>
 <section class="panel jr"><h2>Trade journal <small>{len(trips)} closed
-trade(s), oldest first</small></h2>{journal}{fee_line}</section>
+trade(s), oldest first{account_line}</small></h2>{journal}{fee_line}</section>
 {excursion}
 <footer class="notes"><b>Net P&amp;L</b> is after every fee. <b>Fills</b>:
 how OKX filled leg A / leg B at the entry and the exit (M maker, T taker).
-<b>Fees</b>: what OKX charged on the trade’s fills. <b>Fees % of gross</b>:
+<b>Fees</b>: what OKX charged on the trade’s fills. <b>Account</b>: the
+OKX account’s balance after the trade’s last fill, from OKX’s own ledger
+(funding and transfers included). <b>Fees % of gross</b>:
 the fees as a share of what the spread move made (a dash where the move
 lost). <b>On margin</b>:
 net ÷ the margin both legs tied up at entry. <b>On capital</b>: net ÷
@@ -754,7 +782,7 @@ th, td { border: 1px solid var(--line); padding: 3px 5px; text-align: center; wh
 th { background: var(--navy); color: #fff; font-weight: 600; font-size: 10.5px; }
 td.l, th.l { text-align: left; }
 .split { margin-bottom: 8px; font-size: 11px; }
-.journal { font-size: 9.5px; table-layout: auto; }
+.journal { font-size: 9px; table-layout: auto; }
 .journal th, .journal td { padding: 2px 3px; }
 /* Free text wraps inside its column rather than pushing out of it. */
 .journal td.l { white-space: normal; overflow-wrap: anywhere;
@@ -763,6 +791,7 @@ td.l, th.l { text-align: left; }
 .tally { margin: 6px 0 0; font-size: 10.5px; }
 td.no { font-weight: 700; color: var(--navy); }
 .journal .closed { color: var(--mute); }
+.journal td.acct { font-weight: 600; color: var(--navy); }
 .journal th.nw { white-space: nowrap; }
 .excursion { margin-top: 2px; }
 .returns { font-size: 12px; max-width: 760px; }

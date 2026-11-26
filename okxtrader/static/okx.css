@@ -456,3 +456,10 @@
 .fd-check { margin: 8px 0 2px; font-weight: 600; }
 .fd-check.up { color: #1f9d55; } .fd-check.down { color: #b42318; }
 .fd-note { margin: 4px 0; color: #475467; }
+
+.monitor .an-recon { margin: 2px 0 6px; font-size: 12px; }
+.monitor .an-recon.up { color: #1f7a3a; } .monitor .an-recon.down { color: #b42318; }
+
+.an-vol-link { color: inherit; text-decoration: none; cursor: pointer; }
+.an-vol-link b { text-decoration: underline dotted; }
+.an-vol-link:hover b { color: #0b5cad; text-decoration: underline; }

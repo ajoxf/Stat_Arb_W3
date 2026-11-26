@@ -7969,7 +7969,7 @@ function anFeeCell(t) {
   if (t.fee === null || t.fee === undefined) return '<td>' + DASH + '</td>';
   var bp = t.fees_bp_notional === null || t.fees_bp_notional === undefined
     ? '' : ' \u00b7 ' + fmt(t.fees_bp_notional, 1) + ' bp of notional';
-  if (t.fees_source === 'OKX') {
+  if (t.fees_source === 'OKX' || t.fees_source === 'OKX ledger') {
     // THE BREAKDOWN, as OKX charged it: each leg and end, maker and
     // taker apart.
     var parts = t.fee_parts || {};
@@ -7987,7 +7987,9 @@ function anFeeCell(t) {
     return '<td class="an-fee" title="' + escapeHtml(
       (lines.length ? lines.join('\n') + '\n' : '') + 'Total ' +
       money(t.fee) + ' = maker ' + money(t.maker_fees) + ' + taker ' +
-      money(t.taker_fees) + ' (OKX)' + bp + '\nClick for the calculation') +
+      money(t.taker_fees) + ' (OKX fills)' + (t.fees_source === 'OKX ledger'
+        ? '\nOKX ledger: ' + money(t.fee) : '') + bp +
+      '\nClick for the calculation') +
       '"><a href="#" class="an-fee-link" data-pid="' +
       escapeHtml(t.position_id) + '">' + money(t.fee) + '</a></td>';
   }
@@ -8046,11 +8048,17 @@ function feeDetailHtml(t, expected) {
     }).join('');
   var check = '';
   if (t.bill_fees !== null && t.bill_fees !== undefined) {
-    var gap = Math.abs(t.bill_fees - t.fee);
+    // The ledger against the FILLS: two OKX records of the same fees.
+    var fillsFee = t.fills_fees !== undefined && t.fills_fees !== null
+      ? t.fills_fees : sum('fee');
+    var gap = Math.abs(t.bill_fees - fillsFee);
     check = '<p class="fd-check ' + (gap < 0.01 ? 'up' : 'down') +
       '">OKX ledger: ' + money(t.bill_fees) + ' on ' + t.bills_matched +
-      ' bill(s) \u2014 ' + (gap < 0.01 ? '\u2713 the same as the fills'
-        : 'differs by ' + money(gap) + ' from the fills') + '</p>';
+      ' bill(s) for ' + (t.bill_orders || 0) + ' order(s) \u2014 ' +
+      (gap < 0.01 ? '\u2713 the same as the fills'
+        : 'the fills say ' + money(fillsFee) + ', ' + money(gap) +
+          ' apart') + (t.fees_source === 'OKX ledger'
+        ? '. The journal uses the ledger\u2019s figure.' : '') + '</p>';
   } else {
     check = '<p class="fd-check">OKX ledger: not read for this trade yet ' +
       '(the desk reads it once a minute).</p>';
@@ -8115,6 +8123,89 @@ document.addEventListener('click', function (e) {
   showFeeDetail(link.dataset.pid);
 });
 
+// THE VOLUME, WORKED OUT: one figure of the Notional traded table, line
+// by line - what a deal and a lot are, then per instrument the deals, the
+// lots (contracts) x contract size x average price = notional, and the
+// total. Opened from the figure; closed by x, Esc or a click outside.
+function volumeDetailHtml(c, label) {
+  var lines = Object.keys(c.symbols || {}).sort().map(function (sym) {
+    var x = c.symbols[sym];
+    return '<tr><td>' + escapeHtml(sym) + '</td><td>' + x.deals +
+      '</td><td>' + fmt(x.lots, 2) + '</td><td>' + (x.size === null ||
+        x.size === undefined ? DASH : fmt(x.size, 4)) + '</td><td>' +
+      (x.size ? fmt(x.lots * x.size, 4) : DASH) + '</td><td>' +
+      (x.price === null || x.price === undefined ? DASH : fmt(x.price, 2)) +
+      '</td><td><b>' + (x.unpriced >= x.deals ? DASH
+        : money(x.notional)) + '</b>' + (x.unpriced ? ' <span class="down">(' +
+        x.unpriced + ' not priced)</span>' : '') + '</td></tr>';
+  }).join('');
+  return '<div class="fd-head"><b>Notional traded \u00b7 ' +
+    escapeHtml(label) + '</b><button class="fd-x" title="Close">\u00d7' +
+    '</button></div>' +
+    '<p class="fd-note"><b>A deal</b> is one fill as OKX reports it: an ' +
+    'order that fills against several resting orders is several deals. ' +
+    '<b>A lot</b> is one contract: on BTC-USDT-SWAP one contract is 0.01 ' +
+    'BTC, on ETH-USDT-SWAP 0.1 ETH. <b>Notional</b> = lots \u00d7 contract ' +
+    'size \u00d7 price, deal by deal, entries and exits of both legs.</p>' +
+    '<table class="fd-table"><thead><tr><th>Instrument</th><th>Deals</th>' +
+    '<th>Lots (contracts)</th><th>Contract size</th><th>Coins ' +
+    '(lots \u00d7 size)</th><th>Average price</th><th>Notional</th>' +
+    '</tr></thead><tbody>' + lines + '</tbody><tfoot><tr><td>Total</td>' +
+    '<td>' + c.fills + '</td><td>' + fmt(c.lots, 2) + '</td><td></td>' +
+    '<td></td><td></td><td><b>' + money(c.notional) + '</b></td></tr>' +
+    '</tfoot></table><p class="fd-note">Leg A ' + money(c.a) + ' + leg B ' +
+    money(c.b) + '. The average price is the notional \u00f7 the coins: ' +
+    'each deal is priced at its own fill price.</p>';
+}
+
+function showVolumeDetail(src, label) {
+  var data = (state.analysis || {}).notional || {};
+  var parts = String(src).split('|');
+  var c = parts[0] === 'total' ? (data.total || {})[parts[2]]
+    : ((data[parts[0]] || [])[Number(parts[1])] || {})[parts[2]];
+  if (!c) { return; }
+  var old = document.getElementById('fee-detail');
+  if (old) { old.remove(); }
+  var shade = document.createElement('div');
+  shade.id = 'fee-detail';
+  shade.className = 'fd-shade';
+  shade.innerHTML = '<div class="fd-box">' + volumeDetailHtml(c, label) +
+    '</div>';
+  function close() {
+    shade.remove();
+    document.removeEventListener('keydown', onKey, true);
+  }
+  function onKey(e) { if (e.key === 'Escape') { close(); } }
+  shade.addEventListener('click', function (e) {
+    if (e.target === shade || e.target.classList.contains('fd-x')) {
+      close();
+    }
+  });
+  document.addEventListener('keydown', onKey, true);
+  document.body.appendChild(shade);
+}
+
+document.addEventListener('click', function (e) {
+  var link = e.target.closest && e.target.closest('.an-vol-link');
+  if (!link) { return; }
+  e.preventDefault();
+  showVolumeDetail(link.dataset.src, link.dataset.label);
+});
+
+// THE BALANCE, RECONCILED: the journal's last account balance (OKX's
+// ledger) against the balance OKX reports for the account now.
+function reconcileHtml(r, cash) {
+  if (!r) { return ''; }
+  return '<p class="an-recon ' + (r.ok ? 'up' : 'down') + '">' +
+    '<b>Balance check:</b> journal (OKX ledger) ' + cash(r.ledger) +
+    ' \u00b7 OKX now ' + cash(r.okx_balance) + ' cash \u2014 ' + (r.ok
+      ? '\u2713 the same'
+      : cash(r.gap) + ' apart (a bill not read yet - the ledger is read ' +
+        'once a minute - or money moved outside this period)') +
+    ' \u00b7 equity ' + cash(r.okx_equity) + ' with ' +
+    cash(r.okx_open_pnl) + ' open P&amp;L</p>';
+}
+
 // THE TALLY under the journal: every fee, maker against taker.
 function feeTallyHtml(f, cash) {
   if (!f || !f.trades) return '';
@@ -8134,6 +8225,12 @@ function feeTallyHtml(f, cash) {
       money(f.taker_fees) + ' (' + (f.taker_fills || 0) + ' fills)' +
       (fills ? ' \u00b7 ' + fmt(100 * (f.maker_fills || 0) / fills, 0) +
         '% of fills maker' : '') : '') +
+    (f.ledger_period !== undefined && f.ledger_period !== null
+      ? ' \u00b7 <b>OKX ledger</b>: ' + money(f.ledger_period) +
+        ' of trading fees over the period, ' + money(f.ledger_matched) +
+        ' of them on these trades' + (Math.abs(f.ledger_other || 0) >= 0.01
+          ? ' (' + money(f.ledger_other) + ' on orders that are no desk ' +
+            'trade here, or a trade still open)' : ' \u2713') : '') +
     (f.estimated ? ' \u00b7 <span class="hint">' + f.estimated +
       ' trade(s) estimated (~), their OKX fills not in the journal' +
       '</span>' : '') + '</p>';
@@ -8634,7 +8731,7 @@ function anHeld(seconds) {
       return html + '<p class="hint">the deals could not be read</p>';
     }
     var periods = data.periods || [];
-    function cell(c) {
+    function cell(c, src, label) {
       c = c || {};
       if (!c.fills) { return '<td class="hint">' + DASH + '</td>'; }
       var exact = Math.round(c.notional).toLocaleString();
@@ -8646,12 +8743,15 @@ function anHeld(seconds) {
           'contract size, counted but not priced' : '');
       // None of it priced is unmeasured, not zero.
       var shown = c.unpriced >= c.fills ? DASH : compactNumber(c.notional);
-      return '<td title="' + escapeHtml(title) + '"><b>' + shown + '</b>' +
+      return '<td title="' + escapeHtml(title + ' \u2014 click for the ' +
+        'calculation') + '"><a href="#" class="an-vol-link" data-src="' +
+        escapeHtml(src) + '" data-label="' + escapeHtml(label || '') +
+        '"><b>' + shown + '</b>' +
         (c.unpriced ? '<sup class="down" title="' + c.unpriced +
           ' not priced">*</sup>' : '') +
         '<div class="hint">' + c.fills + ' deal' +
         (c.fills === 1 ? '' : 's') + ' \u00b7 ' + fmt(c.lots, 2) +
-        ' lots</div></td>';
+        ' lots</div></a></td>';
     }
     html += '<table class="an-table an-notional"><thead><tr>' +
       '<th class="l">Ladder</th>' + periods.map(function (p) {
@@ -8662,15 +8762,19 @@ function anHeld(seconds) {
       html += '<tr><td colspan="' + (periods.length + 1) + '" class="hint">' +
         'nothing traded in the last 30 days</td></tr>';
     }
-    rows.forEach(function (r) {
+    rows.forEach(function (r, i) {
       html += '<tr><td class="l">' + name(r.pair_key) + '</td>' +
-        periods.map(function (p) { return cell(r[p.key]); }).join('') +
-        '</tr>';
+        periods.map(function (p) {
+          return cell(r[p.key], 'rows|' + i + '|' + p.key,
+                      name(r.pair_key) + ' \u00b7 ' + p.label);
+        }).join('') + '</tr>';
     });
     if (rows.length > 1) {
       html += '<tr class="an-total"><td class="l"><b>All ladders</b></td>' +
-        periods.map(function (p) { return cell(data.total[p.key]); })
-          .join('') + '</tr>';
+        periods.map(function (p) {
+          return cell(data.total[p.key], 'total||' + p.key,
+                      'All ladders \u00b7 ' + p.label);
+        }).join('') + '</tr>';
     }
     var unpriced = (data.total && data.total['30d'] &&
                     data.total['30d'].unpriced) || 0;
@@ -8691,8 +8795,10 @@ function anHeld(seconds) {
           (who.login ? '<div class="hint">#' + escapeHtml(who.login) +
             '</div>' : '') + '</td><td class="l">' +
           escapeHtml(who.broker || DASH) + '</td>' +
-          periods.map(function (p) { return cell(r[p.key]); }).join('') +
-          '</tr>';
+          periods.map(function (p) {
+            return cell(r[p.key], 'accounts|' + accounts.indexOf(r) + '|' +
+                        p.key, r.account + ' \u00b7 ' + p.label);
+          }).join('') + '</tr>';
       });
       html += '</tbody></table>';
     }
@@ -8873,7 +8979,7 @@ function anHeld(seconds) {
       (acct.opening !== null && acct.opening !== undefined
         ? ' \u00b7 OKX account: opening ' + pnlCash(acct.opening) +
           ' \u2192 now ' + pnlCash(acct.latest) + ' (OKX\u2019s ledger)'
-        : '') + '</small></h4>' +
+        : '') + '</small></h4>' + reconcileHtml(acct.reconcile, pnlCash) +
       '<table class="an-table"><thead><tr><th title="Every closed trade on ' +
       'the desk\u2019s record, numbered in the order it closed \u2014 a ' +
       'trade keeps its number whatever this tab is showing">Trade no</th>' +

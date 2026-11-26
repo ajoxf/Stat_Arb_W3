@@ -91,7 +91,13 @@ RELEASES = {
 #: more often); the official agencies still give the actual the moment
 #: it lands.
 FF_URL = 'https://nfs.faireconomy.media/ff_calendar_thisweek.json'
+#: ...and next week's, when it is up (it is published some time into
+#: the week; until then it is simply not there).
+FF_NEXT_URL = 'https://nfs.faireconomy.media/ff_calendar_nextweek.json'
 FF_EVERY_SEC = 3600.0
+#: The calendar's window: a day back, two weeks ahead.
+SHOW_BACK_SEC = 86400.0
+SHOW_AHEAD_SEC = 14 * 86400.0
 
 #: ForexFactory's names for the figures this desk reads from the
 #: agencies (US events only).
@@ -654,33 +660,56 @@ class Calendar:
                 entry['move'] = round(entry['after'] - entry['at'], 4)
 
     def _refresh_ff(self, now):
-        """ForexFactory's week, once an hour (every 15 minutes while
-        an event of the day is waiting for its actual): the schedule,
-        the forecasts and the previous figures."""
-        pending = any(
-            e['at'] <= now and not e.get('actual') and
-            now - e['at'] < 3 * 3600 for e in self.state.get('ff') or ())
-        every = 900.0 if pending else FF_EVERY_SEC
-        if now - (self.state.get('ff_at') or 0) < every:
+        """ForexFactory's weeks - this one and the next, when it is up -
+        once an hour: EVERY event the calendar shows, its time, forecast
+        and previous. Events already read and now past stay for a few
+        days: on Monday the feed's week starts again."""
+        if now - (self.state.get('ff_at') or 0) < FF_EVERY_SEC:
             return
         self.state['ff_at'] = now
-        try:
-            text = self._fetch(FF_URL)
-            rows = parse_ff(json.loads(text) if text else [])
-        except Exception as e:
-            self.errors['ForexFactory'] = f'not read: {e}'[:160]
+        fresh = []
+        for url, required in ((FF_URL, True), (FF_NEXT_URL, False)):
+            try:
+                text = self._fetch(url)
+                fresh += parse_ff(json.loads(text) if text else [])
+            except Exception as e:
+                if required:
+                    self.errors['ForexFactory'] = f'not read: {e}'[:160]
+                    return
+        if not fresh:
             return
-        if rows:
-            self.state['ff'] = rows
-            self.errors.pop('ForexFactory', None)
-        for row in rows:
-            if row.get('actual'):
-                self.state['ff_out'].setdefault(_ff_id(row), now)
+        self.errors.pop('ForexFactory', None)
+        rows = {_ff_id(r): r for r in self.state.get('ff') or ()
+                if r['at'] >= now - 3 * 86400}
+        rows.update({_ff_id(r): r for r in fresh})
+        self.state['ff'] = sorted(rows.values(), key=lambda r: r['at'])
+
+    def _ff_moves(self, now):
+        """What the spreads did over each ForexFactory event: noted at
+        its time, and again five minutes on."""
+        moves = self.state.setdefault('ff_moves', {})
+        for row in self.state.get('ff') or ():
+            since = now - row['at']
+            if since < 0 or since > 3600:
+                continue
+            event_id = _ff_id(row)
+            event = moves.setdefault(event_id, {'spreads': {}})
+            if not event.get('at_done'):
+                self._note_spreads(event, 'at')
+                event['at_done'] = True
+            elif since >= 300 and not event.get('after_done'):
+                self._note_spreads(event, 'after')
+                event['after_done'] = True
+        for event_id in [k for k in moves
+                         if k.rsplit(':', 1)[-1] < str(_utc_day(
+                             now - 14 * 86400))]:
+            del moves[event_id]
 
     def step(self):
         """One pass: the schedule, then every release that is due."""
         now = self.clock()
         self._refresh_ff(now)
+        self._ff_moves(now)
         self._refresh_schedule(now)
         for event in sorted(self.state['events'].values(),
                             key=lambda e: e['at']):
@@ -761,121 +790,82 @@ class Calendar:
     # -- what the screen and Telegram read -------------------------------
 
     def snapshot(self):
+        """THE CALENDAR: ForexFactory's high-impact events - every one
+        of them, their times, forecasts and previous figures - from a day
+        back to two weeks ahead. The ACTUAL of a US release comes from
+        its agency the moment it lands (BLS, DOL, EIA), since the feed
+        carries none."""
         now = self.clock()
         keys = self.env()
-        rows = []
-        ff_rows = [r for r in self.state.get('ff') or ()
-                   if not self.currencies or r['country'] in self.currencies]
-        ff_usd = [r for r in ff_rows if r['country'] == 'USD'
-                  and r['title'] in FF_FIGURES]
+        official = list(self.state['events'].values())
 
-        def ff_match(key, at):
-            # The same release on ForexFactory: the same figure within two
-            # days (a holiday moves one; the two sources need not agree on
-            # the day).
-            near = [r for r in ff_usd if FF_FIGURES[r['title']] == key
-                    and abs(r['at'] - at) <= 2 * 86400]
-            return min(near, key=lambda r: abs(r['at'] - at)) \
+        def official_for(key, at):
+            # The agency's release of this figure, within two days.
+            near = [e for e in official
+                    if any(f['key'] == key for f in
+                           RELEASES[e['release']]['figures'])
+                    and abs(e['at'] - at) <= 2 * 86400]
+            return min(near, key=lambda e: abs(e['at'] - at)) \
                 if near else None
-        matched = set()
-        for event in sorted(self.state['events'].values(),
-                            key=lambda e: e['at']):
-            release = RELEASES.get(event['release'])
-            if not release:
+        rows = []
+        moves = self.state.get('ff_moves') or {}
+        for ff in self.state.get('ff') or ():
+            if self.currencies and ff['country'] not in self.currencies:
                 continue
-            figures = []
-            via_ff = []
-            own_ff = []
-            for figure in release['figures']:
-                key = figure['key']
-                got = (event.get('figures') or {}).get(key)
-                actual = show(got[0], figure['unit']) if got else None
-                previous = (show(got[1], figure['unit']) if got and
-                            got[1] is not None else
-                            show((event.get('previous') or {}).get(key),
-                                 figure['unit']))
-                ff = ff_match(key, event['at'])
-                if actual is None and ff and ff.get('actual'):
-                    # The agency not read (blocked, late, no key): the
-                    # figure as ForexFactory has it, said as such.
-                    actual = ff['actual']
-                    via_ff.append(key)
-                forecast = (ff or {}).get('forecast')
-                if previous is None and ff:
-                    previous = ff.get('previous')
-                if ff:
-                    matched.add(_ff_id(ff))
-                    own_ff.append(_ff_id(ff))
-                figures.append({
-                    'key': key, 'name': figure['name'],
-                    'unit': figure['unit'], 'actual': actual,
-                    'previous': previous, 'forecast': forecast,
-                    'surprise': surprise_words(actual, forecast,
-                                               figure['unit'])})
-            status, released_at = event['status'], event.get('released_at')
-            # ForexFactory's time for a release not yet out: the tighter
-            # schedule (a holiday, a moved release).
-            at = event['at']
-            ff_times = [r['at'] for r in ff_usd if _ff_id(r) in own_ff]
-            if status == 'upcoming' and ff_times:
-                at = min(ff_times)
-            if status in ('due', 'missed') and via_ff and \
-                    all(f['actual'] for f in figures):
-                status = 'released'
-                released_at = min(
-                    (self.state['ff_out'].get(i) for i in own_ff
-                     if self.state['ff_out'].get(i)), default=now)
-            rows.append({
-                'id': event['id'], 'release': event['release'],
-                'via': 'ForexFactory' if via_ff else None,
-                'name': release['name'], 'agency': release['agency'],
-                'country': 'USD', 'where': 'US', 'impact': 3,
-                'at': at, 'source': release['agency'],
-                'status': status, 'released_at': released_at,
-                'period': event.get('period'),
-                'figures': figures,
-                'spreads': event.get('spreads') or {}})
-        # Every other high-impact event of the week, from ForexFactory:
-        # its time, forecast and previous, and its actual once the feed
-        # has it.
-        for ff in ff_rows:
+            if not now - SHOW_BACK_SEC <= ff['at'] <= now + SHOW_AHEAD_SEC:
+                continue
             event_id = _ff_id(ff)
-            if event_id in matched:
-                continue
-            seen = self.state['ff_out'].get(event_id)
             actual = ff.get('actual')
+            source = 'ForexFactory'
+            spreads = (moves.get(event_id) or {}).get('spreads') or {}
+            released_at = self.state['ff_out'].get(event_id)
+            key = FF_FIGURES.get(ff['title']) if ff['country'] == 'USD' \
+                else None
+            if key and not actual:
+                event = official_for(key, ff['at'])
+                if event and event.get('status') == 'released':
+                    got = (event.get('figures') or {}).get(key)
+                    if got:
+                        unit = next(f['unit'] for f in
+                                    RELEASES[event['release']]['figures']
+                                    if f['key'] == key)
+                        actual = show(got[0], unit)
+                        source = ('ForexFactory \u00b7 actual ' +
+                                  RELEASES[event['release']]['agency'])
+                        released_at = event.get('released_at')
+                        spreads = event.get('spreads') or spreads
             unit = unit_of(actual or ff.get('forecast') or ff.get('previous'))
             forecast = ff.get('forecast')
             rows.append({
                 'id': event_id, 'release': 'ff', 'name': ff['title'],
-                'agency': 'ForexFactory', 'source': 'ForexFactory',
+                'agency': source, 'source': source,
                 'country': ff['country'],
                 'where': WHERE.get(ff['country'], ff['country']),
                 'impact': 3, 'at': ff['at'],
                 'status': ('released' if actual else 'upcoming'
                            if ff['at'] > now else 'past'),
-                'released_at': (seen or ff['at']) if actual else None,
-                'period': None, 'spreads': {},
-                'figures': [{'key': 'ff', 'name': ff['title'], 'unit': unit,
-                             'actual': actual,
+                'released_at': (released_at or ff['at']) if actual else None,
+                'period': None, 'spreads': spreads,
+                'figures': [{'key': key or 'ff', 'name': ff['title'],
+                             'unit': unit, 'actual': actual,
                              'previous': ff.get('previous'),
                              'forecast': forecast,
                              'surprise': surprise_words(actual, forecast,
                                                         unit)}]})
         rows.sort(key=lambda r: r['at'])
-        # NEXT: what is still to come - a release waiting for its figures
-        # only for its first half hour, never as stale news a day later.
-        upcoming = [r for r in rows if r['status'] == 'upcoming'
-                    or (r['status'] == 'due' and now - r['at'] < 1800)]
+        upcoming = [r for r in rows if r['status'] == 'upcoming']
         released = [r for r in rows if r['status'] == 'released']
         sources = {
-            'BLS': ('key saved' if (keys.get('BLS_API_KEY') or '').strip()
-                    else 'no key: 25 reads a day, read every minute'),
-            'DOL': 'no key needed',
-            'EIA': ('key saved' if (keys.get('EIA_API_KEY') or '').strip()
-                    else 'no key: crude inventories are not read'),
-            'ForexFactory': ('schedule and forecasts, read hourly'
-                             if self.state.get('ff') else 'not read yet')}
+            'ForexFactory': ('every event, its forecast and previous: this '
+                             'week and next, read hourly'
+                             if self.state.get('ff') else 'not read yet'),
+            'BLS': ('US actuals; key saved'
+                    if (keys.get('BLS_API_KEY') or '').strip()
+                    else 'US actuals; no key: read every minute'),
+            'DOL': 'US jobless claims actual; no key needed',
+            'EIA': ('US crude actual; key saved'
+                    if (keys.get('EIA_API_KEY') or '').strip()
+                    else 'no key: the crude actual is not read')}
         return {'events': rows,
                 'next': upcoming[0] if upcoming else None,
                 'last': (max(released, key=lambda r: r['released_at']

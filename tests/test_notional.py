@@ -240,3 +240,18 @@ def test_the_page_names_each_accounts_login_and_broker_and_takes_a_day(
     assert bad.status_code == 200
     assert 'date' not in [p['key'] for p in
                           bad.get_json()['notional']['periods']]
+
+
+def test_each_figure_carries_its_working_instrument_by_instrument():
+    """Deals, lots, contract size, average price = notional: a total can
+    be checked line by line."""
+    out = analysis.notional_traded(
+        [deal(1, 0.5, 60.0), deal(2, 1.5, 62.0),
+         deal(1, 2.0, 70.0, account='AC', symbol='UKOIL_F7', leg='B')],
+        SIZES, NOW)
+    today = out['total']['today']['symbols']
+    wti = today['USOIL_F7']
+    assert wti['deals'] == 2 and wti['lots'] == 2.0 and wti['size'] == 1000.0
+    # 0.5 x 1000 x 60 + 1.5 x 1000 x 62 = 123,000 on 2,000 barrels: 61.5.
+    assert wti['notional'] == 123000.0 and wti['price'] == 61.5
+    assert today['UKOIL_F7']['notional'] == 14000.0

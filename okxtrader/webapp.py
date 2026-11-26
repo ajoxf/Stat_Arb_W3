@@ -236,24 +236,40 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
             logging.error('the fills could not be read: %s', e)
             return []
 
+    def okx_bills(db, positions, now):
+        """OKX's account ledger over the positions' window, or None when
+        it cannot be read."""
+        try:
+            first = min((p.get('opened_at') or now for p in positions),
+                        default=now)
+            return db.bills(since_ms=int((first - 60.0) * 1000))
+        except Exception as e:
+            logging.error('the account ledger could not be read: %s', e)
+            return None
+
     def okx_net(db, positions, now):
         """(positions with each trade's net on the fees OKX actually
-        charged, the fills it came from)."""
+        charged - its LEDGER first, then its fills - the fills, the
+        ledger)."""
         fills = okx_fills(db, positions, now)
+        bills = okx_bills(db, positions, now)
         try:
-            return analysis.with_okx_fees(positions, fills), fills
+            return (analysis.with_okx_fees(positions, fills, bills), fills,
+                    bills)
         except Exception as e:
             logging.error('OKX fees could not be applied: %s', e)
-            return positions, fills
+            return positions, fills, bills
 
-    def attach_fees(db, body, positions, now, fills=None):
+    def attach_fees(db, body, positions, now, fills=None, bills=None):
         """MAKER OR TAKER and THE FEES, per trade, from OKX's own fills -
         the Analysis tab and the trader report alike."""
         try:
             if fills is None:
                 fills = okx_fills(db, positions, now)
+            if bills is None:
+                bills = okx_bills(db, positions, now)
             body['fee_tally'] = analysis.attach_fills(
-                body.get('journal'), positions, fills)
+                body.get('journal'), positions, fills, bills)
             body['fee_tally']['expected_bp'] = expected_fee_bp()
         except Exception as e:
             logging.error('the fills could not be matched: %s', e)
@@ -262,11 +278,13 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
         # and the account's balance after it - from the start of the
         # window, so the first row's opening balance is the account's.
         try:
-            first = min((p.get('opened_at') or now for p in positions),
-                        default=now)
-            body['account'] = analysis.attach_bills(
-                body.get('journal'),
-                db.bills(since_ms=int((first - 60.0) * 1000)))
+            if bills is None:
+                bills = okx_bills(db, positions, now)
+            body['account'] = analysis.attach_bills(body.get('journal'),
+                                                    bills or [])
+            # ...and the ledger's last balance against OKX's live one.
+            body['account']['reconcile'] = analysis.reconcile_balance(
+                body['account'], (status() or {}).get('accounts') or {})
         except Exception as e:
             logging.error('the account ledger could not be read: %s', e)
             body['account'] = None
@@ -720,7 +738,7 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
         start = None if days <= 0 else now - days * 86400.0
         positions = db.positions_between(start, None, pair_key=pair_key)
         # Net P&L on the fees OKX actually charged.
-        positions, fills = okx_net(db, positions, now)
+        positions, fills, bills = okx_net(db, positions, now)
         events = db.events_between(('algo_signal', 'algo_order'), start)
         if pair_key:
             events = [e for e in events if e.get('pair_key') == pair_key]
@@ -732,7 +750,7 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
         body.setdefault('summary', {})['capital_source'] = capital_source
         analysis.number_trades(body, analysis.trade_numbers(
             db.positions_between(None, None)))
-        attach_fees(db, body, positions, now, fills)
+        attach_fees(db, body, positions, now, fills, bills)
         folder = os.path.dirname(os.path.abspath(config_path))
         pnl = request.args.get('pnl') or 'show'
 
@@ -749,7 +767,7 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
                 pair_key=pair_key)
                 if p.get('closed_at') is not None
                 and (start is None or p['closed_at'] >= start)]
-            closed, _fills = okx_net(db, closed, now)
+            closed, _fills, _bills = okx_net(db, closed, now)
             base, base_source = capital, capital_source
             if capital_source == 'balance' and capital:
                 base = start_capital(capital, closed)
@@ -1294,7 +1312,7 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
         start = None if days <= 0 else now - days * 86400.0
         positions = db.positions_between(start, None, pair_key=pair_key)
         # Net P&L on the fees OKX actually charged.
-        positions, fills = okx_net(db, positions, now)
+        positions, fills, bills = okx_net(db, positions, now)
         events = db.events_between(('algo_signal', 'algo_order'), start)
         if pair_key:
             events = [e for e in events if e.get('pair_key') == pair_key]
@@ -1314,7 +1332,7 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
         # every window and on every ladder filter.
         analysis.number_trades(body, analysis.trade_numbers(
             db.positions_between(None, None)))
-        attach_fees(db, body, positions, now, fills)
+        attach_fees(db, body, positions, now, fills, bills)
         try:
             zone_days = float(request.args.get('zone_days', 1))
         except ValueError:

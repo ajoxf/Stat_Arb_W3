@@ -184,6 +184,15 @@ def _full(units=34.107, n=12):
     body['summary']['capital_source'] = 'balance'
     body['fee_tally'] = analysis.attach_fills(body['journal'], rows, fills)
     analysis.number_trades(body, {f'p{i}': 40 + i for i in range(n)})
+    # OKX's ledger: each fill's bill, with the balance after it.
+    bal, bills = 3655.44 * (units / 34.107), []
+    for f in fills:
+        bal += -f['fee']
+        bills.append({'account': 'okx', 'bill_id': f['deal_id'],
+                      'ts_ms': int(f['deal_id']), 'inst_id': None,
+                      'trade_id': f['deal_id'], 'fee': f['fee'],
+                      'bal': round(bal, 2), 'bal_chg': -f['fee']})
+    body['account'] = analysis.attach_bills(body['journal'], bills)
     return body
 
 
@@ -378,3 +387,15 @@ def test_the_client_report_counts_trades_by_close_from_the_start_capital(
     assert '$3,500.00 (balance at the period start)' in page
     # +288 on 3,500: the trade opened before the week is counted.
     assert '+$288.00' in page and '+8.23%' in page
+
+
+
+def test_the_report_carries_the_okx_accounts_balance_after_each_trade():
+    body = _full()
+    page = report.render(body, {'ethbtc': 'ETH vs BTC'}, 7, None,
+                         1_700_100_000)
+    assert '<th>Account</th>' in page and '<td class="acct">$' in page
+    assert 'OKX account: opening' in page
+    hidden = report.render(body, {'ethbtc': 'ETH vs BTC'}, 7, None,
+                           1_700_100_000, pnl='hide')
+    assert '<th>Account</th>' not in hidden

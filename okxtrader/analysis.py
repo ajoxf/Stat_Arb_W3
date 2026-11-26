@@ -847,6 +847,7 @@ def trade_fees(positions, fills):
                 'leg': f['_leg'].upper(), 'end': 'in' if label.startswith(
                     'entry') else 'out', 'kind': kind or '?',
                 'symbol': f.get('symbol'), 'deal_id': f.get('deal_id'),
+                'order_id': f.get('order_id'),
                 'account': f.get('account'),
                 'at_ms': f.get('broker_time_ms'),
                 'contracts': f.get('volume'), 'contract_size': size or None,
@@ -866,7 +867,36 @@ def trade_fees(positions, fills):
     return out
 
 
-def with_okx_fees(positions, fills):
+def _bills_by_order(bills):
+    out = {}
+    for b in bills or ():
+        if b.get('ord_id'):
+            out.setdefault((b.get('account'), b.get('inst_id'),
+                            str(b.get('ord_id'))), []).append(b)
+    return out
+
+
+def ledger_cost(detail, by_order):
+    """A trade's fees as OKX's LEDGER charged them: every bill of every
+    order its fills came from. (cost, bills, complete) - complete when
+    each of its orders has its bills in the ledger."""
+    orders = {(f.get('account'), f.get('symbol'), str(f.get('order_id')))
+              for f in detail or () if f.get('order_id')}
+    if not orders:
+        return None, [], False
+    found, complete = {}, True
+    for key in orders:
+        bills = by_order.get(key)
+        if not bills:
+            complete = False
+            continue
+        for b in bills:
+            found[b.get('bill_id')] = b
+    cost = sum(-float(b.get('fee') or 0.0) for b in found.values())
+    return round(cost, 6), list(found.values()), complete
+
+
+def with_okx_fees(positions, fills, bills=None):
     """The positions with each closed trade's NET P&L worked out from the
     fees OKX ACTUALLY CHARGED - the gross move, from the fill prices,
     less those fees - wherever its fills are on record at both ends of
@@ -876,13 +906,23 @@ def with_okx_fees(positions, fills):
     Every figure built after this - the journal, the summary, the
     drawdown, both reports - is then on OKX's fees."""
     fees = trade_fees(positions, fills)
+    by_order = _bills_by_order(bills)
     out = []
     for position in positions or ():
         row = dict(position)
         got = fees.get(row.get('position_id')) or {}
         gross = _gross(row)
-        if row.get('closed_at') is not None and got.get('complete') \
-                and gross is not None:
+        if row.get('closed_at') is None or gross is None:
+            out.append(row)
+            continue
+        # OKX's LEDGER first - the record the account's balance is built
+        # from - then OKX's fills; else the desk's estimate stands.
+        cost, _bills, complete = ledger_cost(got.get('detail'), by_order)
+        if got.get('complete') and complete:
+            row['desk_pnl'] = row.get('realized_pnl')
+            row['realized_pnl'] = gross - cost
+            row['fees_from'] = 'OKX ledger'
+        elif got.get('complete'):
             row['desk_pnl'] = row.get('realized_pnl')
             row['realized_pnl'] = gross - (got['maker'] + got['taker'])
             row['fees_from'] = 'OKX'
@@ -890,7 +930,7 @@ def with_okx_fees(positions, fills):
     return out
 
 
-def attach_fills(journal, positions, fills):
+def attach_fills(journal, positions, fills, bills=None):
     """MAKER OR TAKER, and THE FEES, per trade - from OKX's own fills
     (`trade_fees`): per leg and end, whether OKX filled it as maker
     ('M'), taker ('T') or both ('M+T'), and the fees it charged, split
@@ -899,6 +939,8 @@ def attach_fills(journal, positions, fills):
     running tally of fees, in close order, and the totals. Returns the
     tally."""
     fees = trade_fees(positions, fills)
+    by_order = _bills_by_order(bills)
+    ledger_used = set()
     tally = {'fees': 0.0, 'maker_fees': 0.0, 'taker_fees': 0.0,
              'maker_fills': 0, 'taker_fills': 0, 'measured': 0,
              'estimated': 0, 'trades': 0}
@@ -928,6 +970,16 @@ def attach_fills(journal, positions, fills):
         # THE CHECK: fees in basis points of both legs' notional. Both
         # ends at maker on each leg is 2 x the maker rate; at taker,
         # 2 x the taker rate (4 and 10 bp at OKX's 2 / 5 bp).
+        # OKX'S LEDGER, where it has every order of the trade: ITS fee is
+        # the trade's fee - what the account was actually charged.
+        if bills is not None and got.get('complete'):
+            cost, matched, complete = ledger_cost(got.get('detail'),
+                                                  by_order)
+            if complete:
+                row['fills_fees'] = row['fee']
+                row['fee'] = round(cost, 4)
+                row['fees_source'] = 'OKX ledger'
+                ledger_used.update(b.get('bill_id') for b in matched)
         row['fees_bp_notional'] = (round(row['fee'] / notional * 1e4, 2)
                                    if row.get('fee') is not None and notional
                                    else None)
@@ -953,8 +1005,10 @@ def attach_fills(journal, positions, fills):
         if row.get('fee') is not None:
             running += row['fee']
             tally['trades'] += 1
-            if row['fees_source'] == 'OKX':
+            if row['fees_source'] in ('OKX', 'OKX ledger'):
                 tally['measured'] += 1
+                tally['ledger'] = tally.get('ledger', 0) + (
+                    row['fees_source'] == 'OKX ledger')
                 tally['maker_fees'] += row['maker_fees']
                 tally['taker_fees'] += row['taker_fees']
             else:
@@ -970,6 +1024,19 @@ def attach_fills(journal, positions, fills):
                                if gross_total > 0 else None)
     tally['maker_fees'] = round(tally['maker_fees'], 2)
     tally['taker_fees'] = round(tally['taker_fees'], 2)
+    if bills is not None:
+        # THE PERIOD AGAINST THE LEDGER: every trading fee OKX charged
+        # the account over the period, and how much of it the journal's
+        # trades account for. The rest is orders that belong to no desk
+        # trade - a click in the OKX app, a trade still open.
+        trade_bills = [b for b in bills if str(b.get('type')) == '2'
+                       and b.get('fee') is not None]
+        period = sum(-float(b['fee']) for b in trade_bills)
+        used = sum(-float(b['fee']) for b in trade_bills
+                   if b.get('bill_id') in ledger_used)
+        tally['ledger_period'] = round(period, 2)
+        tally['ledger_matched'] = round(used, 2)
+        tally['ledger_other'] = round(period - used, 2)
     return tally
 
 
@@ -977,26 +1044,46 @@ def attach_bills(journal, bills):
     """OKX'S OWN LEDGER beside each trade: the fees its bills charged
     (the check on the fills' figure) and the ACCOUNT BALANCE after its
     last fill - OKX's own `bal`, so the last one is what the account
-    shows. Each fill is found in the ledger by its trade id on its
-    instrument. Returns {'opening', 'latest', 'latest_at', 'bills'}."""
-    by_trade = {}
+    shows.
+
+    Matched by ORDER: OKX writes a bill per order fill-event, and one
+    bill can carry several fills of the same order (a taker sweeping
+    many makers, a resting order filled in pieces). So a trade's bills
+    are every bill of every order its fills came from - matching fill by
+    fill found only some of them. A fill's own bill, where OKX wrote one
+    for it alone, is shown beside it. Returns {'opening', 'latest',
+    'latest_at', 'bills'}."""
+    by_trade, by_order = {}, {}
     for b in bills or ():
         if b.get('trade_id'):
             by_trade[(b.get('account'), b.get('inst_id'),
                       str(b.get('trade_id')))] = b
+        if b.get('ord_id'):
+            by_order.setdefault((b.get('account'), b.get('inst_id'),
+                                 str(b.get('ord_id'))), []).append(b)
     for row in journal or ():
-        matched = []
+        orders = set()
+        own = {}
         for f in row.get('fee_fills') or ():
             b = by_trade.get((f.get('account'), f.get('symbol'),
                               str(f.get('deal_id'))))
             f['bill_fee'] = None if b is None or b.get('fee') is None \
                 else round(-float(b['fee']), 6)
             if b is not None:
-                matched.append(b)
-        row['bill_fees'] = (round(sum(-float(b['fee'] or 0.0)
+                own[b.get('bill_id')] = b
+            if f.get('order_id'):
+                orders.add((f.get('account'), f.get('symbol'),
+                            str(f.get('order_id'))))
+        matched = dict(own)
+        for key in orders:
+            for b in by_order.get(key, ()):
+                matched[b.get('bill_id')] = b
+        matched = list(matched.values())
+        row['bill_fees'] = (round(sum(-float(b.get('fee') or 0.0)
                                       for b in matched), 4)
                             if matched else None)
         row['bills_matched'] = len(matched)
+        row['bill_orders'] = len(orders)
         last = max(matched, key=lambda b: (b.get('ts_ms') or 0,
                                            str(b.get('bill_id'))),
                    default=None)
@@ -1005,13 +1092,45 @@ def attach_bills(journal, bills):
                      key=lambda b: (b.get('ts_ms') or 0, str(b.get('bill_id'))))
     if not ordered:
         return {'opening': None, 'latest': None, 'latest_at': None,
-                'bills': 0}
-    first, last = ordered[0], ordered[-1]
-    return {'opening': round(float(first['bal']) -
-                             float(first.get('bal_chg') or 0.0), 2),
-            'opening_at': first.get('ts_ms'),
-            'latest': round(float(last['bal']), 2),
-            'latest_at': last.get('ts_ms'), 'bills': len(ordered)}
+                'bills': 0, 'accounts': {}}
+    # Account by account, then added up: each account's ledger runs its
+    # own balance.
+    accounts = {}
+    for b in ordered:
+        row = accounts.setdefault(b.get('account'), {
+            'opening': round(float(b['bal']) -
+                             float(b.get('bal_chg') or 0.0), 2),
+            'opening_at': b.get('ts_ms')})
+        row['latest'] = round(float(b['bal']), 2)
+        row['latest_at'] = b.get('ts_ms')
+    return {'opening': round(sum(a['opening'] for a in accounts.values()),
+                             2),
+            'opening_at': ordered[0].get('ts_ms'),
+            'latest': round(sum(a['latest'] for a in accounts.values()), 2),
+            'latest_at': ordered[-1].get('ts_ms'), 'bills': len(ordered),
+            'accounts': accounts}
+
+
+def reconcile_balance(account, live):
+    """THE CHECK: the journal's last account balance - OKX's own ledger
+    - against the balance OKX reports for the account NOW. `live`:
+    {account: {'balance' (cash), 'equity', 'profit' (open P&L)}}.
+    The two are the same cash figure; a gap is a bill not yet read (the
+    ledger is read once a minute) or money that moved outside the
+    ledger's window."""
+    if not account or account.get('latest') is None:
+        return None
+    names = list((account.get('accounts') or {}).keys()) or list(live)
+    rows = [live.get(n) or {} for n in names]
+    if not any(r.get('balance') is not None for r in rows):
+        return None
+    cash = round(sum(float(r.get('balance') or 0.0) for r in rows), 2)
+    equity = round(sum(float(r.get('equity') or 0.0) for r in rows), 2)
+    open_pnl = round(sum(float(r.get('profit') or 0.0) for r in rows), 2)
+    gap = round(cash - account['latest'], 2)
+    return {'ledger': account['latest'], 'okx_balance': cash,
+            'okx_equity': equity, 'okx_open_pnl': open_pnl, 'gap': gap,
+            'ok': abs(gap) < 0.01}
 
 
 def number_trades(body, numbers):
@@ -1142,8 +1261,11 @@ def notional_traded(fills, sizes, now, date=None, date_ms=None):
         return at >= since[period]
 
     def cell():
+        # `symbols`: the working, instrument by instrument - deals, lots
+        # (contracts), the contract size and the notional - so a total
+        # can be checked line by line.
         return {'notional': 0.0, 'lots': 0.0, 'fills': 0, 'unpriced': 0,
-                'a': 0.0, 'b': 0.0}
+                'a': 0.0, 'b': 0.0, 'symbols': {}}
 
     def cells():
         return {k: cell() for k, _ in periods}
@@ -1169,6 +1291,16 @@ def notional_traded(fills, sizes, now, date=None, date_ms=None):
             for target in (pair[period], account[period], total[period]):
                 target['fills'] += 1
                 target['lots'] += volume
+                one = target['symbols'].setdefault(
+                    fill.get('symbol') or '?',
+                    {'deals': 0, 'lots': 0.0, 'size': size,
+                     'notional': 0.0, 'unpriced': 0})
+                one['deals'] += 1
+                one['lots'] += volume
+                if notional is None:
+                    one['unpriced'] += 1
+                else:
+                    one['notional'] += notional
                 if notional is None:
                     target['unpriced'] += 1
                     continue
@@ -1180,6 +1312,15 @@ def notional_traded(fills, sizes, now, date=None, date_ms=None):
         for c in group.values():
             for name in ('notional', 'lots', 'a', 'b'):
                 c[name] = round(c[name], 2)
+            for one in c['symbols'].values():
+                # The average price the notional implies: notional over
+                # lots x contract size - the line reads as a product.
+                priced = one['lots'] if not one['unpriced'] else None
+                one['price'] = (round(one['notional'] / (priced *
+                                                         one['size']), 4)
+                                if priced and one['size'] else None)
+                one['lots'] = round(one['lots'], 4)
+                one['notional'] = round(one['notional'], 2)
 
     def listed(rows, key):
         return [dict(c, **{key: name}) for name, c in sorted(rows.items())

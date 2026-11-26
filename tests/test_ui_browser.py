@@ -7952,6 +7952,7 @@ def test_a_trades_fees_open_their_calculation_and_the_account_runs(page):
             fees_source: 'OKX', maker_fees: 18.34, taker_fees: 38.04,
             notional: 83893.30, fees_bp_notional: 6.7,
             bill_fees: 56.38, bills_matched: 6, account_bal: 3744.02,
+            fills_fees: 56.38,
             fee_parts: {entry_a: {maker: 1.48, taker: 17.15},
                         entry_b: {maker: 8.39, taker: 0},
                         exit_a: {maker: 0, taker: 20.89},
@@ -7978,6 +7979,41 @@ def test_a_trades_fees_open_their_calculation_and_the_account_runs(page):
                  '2.00 bp', 'Leg A in', 'taker $17.15',
                  '✓ the same as the fills', 'every fill maker $33.56',
                  'net $33.97'):
+        assert word in box, word
+    page.keyboard.press('Escape')
+    assert page.locator('#fee-detail').count() == 0
+    assert page.errors == []
+
+
+def test_a_volume_figure_opens_its_calculation(page):
+    page.errors.clear()
+    page.evaluate("""() => {
+        const s = window.MT5Trader.state;
+        s.open = ['monitor:']; s.monitorTab = 'analysis';
+        const c = {notional: 167781.4, lots: 631.52, fills: 58, unpriced: 0,
+          a: 84101.2, b: 83680.2, symbols: {
+            'BTC-USDT-SWAP': {deals: 30, lots: 138.92, size: 0.01,
+                              price: 60539.4, notional: 84101.2, unpriced: 0},
+            'ETH-USDT-SWAP': {deals: 28, lots: 492.6, size: 0.1,
+                              price: 1698.76, notional: 83680.2,
+                              unpriced: 0}}};
+        s.analysis = {ok: true, names: {'A|B': 'ETH vs BTC perps'},
+          summary: {count: 0}, drawdown: {}, calibration: {}, shadow: {},
+          signals: [], excursion: [], journal: [],
+          notional: {periods: [{key: 'today', label: 'Today'}],
+                     rows: [{pair_key: 'A|B', today: c}],
+                     accounts: [], total: {today: c}}};
+        s.analysisAt = Date.now() + 1e9;
+        window.MT5Trader.render();
+    }""")
+    page.wait_for_selector('.monitor .an-vol-link', timeout=WAIT)
+    page.click('.monitor .an-vol-link')
+    page.wait_for_selector('#fee-detail .fd-table', timeout=WAIT)
+    box = page.text_content('#fee-detail')
+    for word in ('ETH vs BTC perps · Today', 'A deal is one fill',
+                 'A lot is one contract', 'BTC-USDT-SWAP', '138.92',
+                 '0.0100', '1.3892', '60539.40', '$84,101.20',
+                 '$167,781.40'):
         assert word in box, word
     page.keyboard.press('Escape')
     assert page.locator('#fee-detail').count() == 0

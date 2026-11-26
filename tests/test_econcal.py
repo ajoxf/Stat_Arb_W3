@@ -217,72 +217,6 @@ def calendar(tmp_path, clock, agencies, spreads=None, env=None):
                        background=False)
 
 
-def test_cpi_is_released_when_bls_has_a_new_month_and_not_before(tmp_path):
-    clock = Clock(utc(2026, 12, 10, 12, 45))         # 45 min before CPI
-    agencies = Agencies()
-    spread = {'mid': -31.10}
-    cal = calendar(tmp_path, clock, agencies,
-                   spreads=lambda: {'eth': {'name': 'ETH vs BTC',
-                                            'mid': spread['mid']}},
-                   env={'BLS_API_KEY': 'k'})
-    cal.step()
-    [cpi] = [e for e in cal.snapshot()['events'] if e['release'] == 'cpi']
-    assert cpi['status'] == 'upcoming'
-    # The latest month, as 'previous', an hour ahead.
-    assert cpi['figures'][0]['previous'] == '0.3%'
-    # At 08:30 New York the data has not moved yet: due, still read.
-    clock.at = utc(2026, 12, 10, 13, 30, )
-    cal.step()
-    assert cal.state['events']['cpi:2026-12-10']['status'] == 'due'
-    # November lands.
-    agencies.bls = bls_answer({
-        'CUSR0000SA0': months([325.3] + [324.0, 323.03], month=11),
-        'CUSR0000SA0L1E': months([331.0, 330.0, 329.01], month=11),
-        'CUUR0000SA0': months([325.0, 324.5] + [320.0] * 10 + [315.2],
-                              month=11)})
-    clock.at += 12
-    spread['mid'] = -30.40
-    cal.step()
-    snap = cal.snapshot()
-    [cpi] = [e for e in snap['events'] if e['release'] == 'cpi']
-    assert cpi['status'] == 'released' and cpi['period'] == '2026-M11'
-    assert [f['actual'] for f in cpi['figures']] == ['0.4%', '0.3%', '3.1%']
-    assert [f['previous'] for f in cpi['figures']] == ['0.3%', '0.3%',
-                                                       '3.0%']
-    assert snap['last']['id'] == 'cpi:2026-12-10'
-    # Five minutes on, the spread's move since the release.
-    clock.at = utc(2026, 12, 10, 13, 35, )
-    spread['mid'] = -29.90
-    cal.step()
-    move = cal.snapshot()['last']['spreads']['eth']
-    assert move['at'] == -31.10 and move['after'] == -29.90
-    assert move['move'] == 1.2
-    # The registered API, with the key.
-    assert agencies.posts[-1][0] == ec.BLS_API_V2
-    assert agencies.posts[-1][1]['registrationkey'] == 'k'
-
-
-def test_claims_are_released_when_dols_page_for_the_day_is_up(tmp_path):
-    clock = Clock(utc(2026, 11, 25, 13, 0))
-    agencies = Agencies()
-    agencies.pages['eta20261120'] = DOL.replace('209,000', '222,000')
-    cal = calendar(tmp_path, clock, agencies)
-    cal.step()
-    claims = cal.state['events']['claims:2026-11-25']
-    assert claims['status'] == 'upcoming'
-    clock.at = utc(2026, 11, 25, 13, 30)
-    cal.step()
-    assert claims['status'] == 'due'
-    agencies.pages['eta20261125'] = DOL
-    clock.at += 10
-    cal.step()
-    [row] = [e for e in cal.snapshot()['events']
-             if e['id'] == 'claims:2026-11-25']
-    assert row['status'] == 'released'
-    assert row['figures'][0]['actual'] == '209K'
-    assert row['figures'][0]['previous'] == '222K'
-
-
 def test_without_an_eia_key_crude_says_so(tmp_path):
     clock = Clock(utc(2026, 11, 25, 15, 30))
     cal = calendar(tmp_path, clock, Agencies())
@@ -315,26 +249,6 @@ def test_the_state_survives_a_restart(tmp_path):
 
 
 # -- the engine and the screen -------------------------------------------------
-
-def test_the_engine_hands_its_spreads_over_and_publishes_the_reading(tmp_path):
-    from types import SimpleNamespace
-    from okxtrader.coordinator import Coordinator
-    clock = Clock(utc(2026, 11, 25, 13, 0))
-    cal = calendar(tmp_path, clock, Agencies())
-    desk = SimpleNamespace(calendar=cal, _calendar_spreads={},
-                           config=SimpleNamespace(get=lambda k, d=None: d))
-    snap = Coordinator._economic_calendar(desk, {
-        'eth': {'name': 'ETH vs BTC', 'long_spread': -31.2,
-                'short_spread': -31.0},
-        'cold': {'name': 'no prices', 'long_spread': None}})
-    assert desk._calendar_spreads == {'eth': {'name': 'ETH vs BTC',
-                                              'mid': -31.1}}
-    assert snap['alert_min'] == 15.0
-    assert snap['next']['release'] == 'claims'
-    # Off: nothing published, nothing read.
-    desk.calendar = None
-    assert Coordinator._economic_calendar(desk, {}) is None
-
 
 def _app(tmp_path):
     from okxtrader.webapp import create_app
@@ -403,51 +317,6 @@ def test_forexfactory_gives_only_the_high_impact_events():
     assert rows[0]['forecast'] == '221K' and rows[1]['forecast'] is None
 
 
-def test_forecasts_come_by_themselves_and_other_events_join_in(tmp_path):
-    clock = Clock(utc(2026, 11, 25, 13, 0))
-    agencies = Agencies()
-    agencies.pages['faireconomy'] = json.dumps(FF_WEEK)
-    cal = calendar(tmp_path, clock, agencies)
-    cal.step()
-    snap = cal.snapshot()
-    [claims] = [e for e in snap['events'] if e['id'] == 'claims:2026-11-25']
-    # The official release, with ForexFactory's consensus - nothing typed.
-    assert claims['figures'][0]['forecast'] == '221K'
-    names = [e['name'] for e in snap['events']]
-    assert 'FOMC Meeting Minutes' in names
-    assert 'CPI Flash Estimate y/y' in names                 # EUR: shown
-    assert 'BOJ Gov Speaks' in names                         # JPY: G10
-    assert 'Manufacturing PMI' not in names                  # CNY: not
-    # Matched to the official release, so not listed twice.
-    assert names.count('Unemployment Claims') == 0
-    [eur] = [e for e in snap['events'] if e['country'] == 'EUR']
-    assert eur['where'] == 'EU' and eur['status'] == 'upcoming'
-    assert snap['sources']['ForexFactory'].startswith('schedule')
-
-
-def test_an_agency_that_cannot_be_read_is_covered_by_forexfactory(tmp_path):
-    """DOL's page not read (the desk's Wednesday claims, Thanksgiving week):
-    ForexFactory's actual stands in, said as such, and the release is out
-    - not 'awaiting figures' a day later."""
-    clock = Clock(utc(2026, 11, 25, 13, 0))
-    agencies = Agencies()
-    week = [dict(r) for r in FF_WEEK]
-    agencies.pages['faireconomy'] = json.dumps(week)
-    cal = calendar(tmp_path, clock, agencies)
-    cal.step()
-    clock.at = utc(2026, 11, 25, 13, 30)
-    cal.step()
-    week[0]['actual'] = '216K'
-    agencies.pages['faireconomy'] = json.dumps(week)
-    clock.at += 900                  # the next read, a quarter hour on
-    cal.step()
-    [claims] = [e for e in cal.snapshot()['events']
-                if e['id'] == 'claims:2026-11-25']
-    assert claims['status'] == 'released' and claims['via'] == 'ForexFactory'
-    assert claims['figures'][0]['actual'] == '216K'
-    assert claims['figures'][0]['surprise'] == '5K below forecast'
-
-
 def test_a_release_forexfactory_has_on_another_day_is_one_release(tmp_path):
     """The weekly rule says Thursday; ForexFactory says Wednesday (a
     holiday the rule does not know): one row, at ForexFactory's time."""
@@ -467,16 +336,6 @@ def test_a_release_forexfactory_has_on_another_day_is_one_release(tmp_path):
     assert claims['figures'][0]['forecast'] == '219K'
 
 
-def test_a_release_still_waiting_is_not_next_for_a_day(tmp_path):
-    clock = Clock(utc(2026, 11, 25, 13, 30))
-    cal = calendar(tmp_path, clock, Agencies())
-    cal.step()
-    assert cal.snapshot()['next']['id'] == 'claims:2026-11-25'
-    clock.at = utc(2026, 11, 26, 9, 0)              # a day on, still due
-    cal.step()
-    assert cal.snapshot()['next']['id'] != 'claims:2026-11-25'
-
-
 def test_the_account_ledger_is_kept_by_bill_id(tmp_path):
     from okxtrader.database import Store
     store = Store(str(tmp_path / 'x.db'))
@@ -488,3 +347,181 @@ def test_the_account_ledger_is_kept_by_bill_id(tmp_path):
     [bill] = store.bills()
     assert bill['bal'] == 3499.8 and bill['trade_id'] == 't1'
     assert bill['fee'] == -0.2 and bill['ts_ms'] == 1000
+
+
+
+# -- the calendar is ForexFactory's; the agencies fill in US actuals ----------
+
+def ff(title, when, country='USD', **figures):
+    return dict({'title': title, 'country': country, 'date': when,
+                 'impact': 'High'}, **figures)
+
+
+def test_cpi_takes_its_actual_from_bls_the_moment_a_new_month_lands(tmp_path):
+    clock = Clock(utc(2026, 12, 10, 12, 45))         # 45 min before CPI
+    agencies = Agencies()
+    agencies.pages['faireconomy'] = json.dumps([
+        ff('CPI m/m', '2026-12-10T08:30:00-05:00', forecast='0.3%',
+           previous='0.3%'),
+        ff('Core CPI m/m', '2026-12-10T08:30:00-05:00', forecast='0.3%',
+           previous='0.3%'),
+        ff('CPI y/y', '2026-12-10T08:30:00-05:00', forecast='3.0%',
+           previous='3.0%')])
+    spread = {'mid': -31.10}
+    cal = calendar(tmp_path, clock, agencies,
+                   spreads=lambda: {'eth': {'name': 'ETH vs BTC',
+                                            'mid': spread['mid']}},
+                   env={'BLS_API_KEY': 'k'})
+    cal.step()
+    rows = {e['name']: e for e in cal.snapshot()['events']}
+    assert set(rows) == {'CPI m/m', 'Core CPI m/m', 'CPI y/y'}
+    assert rows['CPI m/m']['status'] == 'upcoming'
+    assert rows['CPI m/m']['figures'][0]['forecast'] == '0.3%'
+    # 08:30 New York: BLS has not moved yet - nothing made up.
+    clock.at = utc(2026, 12, 10, 13, 30)
+    cal.step()
+    assert cal.state['events']['cpi:2026-12-10']['status'] == 'due'
+    assert all(not e['figures'][0]['actual']
+               for e in cal.snapshot()['events'])
+    agencies.bls = bls_answer({
+        'CUSR0000SA0': months([325.3] + [324.0, 323.03], month=11),
+        'CUSR0000SA0L1E': months([331.0, 330.0, 329.01], month=11),
+        'CUUR0000SA0': months([325.0, 324.5] + [320.0] * 10 + [315.2],
+                              month=11)})
+    clock.at += 12
+    spread['mid'] = -30.40
+    cal.step()
+    snap = cal.snapshot()
+    rows = {e['name']: e for e in snap['events']}
+    assert [rows[n]['figures'][0]['actual']
+            for n in ('CPI m/m', 'Core CPI m/m', 'CPI y/y')] == \
+        ['0.4%', '0.3%', '3.1%']
+    assert rows['CPI m/m']['status'] == 'released'
+    assert rows['CPI m/m']['source'] == 'ForexFactory \u00b7 actual BLS'
+    assert rows['CPI m/m']['figures'][0]['surprise'] == \
+        '0.1 pt above forecast'
+    clock.at = utc(2026, 12, 10, 13, 35)
+    spread['mid'] = -29.90
+    cal.step()
+    move = {e['name']: e for e in cal.snapshot()['events']}[
+        'CPI m/m']['spreads']['eth']
+    assert move['at'] == -31.10 and move['move'] == 1.2
+    assert agencies.posts[-1][0] == ec.BLS_API_V2
+
+
+def test_claims_take_their_actual_from_dol(tmp_path):
+    clock = Clock(utc(2026, 11, 25, 13, 0))
+    agencies = Agencies()
+    agencies.pages['faireconomy'] = json.dumps([
+        ff('Unemployment Claims', '2026-11-25T08:30:00-05:00',
+           forecast='221K', previous='222K')])
+    cal = calendar(tmp_path, clock, agencies)
+    cal.step()
+    clock.at = utc(2026, 11, 25, 13, 30)
+    cal.step()
+    agencies.pages['eta20261125'] = DOL
+    clock.at += 10
+    cal.step()
+    [row] = cal.snapshot()['events']
+    assert row['status'] == 'released'
+    assert row['figures'][0]['actual'] == '209K'
+    assert row['figures'][0]['previous'] == '222K'       # ForexFactory's
+    assert row['figures'][0]['surprise'] == '12K below forecast'
+
+
+def test_every_g10_event_is_forexfactorys_over_the_next_two_weeks(tmp_path):
+    clock = Clock(utc(2026, 11, 25, 13, 0))
+    agencies = Agencies()
+    agencies.pages['ff_calendar_thisweek'] = json.dumps(FF_WEEK)
+    agencies.pages['ff_calendar_nextweek'] = json.dumps([
+        ff('Non-Farm Employment Change', '2026-12-04T08:30:00-05:00',
+           forecast='150K', previous='119K'),
+        ff('RBA Rate Statement', '2026-12-08T22:30:00-05:00', 'AUD'),
+        # Beyond two weeks: not shown.
+        ff('FOMC Statement', '2026-12-16T14:00:00-05:00')])
+    cal = calendar(tmp_path, clock, agencies)
+    cal.step()
+    snap = cal.snapshot()
+    names = [e['name'] for e in snap['events']]
+    for name in ('Unemployment Claims', 'FOMC Meeting Minutes',
+                 'CPI Flash Estimate y/y', 'BOJ Gov Speaks',
+                 'Non-Farm Employment Change', 'RBA Rate Statement'):
+        assert name in names, name
+    assert 'FOMC Statement' not in names                  # > 2 weeks
+    assert 'Manufacturing PMI' not in names               # CNY: not G10
+    assert 'German Ifo' not in names                      # medium impact
+    # The agencies add no rows of their own: one claims row, ForexFactory's.
+    assert names.count('Unemployment Claims') == 1
+    assert len([e for e in snap['events'] if 'laims' in e['name']]) == 1
+    [claims] = [e for e in snap['events']
+                if e['name'] == 'Unemployment Claims']
+    assert claims['figures'][0]['forecast'] == '221K'
+    assert snap['next']['name'] == 'Unemployment Claims'
+
+
+def test_next_week_missing_is_no_fault(tmp_path):
+    clock = Clock(utc(2026, 11, 23, 9, 0))
+    agencies = Agencies()
+    agencies.pages['ff_calendar_thisweek'] = json.dumps(FF_WEEK)
+    cal = calendar(tmp_path, clock, agencies)
+    cal.step()
+    snap = cal.snapshot()
+    assert 'ForexFactory' not in snap['errors']
+    assert snap['events']
+
+
+def test_a_past_event_without_its_figures_is_not_next(tmp_path):
+    clock = Clock(utc(2026, 11, 25, 13, 0))
+    agencies = Agencies()
+    agencies.pages['faireconomy'] = json.dumps(FF_WEEK)
+    cal = calendar(tmp_path, clock, agencies)
+    cal.step()
+    assert cal.snapshot()['next']['name'] == 'Unemployment Claims'
+    clock.at = utc(2026, 11, 25, 14, 0)                  # claims passed
+    cal.step()
+    snap = cal.snapshot()
+    assert snap['next']['name'] == 'FOMC Meeting Minutes'
+    [claims] = [e for e in snap['events']
+                if e['name'] == 'Unemployment Claims']
+    assert claims['status'] == 'past'
+
+
+def test_the_engine_hands_its_spreads_over_and_publishes_the_reading(tmp_path):
+    from types import SimpleNamespace
+    from okxtrader.coordinator import Coordinator
+    clock = Clock(utc(2026, 11, 25, 13, 0))
+    agencies = Agencies()
+    agencies.pages['faireconomy'] = json.dumps(FF_WEEK)
+    cal = calendar(tmp_path, clock, agencies)
+    desk = SimpleNamespace(calendar=cal, _calendar_spreads={},
+                           config=SimpleNamespace(get=lambda k, d=None: d))
+    snap = Coordinator._economic_calendar(desk, {
+        'eth': {'name': 'ETH vs BTC', 'long_spread': -31.2,
+                'short_spread': -31.0},
+        'cold': {'name': 'no prices', 'long_spread': None}})
+    assert desk._calendar_spreads == {'eth': {'name': 'ETH vs BTC',
+                                              'mid': -31.1}}
+    assert snap['alert_min'] == 15.0
+    assert snap['next']['name'] == 'Unemployment Claims'
+    desk.calendar = None
+    assert Coordinator._economic_calendar(desk, {}) is None
+
+
+def test_the_spreads_move_is_noted_over_any_event(tmp_path):
+    clock = Clock(utc(2026, 11, 27, 9, 59))
+    agencies = Agencies()
+    agencies.pages['faireconomy'] = json.dumps([
+        ff('CPI Flash Estimate y/y', '2026-11-27T05:00:00-05:00', 'EUR',
+           forecast='2.1%', previous='2.0%')])
+    spread = {'mid': -20.0}
+    cal = calendar(tmp_path, clock, agencies,
+                   spreads=lambda: {'eth': {'name': 'ETH vs BTC',
+                                            'mid': spread['mid']}})
+    cal.step()
+    clock.at = utc(2026, 11, 27, 10, 0, )
+    cal.step()
+    spread['mid'] = -19.25
+    clock.at = utc(2026, 11, 27, 10, 6)
+    cal.step()
+    [row] = cal.snapshot()['events']
+    assert row['spreads']['eth']['move'] == 0.75

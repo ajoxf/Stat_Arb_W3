@@ -254,3 +254,90 @@ def test_each_fill_is_worked_through_contracts_size_price():
     assert first['notional'] == 19800.0              # 33 x 0.01 x 60,000
     assert first['bp'] == round(0.2 / 19800 * 1e4, 3)
     assert second['kind'] == 'taker' and second['notional'] == 800.0
+
+
+def test_one_bill_for_an_orders_many_fills_is_matched_by_the_order():
+    """OKX wrote ONE bill for an order filled in three pieces: matched by
+    the order, the ledger's fee is the fills' fee - not a third of it."""
+    positions = [position('P1', 1000, 11, 12)]
+    journal = [{'position_id': 'P1', 'fees': 1.0}]
+    fills = [dict(fill('t1', 11, 'open', 'taker', -0.30), order_id='o1',
+                  symbol='BTC'),
+             dict(fill('t2', 11, 'open', 'taker', -0.20), order_id='o1',
+                  symbol='BTC'),
+             dict(fill('t3', 11, 'open', 'taker', -0.10), order_id='o1',
+                  symbol='BTC'),
+             dict(fill('t4', 12, 'close', 'maker', -0.40), order_id='o2',
+                  symbol='ETH')]
+    analysis.attach_fills(journal, positions, fills)
+    bills = [{'account': 'main', 'bill_id': 'b1', 'ts_ms': 900,
+              'inst_id': 'BTC', 'ord_id': 'o1', 'trade_id': 't3',
+              'fee': -0.60, 'bal': 3499.4, 'bal_chg': -0.6},
+             {'account': 'main', 'bill_id': 'b2', 'ts_ms': 1000,
+              'inst_id': 'ETH', 'ord_id': 'o2', 'trade_id': 't4',
+              'fee': -0.40, 'bal': 3520.0, 'bal_chg': 20.6}]
+    analysis.attach_bills(journal, bills)
+    row = journal[0]
+    assert row['fee'] == 1.0 and row['bill_fees'] == 1.0
+    assert row['bills_matched'] == 2 and row['bill_orders'] == 2
+    assert row['account_bal'] == 3520.0
+
+
+# -- the ledger is the fee; the balance reconciled ---------------------------
+
+def _ledger_case():
+    trade = dict(position('P1', 1000, 11, 12, pnl=26.0),
+                 entry_spread=10.0, exit_spread=13.0, spread_units=10.0)
+    fills = [dict(fill('t1', 11, 'open', 'maker', -0.20), order_id='o1',
+                  symbol='BTC'),
+             dict(fill('t2', 12, 'open', 'maker', -0.20), order_id='o2',
+                  symbol='ETH'),
+             dict(fill('t3', 11, 'close', 'taker', -0.50), order_id='o3',
+                  symbol='BTC'),
+             dict(fill('t4', 12, 'close', 'maker', -0.30), order_id='o4',
+                  symbol='ETH')]
+    bills = [{'account': 'main', 'bill_id': f'b{i}', 'ts_ms': 900 + i,
+              'type': '2', 'inst_id': sym, 'ord_id': o, 'trade_id': '',
+              'fee': fee, 'bal': bal, 'bal_chg': fee}
+             for i, (sym, o, fee, bal) in enumerate((
+                 ('BTC', 'o1', -0.20, 3499.80), ('ETH', 'o2', -0.20, 3499.60),
+                 ('BTC', 'o3', -0.52, 3514.08), ('ETH', 'o4', -0.30,
+                                                 3528.78)))]
+    # A manual click in the OKX app: in the ledger, in no trade.
+    bills.append({'account': 'main', 'bill_id': 'b9', 'ts_ms': 950,
+                  'type': '2', 'inst_id': 'SOL', 'ord_id': 'm1',
+                  'trade_id': '', 'fee': -0.05, 'bal': 3528.73,
+                  'bal_chg': -0.05})
+    return trade, fills, bills
+
+
+def test_the_ledgers_fee_is_the_trades_fee_and_its_net():
+    trade, fills, bills = _ledger_case()
+    [row] = analysis.with_okx_fees([trade], fills, bills)
+    # Gross 30; the ledger charged 1.22 (the fills said 1.20).
+    assert row['realized_pnl'] == pytest.approx(28.78)
+    assert row['fees_from'] == 'OKX ledger'
+    journal = analysis.journal([row])
+    tally = analysis.attach_fills(journal, [row], fills, bills)
+    assert journal[0]['fee'] == 1.22 and journal[0]['fills_fees'] == 1.2
+    assert journal[0]['fees_source'] == 'OKX ledger'
+    assert tally['ledger'] == 1
+    # The period: 1.27 of trading fees; 1.22 on this trade; 0.05 on an
+    # order that is no desk trade.
+    assert tally['ledger_period'] == 1.27
+    assert tally['ledger_matched'] == 1.22 and tally['ledger_other'] == 0.05
+
+
+def test_the_journals_balance_is_reconciled_with_okxs_own():
+    trade, fills, bills = _ledger_case()
+    journal = analysis.journal([trade])
+    analysis.attach_fills(journal, [trade], fills, bills)
+    account = analysis.attach_bills(journal, bills)
+    assert account['latest'] == 3528.73
+    same = analysis.reconcile_balance(account, {'main': {
+        'balance': 3528.73, 'equity': 3540.0, 'profit': 11.27}})
+    assert same['ok'] and same['gap'] == 0.0
+    assert same['okx_equity'] == 3540.0 and same['okx_open_pnl'] == 11.27
+    off = analysis.reconcile_balance(account, {'main': {'balance': 3530.0}})
+    assert not off['ok'] and off['gap'] == 1.27
+    assert analysis.reconcile_balance(account, {}) is None
