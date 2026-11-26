@@ -10479,9 +10479,11 @@ function anHeld(seconds) {
         '<button data-panel="' + panelId('monitor') + '">Trading Monitor' +
         '<small>positions, orders, fills, slippage, accounts</small>' +
         '</button>' +
-        '<button data-panel="' + panelId('econcal') + '">Economic calendar' +
-        '<small>G10 high-impact releases: forecast, actual, surprise</small>' +
-        '</button>';
+        // The calendar is parked: offered only while the engine has it on.
+        ((state.snapshot || {}).calendar
+          ? '<button data-panel="' + panelId('econcal') + '">Economic ' +
+            'calendar<small>G10 high-impact releases: forecast, actual, ' +
+            'surprise</small></button>' : '');
       menu.innerHTML = html;
       menu.classList.remove('hidden');
     });

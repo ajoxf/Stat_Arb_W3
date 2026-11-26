@@ -8018,3 +8018,18 @@ def test_a_volume_figure_opens_its_calculation(page):
     page.keyboard.press('Escape')
     assert page.locator('#fee-detail').count() == 0
     assert page.errors == []
+
+
+def test_the_parked_calendar_is_not_offered(page):
+    """CALENDAR_ON is off: no calendar in the snapshot, so none in the +
+    menu and no notes."""
+    page.evaluate("() => { document.querySelectorAll('.cal-note')"
+                  ".forEach(n => n.remove()); }")
+    page.paths['publisher'].calendar = None
+    page.paths['publisher'].publish()
+    page.wait_for_timeout(400)
+    page.click('#add-panel')
+    assert page.locator('#add-menu button[data-panel="econcal:"]') \
+        .count() == 0
+    page.click('#add-panel')
+    assert page.locator('.cal-note').count() == 0

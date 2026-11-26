@@ -525,3 +525,11 @@ def test_the_spreads_move_is_noted_over_any_event(tmp_path):
     cal.step()
     [row] = cal.snapshot()['events']
     assert row['spreads']['eth']['move'] == 0.75
+
+
+def test_the_calendar_is_parked_by_default():
+    """Read from the source: the tests switch it off themselves, so the
+    setting in force here says nothing about the one that ships."""
+    import pathlib
+    import okxtrader.config as cfg
+    assert "'CALENDAR_ON': False," in pathlib.Path(cfg.__file__).read_text()

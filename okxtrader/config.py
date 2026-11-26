@@ -376,9 +376,10 @@ DEFAULT_SETTINGS = {
     #: CoinGecko) is read for the Algo panel and Telegram, in seconds.
     #: 0 = not read at all. A reading only: nothing is decided from it.
     'BTC_DOMINANCE_SEC': 300.0,
-    # The economic calendar: the high-impact US releases (BLS, DOL, EIA)
-    # on the desk and in Telegram, and how long before one to warn.
-    'CALENDAR_ON': True,
+    # The economic calendar: PARKED (off) until a source with timely
+    # data is chosen. On, it reads ForexFactory and the US agencies and
+    # shows high-impact releases on the desk and in Telegram.
+    'CALENDAR_ON': False,
     'CALENDAR_ALERT_MIN': 15.0,
     # Whose high-impact events ForexFactory adds: the G10 currencies.
     'CALENDAR_CURRENCIES': 'USD,EUR,JPY,GBP,CHF,CAD,AUD,NZD,SEK,NOK',

@@ -149,7 +149,7 @@ class Coordinator:
         #: the spreads did. A reading only, on its own thread.
         self.calendar = None
         self._calendar_spreads = {}
-        if self.config.get('CALENDAR_ON', True):
+        if self.config.get('CALENDAR_ON', False):
             try:
                 from .econcal import Calendar
                 here = os.path.dirname(os.path.abspath(status_path))
