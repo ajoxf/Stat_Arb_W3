@@ -751,6 +751,25 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
         analysis.number_trades(body, analysis.trade_numbers(
             db.positions_between(None, None)))
         attach_fees(db, body, positions, now, fills, bills)
+        # VOLUME over the report's period, opening and closing deals
+        # apart, instrument by instrument.
+        try:
+            since = (start if start is not None
+                     else min((p.get('opened_at') or now
+                               for p in positions), default=now))
+            deals = db.fills(pair_key=pair_key, ours_only=True,
+                             since_ms=int((since - 86400.0) * 1000),
+                             limit=200000)
+            sizes = analysis.contract_sizes(
+                (status() or {}).get('pairs'),
+                db.positions_between(now - 400 * 86400.0, None))
+            body['volume'] = analysis.notional_traded(
+                deals, sizes, now, date='period',
+                date_ms=(int(since * 1000), int(now * 1000) + 1))[
+                    'total'].get('date')
+        except Exception as e:
+            logging.error('volume could not be read: %s', e)
+            body['volume'] = None
         folder = os.path.dirname(os.path.abspath(config_path))
         pnl = request.args.get('pnl') or 'show'
 

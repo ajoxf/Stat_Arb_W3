@@ -465,3 +465,5 @@
 .an-vol-link:hover b { color: #0b5cad; text-decoration: underline; }
 
 .fd-table tr.fd-sym td { background: #f6f8fa; border-bottom-color: #cfd6df; }
+
+.monitor .an-recon-note { margin: 0 0 6px; font-size: 11px; color: #475467; }

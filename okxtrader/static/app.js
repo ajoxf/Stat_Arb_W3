@@ -8217,14 +8217,22 @@ document.addEventListener('click', function (e) {
 // ledger) against the balance OKX reports for the account now.
 function reconcileHtml(r, cash) {
   if (!r) { return ''; }
+  var after = r.after_last_trade || {};
+  var moved = Object.keys(after).filter(function (k) {
+    return Math.abs(after[k]) >= 0.005;
+  }).map(function (k) { return k + ' ' + cash(after[k]); });
   return '<p class="an-recon ' + (r.ok ? 'up' : 'down') + '">' +
-    '<b>Balance check:</b> journal (OKX ledger) ' + cash(r.ledger) +
-    ' \u00b7 OKX now ' + cash(r.okx_balance) + ' cash \u2014 ' + (r.ok
+    '<b>Balance check (USDT cash):</b> OKX ledger ' + cash(r.ledger) +
+    ' \u00b7 OKX now ' + cash(r.okx_balance) + ' \u2014 ' + (r.ok
       ? '\u2713 the same'
       : cash(r.gap) + ' apart (a bill not read yet - the ledger is read ' +
-        'once a minute - or money moved outside this period)') +
-    ' \u00b7 equity ' + cash(r.okx_equity) + ' with ' +
-    cash(r.okx_open_pnl) + ' open P&amp;L</p>';
+        'once a minute - or money moved outside this period)') + '</p>' +
+    '<p class="an-recon-note">The Account column is the balance just ' +
+    'after each trade' + (moved.length ? '; since the last one: ' +
+      moved.join(' \u00b7 ') : '') + '. Equity ' + cash(r.okx_equity) +
+    ' = USDT cash ' + cash(r.okx_balance) + ' + open P&amp;L ' +
+    cash(r.okx_open_pnl) + (Math.abs(r.other_assets || 0) >= 0.01
+      ? ' + other currencies held ' + cash(r.other_assets) : '') + '.</p>';
 }
 
 // THE TALLY under the journal: every fee, maker against taker.

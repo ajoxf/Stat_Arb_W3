@@ -1088,11 +1088,33 @@ def attach_bills(journal, bills):
                                            str(b.get('bill_id'))),
                    default=None)
         row['account_bal'] = None if last is None else last.get('bal')
-    ordered = sorted((b for b in bills or () if b.get('bal') is not None),
+        row['_bills'] = matched
+    # The journal's last fill in the ledger - taken (and the working
+    # list dropped) before anything else returns.
+    last_trade = max(((b.get('ts_ms') or 0, str(b.get('bill_id')))
+                      for row in journal or ()
+                      for b in row.pop('_bills', ())), default=None)
+    # The USDT ledger only: a bill in another currency carries ITS
+    # balance, not the account's dollars.
+    ordered = sorted((b for b in bills or () if b.get('bal') is not None
+                      and str(b.get('ccy') or 'USDT').upper() == 'USDT'),
                      key=lambda b: (b.get('ts_ms') or 0, str(b.get('bill_id'))))
     if not ordered:
         return {'opening': None, 'latest': None, 'latest_at': None,
                 'bills': 0, 'accounts': {}}
+    # WHAT MOVED THE BALANCE AFTER THE JOURNAL'S LAST TRADE: the bills
+    # past its last fill, by kind - why the account now is not that
+    # trade's balance.
+    kinds = {'1': 'transfers in / out', '2': 'trades not in this journal',
+             '8': 'funding', '6': 'margin transfers', '13': 'interest'}
+    after = {}
+    if last_trade is not None:
+        for b in ordered:
+            if (b.get('ts_ms') or 0, str(b.get('bill_id'))) <= last_trade:
+                continue
+            kind = kinds.get(str(b.get('type')), 'other')
+            after[kind] = round(after.get(kind, 0.0) +
+                                float(b.get('bal_chg') or 0.0), 2)
     # Account by account, then added up: each account's ledger runs its
     # own balance.
     accounts = {}
@@ -1108,7 +1130,7 @@ def attach_bills(journal, bills):
             'opening_at': ordered[0].get('ts_ms'),
             'latest': round(sum(a['latest'] for a in accounts.values()), 2),
             'latest_at': ordered[-1].get('ts_ms'), 'bills': len(ordered),
-            'accounts': accounts}
+            'accounts': accounts, 'after_last_trade': after}
 
 
 def reconcile_balance(account, live):
@@ -1128,9 +1150,13 @@ def reconcile_balance(account, live):
     equity = round(sum(float(r.get('equity') or 0.0) for r in rows), 2)
     open_pnl = round(sum(float(r.get('profit') or 0.0) for r in rows), 2)
     gap = round(cash - account['latest'], 2)
+    # EQUITY is the whole account in USD - every currency held, and the
+    # open P&L - so it is not the USDT cash: the rest is said.
     return {'ledger': account['latest'], 'okx_balance': cash,
-            'okx_equity': equity, 'okx_open_pnl': open_pnl, 'gap': gap,
-            'ok': abs(gap) < 0.01}
+            'okx_equity': equity, 'okx_open_pnl': open_pnl,
+            'other_assets': round(equity - cash - open_pnl, 2),
+            'after_last_trade': account.get('after_last_trade') or {},
+            'gap': gap, 'ok': abs(gap) < 0.01}
 
 
 def number_trades(body, numbers):

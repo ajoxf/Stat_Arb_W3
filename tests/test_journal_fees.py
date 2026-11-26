@@ -341,3 +341,29 @@ def test_the_journals_balance_is_reconciled_with_okxs_own():
     off = analysis.reconcile_balance(account, {'main': {'balance': 3530.0}})
     assert not off['ok'] and off['gap'] == 1.27
     assert analysis.reconcile_balance(account, {}) is None
+
+
+def test_the_gap_between_a_trades_balance_and_okx_now_is_explained():
+    trade, fills, bills = _ledger_case()
+    # After the trade: funding, a transfer in, and a bill in another
+    # currency that must not be read as the account's dollars.
+    bills += [{'account': 'main', 'bill_id': 'c1', 'ts_ms': 2000,
+               'type': '8', 'inst_id': 'ETH', 'ccy': 'USDT', 'fee': 0.0,
+               'bal': 3528.33, 'bal_chg': -0.40, 'trade_id': ''},
+              {'account': 'main', 'bill_id': 'c2', 'ts_ms': 2100,
+               'type': '1', 'inst_id': '', 'ccy': 'USDT', 'fee': 0.0,
+               'bal': 10528.33, 'bal_chg': 7000.0, 'trade_id': ''},
+              {'account': 'main', 'bill_id': 'c3', 'ts_ms': 2200,
+               'type': '1', 'inst_id': '', 'ccy': 'AED', 'fee': 0.0,
+               'bal': 150.0, 'bal_chg': 150.0, 'trade_id': ''}]
+    journal = analysis.journal([trade])
+    analysis.attach_fills(journal, [trade], fills, bills)
+    account = analysis.attach_bills(journal, bills)
+    assert '_bills' not in journal[0]
+    assert journal[0]['account_bal'] == 3528.78
+    assert account['latest'] == 10528.33                  # USDT, not AED
+    after = account['after_last_trade']
+    assert after['funding'] == -0.40 and after['transfers in / out'] == 7000
+    rec = analysis.reconcile_balance(account, {'main': {
+        'balance': 10528.33, 'equity': 10569.17, 'profit': 0.0}})
+    assert rec['ok'] and rec['other_assets'] == 40.84

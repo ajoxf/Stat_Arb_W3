@@ -108,6 +108,56 @@ def size(value):
     return f'{value:,.2f}'.rstrip('0').rstrip('.')
 
 
+def volume_html(v, pnl='show'):
+    """VOLUME TRADED over the period: every deal, the ones that opened a
+    position and the ones that closed one, instrument by instrument -
+    lots x contract size x price = notional. The money masked or left
+    out as the report's P&L is; deals and lots always shown."""
+    if not v or not v.get('fills'):
+        return ''
+    hide = pnl == 'hide'
+
+    def cash(x):
+        if hide:
+            return ''
+        return MASK if pnl != 'show' else money(x, sign=False)
+
+    def row(name, end, x, size, bold=False):
+        coins = (x['lots'] * size) if size else None
+        price = x.get('price')
+        tag = 'b' if bold else 'span'
+        return (f'<tr><td class="l">{_e(name)}</td><td>{end}</td>'
+                f'<td>{x.get("deals", x.get("fills"))}</td>'
+                f'<td>{x["lots"]:,.2f}</td>'
+                f'<td>{"" if size is None else f"{size:g}"}</td>'
+                f'<td>{"" if coins is None else f"{coins:,.4f}"}</td>'
+                f'<td>{"" if price is None or hide or pnl != "show" else f"{price:,.2f}"}</td>'
+                + ('' if hide else f'<td><{tag}>{cash(x.get("notional"))}'
+                                   f'</{tag}></td>') + '</tr>')
+    rows = []
+    for name in sorted(v.get('symbols') or {}):
+        x = v['symbols'][name]
+        if x.get('open'):
+            rows.append(row(name, 'open', x['open'], x.get('size')))
+            rows.append(row('', 'close', x['close'], x.get('size')))
+        rows.append(row('' if x.get('open') else name,
+                        'total' if x.get('open') else 'both', x,
+                        x.get('size'), bold=True))
+    if v.get('open'):
+        rows.append(row('Opening deals', 'open', v['open'], None, True))
+        rows.append(row('Closing deals', 'close', v['close'], None, True))
+    rows.append(row('Total', 'both', v, None, True))
+    return ('<section class="panel jr"><h2>Volume traded <small>every '
+            'deal, opening and closing: 1 lot bought and sold to close is 2 '
+            'lots · notional = lots × contract size × price</small></h2>'
+            '<table class="journal volume"><thead><tr>'
+            '<th class="l">Instrument</th><th>Open / close</th>'
+            '<th>Deals</th><th>Lots</th><th>Contract size</th><th>Coins</th>'
+            '<th>Average price</th>' + ('' if hide else '<th>Notional</th>')
+            + '</tr></thead><tbody>' + ''.join(rows) + '</tbody></table>'
+            '</section>')
+
+
 def fills_text(t):
     """Maker or taker per leg, in -> out: `M/T → M/M`."""
     f = t.get('fills') or {}
@@ -490,6 +540,8 @@ def render(body, names=None, days=7.0, pair_key=None, now=None,
             '<th>Kept</th></tr></thead><tbody>' + ''.join(ex_rows) +
             '</tbody></table></section>')
 
+    volume = volume_html(body.get('volume'), pnl)
+
     if pnl == 'show':
         axis = money
     elif capital:
@@ -554,6 +606,7 @@ for the colours.</span></div>
 </section>
 <section class="panel jr"><h2>Trade journal <small>{len(trips)} closed
 trade(s), oldest first{account_line}</small></h2>{journal}{fee_line}</section>
+{volume}
 {excursion}
 <footer class="notes"><b>Net P&amp;L</b> is after every fee. <b>Fills</b>:
 how OKX filled leg A / leg B at the entry and the exit (M maker, T taker).

@@ -399,3 +399,26 @@ def test_the_report_carries_the_okx_accounts_balance_after_each_trade():
     hidden = report.render(body, {'ethbtc': 'ETH vs BTC'}, 7, None,
                            1_700_100_000, pnl='hide')
     assert '<th>Account</th>' not in hidden
+
+
+def test_the_report_carries_the_volume_opening_and_closing_apart():
+    body = _full()
+    now = 1_800_000_000.0
+    deals = [{'account': 'okx', 'symbol': 'BTC-USDT-SWAP', 'entry': end,
+              'volume': 69.46, 'price': price, 'pair_key': 'ethbtc',
+              'leg': 'A', 'broker_time_ms': int((now - 600) * 1000),
+              'server_offset_s': 0}
+             for end, price in (('open', 60554.0), ('close', 60524.8))]
+    body['volume'] = analysis.notional_traded(
+        deals, {('okx', 'BTC-USDT-SWAP'): 0.01}, now, date='period',
+        date_ms=(int((now - 3600) * 1000), int(now * 1000)))['total']['date']
+    page = report.render(body, {'ethbtc': 'ETH vs BTC'}, 7, None, now)
+    section = page[page.index('Volume traded'):]
+    for word in ('Opening deals', 'Closing deals', 'BTC-USDT-SWAP',
+                 '1 lot bought and sold to close is 2 lots',
+                 '$42,060.81', '$42,040.53', '$84,101.33'):
+        assert word in section, word
+    hidden = report.render(body, {'ethbtc': 'ETH vs BTC'}, 7, None, now,
+                           pnl='hide')
+    section = hidden[hidden.index('Volume traded'):]
+    assert '$84,101' not in section and '138.92' in section
