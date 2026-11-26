@@ -589,3 +589,39 @@ def test_trade_no_numbers_every_closed_trade_in_the_order_it_closed():
     journal = analysis.journal([r for r in rows if r['position_id'] == 'C'])
     analysis.number_journal(journal, numbers)
     assert journal[0]['trade_no'] == 3          # its number, not '1 of 1'
+
+
+# -- Sharpe and Sortino ----------------------------------------------------
+
+def test_sharpe_and_sortino_on_capital_by_day_and_per_trade_on_margin():
+    import math
+    day = 86400
+    trips = [{'pnl': 100.0, 'closed_at': 10 * day + 60, 'pct_margin': 5.0},
+             {'pnl': -50.0, 'closed_at': 11 * day + 60, 'pct_margin': -2.5},
+             # Day 12: no trade - a return of 0, still a day.
+             {'pnl': 150.0, 'closed_at': 13 * day + 60, 'pct_margin': 7.5}]
+    r = analysis.risk_ratios(trips, capital=10000.0, now=13 * day + 3600)
+    daily = [0.01, -0.005, 0.0, 0.015]
+    mean = sum(daily) / 4
+    std = (sum((x - mean) ** 2 for x in daily) / 3) ** 0.5
+    down = (0.005 ** 2 / 4) ** 0.5
+    assert r['days'] == 4
+    assert r['sharpe'] == round(mean / std * math.sqrt(365), 2)
+    assert r['sortino'] == round(mean / down * math.sqrt(365), 2)
+    per = [0.05, -0.025, 0.075]
+    m = sum(per) / 3
+    sd = (sum((x - m) ** 2 for x in per) / 2) ** 0.5
+    assert r['trade_sharpe'] == round(m / sd, 2)
+    assert r['avg_on_margin'] == round(100 * m, 3)
+
+
+def test_too_little_to_measure_is_a_dash_not_a_number():
+    r = analysis.risk_ratios([{'pnl': 5.0, 'closed_at': 86400.0,
+                               'pct_margin': 1.0}], capital=1000.0,
+                             now=86400.0)
+    assert r['sharpe'] is None and r['trade_sharpe'] is None
+    # No losing day: Sortino has nothing to divide by.
+    r = analysis.risk_ratios([{'pnl': 5.0, 'closed_at': 86400.0},
+                              {'pnl': 6.0, 'closed_at': 2 * 86400.0}],
+                             capital=1000.0, now=2 * 86400.0)
+    assert r['sharpe'] is not None and r['sortino'] is None

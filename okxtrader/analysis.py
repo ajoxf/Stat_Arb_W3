@@ -878,22 +878,32 @@ def _bills_by_order(bills):
 
 def ledger_cost(detail, by_order):
     """A trade's fees as OKX's LEDGER charged them: every bill of every
-    order its fills came from. (cost, bills, complete) - complete when
-    each of its orders has its bills in the ledger."""
-    orders = {(f.get('account'), f.get('symbol'), str(f.get('order_id')))
-              for f in detail or () if f.get('order_id')}
-    if not orders:
-        return None, [], False
-    found, complete = {}, True
-    for key in orders:
-        bills = by_order.get(key)
-        if not bills:
-            complete = False
-            continue
+    order its fills came from. (cost, bills, complete, short) -
+    COMPLETE only when, order by order, the ledger accounts for the
+    fees the fills of that order carry (within 5 cents or 5 %: OKX's
+    own rounding moves cents, a ledger read with holes in it moves
+    dollars and is never taken over the fills). `short`: the orders it falls short on, with both figures."""
+    by_fill_order = {}
+    for f in detail or ():
+        if f.get('order_id'):
+            key = (f.get('account'), f.get('symbol'), str(f.get('order_id')))
+            by_fill_order[key] = by_fill_order.get(key, 0.0) + \
+                float(f.get('fee') or 0.0)
+    if not by_fill_order:
+        return None, [], False, []
+    found, short = {}, []
+    for key, fills_fee in by_fill_order.items():
+        bills = by_order.get(key) or []
         for b in bills:
             found[b.get('bill_id')] = b
+        ledger_fee = sum(-float(b.get('fee') or 0.0) for b in bills)
+        if abs(ledger_fee - fills_fee) > max(0.05, 0.05 * abs(fills_fee)):
+            short.append({'order_id': key[2], 'symbol': key[1],
+                          'ledger': round(ledger_fee, 4),
+                          'fills': round(fills_fee, 4),
+                          'bills': len(bills)})
     cost = sum(-float(b.get('fee') or 0.0) for b in found.values())
-    return round(cost, 6), list(found.values()), complete
+    return round(cost, 6), list(found.values()), not short, short
 
 
 def with_okx_fees(positions, fills, bills=None):
@@ -917,7 +927,8 @@ def with_okx_fees(positions, fills, bills=None):
             continue
         # OKX's LEDGER first - the record the account's balance is built
         # from - then OKX's fills; else the desk's estimate stands.
-        cost, _bills, complete = ledger_cost(got.get('detail'), by_order)
+        cost, _bills, complete, _short = ledger_cost(got.get('detail'),
+                                                     by_order)
         if got.get('complete') and complete:
             row['desk_pnl'] = row.get('realized_pnl')
             row['realized_pnl'] = gross - cost
@@ -973,8 +984,9 @@ def attach_fills(journal, positions, fills, bills=None):
         # OKX'S LEDGER, where it has every order of the trade: ITS fee is
         # the trade's fee - what the account was actually charged.
         if bills is not None and got.get('complete'):
-            cost, matched, complete = ledger_cost(got.get('detail'),
-                                                  by_order)
+            cost, matched, complete, short = ledger_cost(got.get('detail'),
+                                                         by_order)
+            row['ledger_short'] = short
             if complete:
                 row['fills_fees'] = row['fee']
                 row['fee'] = round(cost, 4)
@@ -1133,7 +1145,7 @@ def attach_bills(journal, bills):
             'accounts': accounts, 'after_last_trade': after}
 
 
-def reconcile_balance(account, live):
+def reconcile_balance(account, live, ledger=None):
     """THE CHECK: the journal's last account balance - OKX's own ledger
     - against the balance OKX reports for the account NOW. `live`:
     {account: {'balance' (cash), 'equity', 'profit' (open P&L)}}.
@@ -1156,6 +1168,12 @@ def reconcile_balance(account, live):
             'okx_equity': equity, 'okx_open_pnl': open_pnl,
             'other_assets': round(equity - cash - open_pnl, 2),
             'after_last_trade': account.get('after_last_trade') or {},
+            # When OKX's last entry was, and how the desk's last read of
+            # the ledger went: a stale entry or a refusal is the gap.
+            'last_entry_at': account.get('latest_at'),
+            'read_at': (ledger or {}).get('read_at'),
+            'read_errors': (ledger or {}).get('errors') or {},
+            'backfilled': (ledger or {}).get('backfilled'),
             'gap': gap, 'ok': abs(gap) < 0.01}
 
 
@@ -1202,13 +1220,71 @@ def algo_z(events):
     return entry, exit_
 
 
+def _ratios(returns, scale=1.0):
+    """(Sharpe, Sortino) of a list of returns: the mean over the
+    standard deviation, and over the DOWNSIDE deviation (the losses
+    only, against zero), times `scale`. None where there are too few or
+    no spread."""
+    n = len(returns)
+    if n < 2:
+        return None, None
+    mean = sum(returns) / n
+    var = sum((r - mean) ** 2 for r in returns) / (n - 1)
+    down = (sum(min(r, 0.0) ** 2 for r in returns) / n) ** 0.5
+    sharpe = mean / var ** 0.5 * scale if var > 0 else None
+    sortino = mean / down * scale if down > 0 else None
+    return (None if sharpe is None else round(sharpe, 2),
+            None if sortino is None else round(sortino, 2))
+
+
+def risk_ratios(trips, capital=0.0, now=None):
+    """SHARPE AND SORTINO, two ways - return per unit of risk, so a
+    big trade and a small one are read on one scale:
+
+    - ON CAPITAL, by day: each UTC day's net P&L over the capital, from
+      the first trade's day to today (a day with no trade is a return of
+      0 - it is still a day the capital was there), annualised by
+      sqrt(365): crypto trades every day.
+    - PER TRADE, on margin: each trade's net over the margin it tied up,
+      not annualised - the like-for-like reading across ladders and
+      sizes.
+
+    Risk-free rate 0. None where there is too little to measure."""
+    import math
+    closed = [t for t in trips or () if t.get('pnl') is not None
+              and t.get('closed_at') is not None]
+    out = {'days': 0, 'sharpe': None, 'sortino': None,
+           'trades': 0, 'trade_sharpe': None, 'trade_sortino': None,
+           'avg_on_margin': None}
+    if closed and capital and capital > 0:
+        by_day = {}
+        for t in closed:
+            day = int(t['closed_at'] // 86400)
+            by_day[day] = by_day.get(day, 0.0) + t['pnl']
+        last = int((now or max(t['closed_at'] for t in closed)) // 86400)
+        days = range(min(by_day), max(last, max(by_day)) + 1)
+        daily = [by_day.get(d, 0.0) / capital for d in days]
+        out['days'] = len(daily)
+        out['sharpe'], out['sortino'] = _ratios(daily, math.sqrt(365.0))
+    on_margin = [t['pct_margin'] / 100.0 for t in closed
+                 if t.get('pct_margin') is not None]
+    if on_margin:
+        out['trades'] = len(on_margin)
+        out['avg_on_margin'] = round(100.0 * sum(on_margin) /
+                                     len(on_margin), 3)
+        out['trade_sharpe'], out['trade_sortino'] = _ratios(on_margin)
+    return out
+
+
 def report(positions, events=(), shadows=(), excursions=None, now=0.0,
            capital=0.0):
     """Everything the tab shows, from what is recorded. `capital`: what
     the trader manages (CAPITAL_MANAGED), 0 when not set."""
     positions = list(positions or ())
     entry_z, exit_z = algo_z(events)
+    trips = journal(positions, entry_z, exit_z, capital)
     return {'summary': summary(positions, capital),
+            'risk': risk_ratios(trips, capital, now),
             'drawdown': drawdown(positions, capital),
             'stop_study': stop_study(positions, capital),
             'excursion': excursion_rows(positions),
@@ -1216,7 +1292,7 @@ def report(positions, events=(), shadows=(), excursions=None, now=0.0,
             'shadow': shadow_summary(shadows),
             'z_excursions': {key: excursions_view(data, now)
                              for key, data in (excursions or {}).items()},
-            'journal': journal(positions, entry_z, exit_z, capital)}
+            'journal': trips}
 
 
 #: The windows the volume is counted over: the broker's own TODAY, and

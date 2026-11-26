@@ -8058,7 +8058,16 @@ function feeDetailHtml(t, expected) {
       (gap < 0.01 ? '\u2713 the same as the fills'
         : 'the fills say ' + money(fillsFee) + ', ' + money(gap) +
           ' apart') + (t.fees_source === 'OKX ledger'
-        ? '. The journal uses the ledger\u2019s figure.' : '') + '</p>';
+        ? '. The journal uses the ledger\u2019s figure.'
+        : gap >= 0.01 ? '. The journal uses the fills\u2019 figure: the ' +
+          'ledger read is missing entries for ' + ((t.ledger_short || [])
+            .length || 'some') + ' of this trade\u2019s orders (' +
+          (t.ledger_short || []).map(function (o) {
+            return escapeHtml(o.symbol) + ' order ' +
+              escapeHtml(String(o.order_id).slice(-6)) + ': ledger ' +
+              money(o.ledger) + ' on ' + o.bills + ' bill(s), fills ' +
+              money(o.fills);
+          }).join('; ') + ').' : '') + '</p>';
   } else {
     check = '<p class="fd-check">OKX ledger: not read for this trade yet ' +
       '(the desk reads it once a minute).</p>';
@@ -8215,6 +8224,25 @@ document.addEventListener('click', function (e) {
 
 // THE BALANCE, RECONCILED: the journal's last account balance (OKX's
 // ledger) against the balance OKX reports for the account now.
+function ledgerRead(r) {
+  /* When OKX's last ledger entry was, when the desk last read it, and
+   * any refusal - what a gap between the two balances comes from. */
+  function hm(at) {
+    if (!at) { return DASH; }
+    var d = new Date(at > 1e11 ? at : at * 1000);
+    return d.toISOString().slice(5, 16).replace('T', ' ') + ' UTC';
+  }
+  var errors = r.read_errors || {};
+  var names = Object.keys(errors);
+  return ' \u00b7 OKX\u2019s last ledger entry ' + hm(r.last_entry_at) +
+    ', read ' + hm(r.read_at) + (r.backfilled === false
+      ? ' \u00b7 the three-month read has not completed yet' : '') +
+    (names.length ? ' \u00b7 <b>OKX refused the ledger read</b>: ' +
+      names.map(function (n) {
+        return escapeHtml(n + ': ' + errors[n]);
+      }).join('; ') : '');
+}
+
 function reconcileHtml(r, cash) {
   if (!r) { return ''; }
   var after = r.after_last_trade || {};
@@ -8225,8 +8253,7 @@ function reconcileHtml(r, cash) {
     '<b>Balance check (USDT cash):</b> OKX ledger ' + cash(r.ledger) +
     ' \u00b7 OKX now ' + cash(r.okx_balance) + ' \u2014 ' + (r.ok
       ? '\u2713 the same'
-      : cash(r.gap) + ' apart (a bill not read yet - the ledger is read ' +
-        'once a minute - or money moved outside this period)') + '</p>' +
+      : cash(r.gap) + ' apart') + ledgerRead(r) + '</p>' +
     '<p class="an-recon-note">The Account column is the balance just ' +
     'after each trade' + (moved.length ? '; since the last one: ' +
       moved.join(' \u00b7 ') : '') + '. Equity ' + cash(r.okx_equity) +
@@ -9136,6 +9163,19 @@ function anHeld(seconds) {
              anSign(s.return_on_capital),
              s.capital ? 'net P&L \u00f7 the ' + money(s.capital) +
                ' capital managed' : 'set the capital you manage above') +
+      (function () {
+        var r = a.risk || {};
+        function two(x) { return x === null || x === undefined ? DASH
+          : fmt(x, 2); }
+        return anTile('Sharpe \u00b7 Sortino', two(r.sharpe) + ' \u00b7 ' +
+          two(r.sortino), '', 'Return per unit of risk. On capital, by ' +
+          'day (' + (r.days || 0) + ' days, no-trade days included), ' +
+          'annualised by \u221a365, risk-free 0. Per trade on margin (' +
+          (r.trades || 0) + ' trades): ' + two(r.trade_sharpe) +
+          ' \u00b7 ' + two(r.trade_sortino) + ', average ' +
+          (r.avg_on_margin === null || r.avg_on_margin === undefined ? DASH
+            : fmt(r.avg_on_margin, 2) + '%') + ' on margin.');
+      })() +
       anTile('Capital used', s.capital_used_avg === null ||
                s.capital_used_avg === undefined ? DASH
                : fmt(s.capital_used_avg, 1) + '%', '',

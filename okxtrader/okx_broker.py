@@ -1573,6 +1573,9 @@ class OKXBroker:
         out.sort(key=lambda o: -o['updated_ms'])
         return out
 
+    def _pause(self, seconds):
+        time.sleep(seconds)
+
     def account_bills(self, since_ms, pages=30):
         """OKX's ACCOUNT LEDGER from `since_ms`: every balance change of
         the trading account with the balance after it (`bal`). The last
@@ -1599,6 +1602,9 @@ class OKXBroker:
                     if len(rows) < 100:
                         break
                     after = rows[-1].get('billId')
+                    # Paced under OKX's limits (bills 5 a second, the
+                    # archive 5 in 2): a refused page is a hole.
+                    self._pause(0.5 if path.endswith('archive') else 0.25)
         except OKXError as exc:
             self.last_error = str(exc)
             return None if not out else out

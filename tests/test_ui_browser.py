@@ -1899,9 +1899,18 @@ def test_a_repaint_under_the_pointer_does_not_swallow_the_click(page):
         };
     }""")
 
+    # Nothing left over from an earlier test may sit over the button: a
+    # toast or a note there takes the press, and the test then failed
+    # only when run after others.
+    page.evaluate("() => document.querySelectorAll("
+                  "'.toast, .cal-note, #fee-detail').forEach(n => n.remove())")
     page.locator('.save-pair').scroll_into_view_if_needed()
     box = page.locator('.save-pair').bounding_box()
-    page.mouse.move(box['x'] + box['width'] / 2, box['y'] + box['height'] / 2)
+    x, y = box['x'] + box['width'] / 2, box['y'] + box['height'] / 2
+    assert page.evaluate(
+        "([x, y]) => !!document.elementFromPoint(x, y).closest('.save-pair')",
+        [x, y]), 'something covers the Save button'
+    page.mouse.move(x, y)
     page.mouse.down()
     # Mark the button the operator is actually pressing.
     page.evaluate("() => { document.querySelector('.save-pair').__me = 1; }")
@@ -1910,7 +1919,14 @@ def test_a_repaint_under_the_pointer_does_not_swallow_the_click(page):
     assert page.evaluate("() => !!document.querySelector('.save-pair').__me"), \
         'the button was replaced under the pointer — the click is lost'
     page.mouse.up()
-    page.wait_for_timeout(400)
+    # Waited for, not slept on: late in a full run the page is slower,
+    # and a fixed 0.4 s read 'nothing sent' for a save still on its way.
+    try:
+        page.wait_for_function(
+            "() => (window.__sent || []).some(u => u.startsWith('POST'))",
+            timeout=5000)
+    except Exception:
+        pass
 
     sent = page.evaluate('() => window.__sent')
     page.evaluate('() => { window.fetch = window.__realFetch; }')

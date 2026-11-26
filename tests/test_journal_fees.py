@@ -367,3 +367,51 @@ def test_the_gap_between_a_trades_balance_and_okx_now_is_explained():
     rec = analysis.reconcile_balance(account, {'main': {
         'balance': 10528.33, 'equity': 10569.17, 'profit': 0.0}})
     assert rec['ok'] and rec['other_assets'] == 40.84
+
+
+def test_a_refused_ledger_read_is_read_again_and_said():
+    from types import SimpleNamespace
+    from okxtrader.coordinator import Coordinator
+
+    class Broker:
+        last_error = None
+
+        def __init__(self, fail):
+            self.fail = fail
+
+        def account_bills(self, since):
+            if self.fail:
+                self.last_error = 'OKX 50011: too many requests'
+                return [{'billId': 'b1', 'ts': '1', 'bal': '1'}]
+            return [{'billId': 'b2', 'ts': '2', 'bal': '2'}]
+    written = []
+    broker = Broker(fail=True)
+    desk = SimpleNamespace(
+        legs={'okx': SimpleNamespace(broker=broker)},
+        store=SimpleNamespace(record_bills=lambda n, r: written.append(r)
+                              or len(r)),
+        clock=lambda: 1000.0)
+    Coordinator._read_bills(desk, 0)
+    # The partial page is kept; the long read is NOT marked done.
+    assert written and not getattr(desk, '_bills_backfilled', False)
+    assert 'too many requests' in desk.ledger_status['errors']['okx']
+    broker.fail = False
+    Coordinator._read_bills(desk, 0)
+    assert desk._bills_backfilled and desk.ledger_status['complete']
+    assert desk.ledger_status['errors'] == {}
+
+
+def test_a_ledger_read_short_of_an_orders_bills_does_not_replace_the_fills():
+    trade, fills, bills = _ledger_case()
+    # The ledger copy lost o3's bill: it would say 0.70 where the fills
+    # say 1.20 - below what the fills prove OKX charged.
+    bills = [b for b in bills if b['ord_id'] != 'o3']
+    [row] = analysis.with_okx_fees([trade], fills, bills)
+    assert row['fees_from'] != 'OKX ledger'
+    journal = analysis.journal([row])
+    analysis.attach_fills(journal, [row], fills, bills)
+    assert journal[0]['fees_source'] == 'OKX'
+    assert journal[0]['fee'] == 1.2
+    [short] = journal[0]['ledger_short']
+    assert short['order_id'] == 'o3' and short['bills'] == 0
+    assert short['fills'] > 0 and short['ledger'] == 0

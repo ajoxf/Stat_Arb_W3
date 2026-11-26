@@ -25,9 +25,9 @@ def test_the_report_has_the_returns_the_curve_and_every_trade():
     assert '<svg class="equity"' in page
     assert page.count('ETH vs BTC perps</td>') == 3 + 1   # journal + split
     assert 'Manual' in page and 'Algo' in page
-    # Oldest first, with the running total.
+    # NEWEST first, with the running total.
     journal = page[page.index('<table class="journal">'):]
-    assert journal.index('+$1.00</b>') < journal.index('−$0.50</b>')
+    assert journal.index('+$1.00</b>') > journal.index('−$0.50</b>')
 
 
 def test_an_empty_period_says_so():
@@ -274,11 +274,11 @@ def test_every_trade_carries_its_reference_number_in_both_tables():
                    page.index('Worst and best points')]
     section = page[page.index('Worst and best points'):]
     assert 'Trade<br>no' in journal and 'Trade<br>no' in section
-    # Oldest first in both, by the desk's own numbers.
+    # NEWEST first in both, by the desk's own numbers.
     for part in (journal, section):
         assert '<td class="no">#40</td>' in part
         assert '<td class="no">#51</td>' in part
-        assert part.index('#40<') < part.index('#51<')
+        assert part.index('#40<') > part.index('#51<')
 
 
 def test_a_trade_with_no_number_is_a_dash_not_its_row_count():
@@ -422,3 +422,13 @@ def test_the_report_carries_the_volume_opening_and_closing_apart():
                            pnl='hide')
     section = hidden[hidden.index('Volume traded'):]
     assert '$84,101' not in section and '138.92' in section
+
+
+def test_the_reports_carry_sharpe_and_sortino():
+    body = _full()
+    page = report.render(body, {'ethbtc': 'ETH vs BTC'}, 7, None,
+                         1_700_100_000)
+    assert 'Sharpe · Sortino' in page
+    assert '<th>Avg on margin</th><th>Sharpe</th>' in page
+    client = report.render_client(body, 7, 1_700_100_000)
+    assert 'Sharpe · Sortino' in client

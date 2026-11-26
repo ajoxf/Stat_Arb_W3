@@ -382,7 +382,10 @@ def test_the_account_ledger_is_read_page_by_page_and_from_the_archive(broker):
             return [{'billId': '1', 'ts': '1', 'bal': '1'}]
         return [{'billId': 'a1', 'ts': '1', 'bal': '1'}]
     broker.client.get = get
+    paused = []
+    broker._pause = paused.append
     rows = broker.account_bills((_time.time() - 30 * 86400) * 1000)
+    assert paused == [0.25]                  # paced between pages
     assert len(rows) == 102
     assert calls[0] == ('/api/v5/account/bills', None)
     assert calls[1] == ('/api/v5/account/bills', '901')

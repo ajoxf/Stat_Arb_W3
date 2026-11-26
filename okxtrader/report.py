@@ -158,6 +158,12 @@ def volume_html(v, pnl='show'):
             '</section>')
 
 
+def ratio_pair(a, b):
+    def one(x):
+        return DASH if x is None else f'{x:.2f}'
+    return f'{one(a)} · {one(b)}'
+
+
 def fills_text(t):
     """Maker or taker per leg, in -> out: `M/T → M/M`."""
     f = t.get('fills') or {}
@@ -242,7 +248,8 @@ def _group(trips, key):
         if t.get('pnl') is None:
             continue
         row = out.setdefault(key(t), {'n': 0, 'wins': 0, 'net': 0.0,
-                                      'fees': 0.0, 'held': 0.0})
+                                      'fees': 0.0, 'held': 0.0, 'trips': []})
+        row['trips'].append(t)
         row['n'] += 1
         row['wins'] += 1 if t['pnl'] > 0 else 0
         row['net'] += t['pnl']
@@ -262,19 +269,32 @@ def split_table(title, groups, cash=None, hide=False):
         return (f'<td class="{tone(g["net"])}">{cash(g["net"])}</td>'
                 f'<td class="{tone(g["net"])}">{cash(g["net"] / g["n"])}</td>'
                 f'<td>{cash(g["fees"], sign=False)}</td>')
+    def risk_cells(g):
+        # ON MARGIN, per trade: the like-for-like reading across ladders
+        # and sizes - average return, and Sharpe on it.
+        r = analysis_risk(g['trips'])
+        avg, sharpe = r.get('avg_on_margin'), r.get('trade_sharpe')
+        return (f'<td class="{tone(avg)}">{pct(avg)}</td>'
+                f'<td>{DASH if sharpe is None else f"{sharpe:.2f}"}</td>')
     rows = ''.join(
         f'<tr><td class="l">{_e(name)}</td><td>{g["n"]}</td>'
         f'<td>{g["wins"]} / {g["n"] - g["wins"]}</td>'
         f'<td>{100.0 * g["wins"] / g["n"]:.1f}%</td>'
-        + money_cells(g) +
+        + money_cells(g) + risk_cells(g) +
         f'<td>{held(g["held"] / g["n"])}</td></tr>'
         for name, g in sorted(groups.items()))
     return (f'<table class="split"><thead><tr><th class="l">{_e(title)}</th>'
             '<th>Trades</th><th>Won / lost</th><th>Win rate</th>' +
             ('' if hide else '<th>Net P&amp;L</th><th>Per trade</th>'
                              '<th>Fees</th>') +
+            '<th>Avg on margin</th><th>Sharpe</th>'
             '<th>Avg held</th></tr></thead><tbody>' + rows +
             '</tbody></table>')
+
+
+def analysis_risk(trips):
+    from . import analysis
+    return analysis.risk_ratios(trips)
 
 
 def render(body, names=None, days=7.0, pair_key=None, now=None,
@@ -323,6 +343,7 @@ def render(body, names=None, days=7.0, pair_key=None, now=None,
                 f'<div class="tn">{note}</div></div>')
 
     capital = s.get('capital')
+    risk = body.get('risk') or {}
     tiles = ''.join([
         '' if hide else
         tile('Net P&amp;L', cash(s.get('net_pnl')), tone(s.get('net_pnl')),
@@ -335,6 +356,10 @@ def render(body, names=None, days=7.0, pair_key=None, now=None,
         tile('Return on margin', pct(s.get('return_on_margin')),
              tone(s.get('return_on_margin')),
              f'{s.get("margin_trades") or 0} trades with margin priced'),
+        tile('Sharpe · Sortino', ratio_pair(risk.get('sharpe'),
+                                            risk.get('sortino')), '',
+             f'on capital, by day, annualised · per trade on margin '
+             f'{ratio_pair(risk.get("trade_sharpe"), risk.get("trade_sortino"))}'),
         tile('Win rate', '' if s.get('win_rate') is None
              else f'{s["win_rate"]:.1f}%', '',
              f'{s.get("wins") or 0} won · {s.get("losses") or 0} lost'),
@@ -392,7 +417,8 @@ def render(body, names=None, days=7.0, pair_key=None, now=None,
         return DASH if value is None else f'{value:.1f}%'
 
     rows = []
-    for i, t in enumerate(trips, 1):
+    # NEWEST FIRST: the latest trade at the top of the journal.
+    for i, t in reversed(list(enumerate(trips, 1))):
         rows.append(
             f'<tr><td class="no">{trade_ref(t)}</td>'
             f'<td>{clock(t.get("opened_at"))}<br>'
@@ -503,7 +529,7 @@ def render(body, names=None, days=7.0, pair_key=None, now=None,
             return DASH
         return pct(value / base * 100.0)
     ex_rows = []
-    for r in reversed(body.get('excursion') or []):        # oldest first
+    for r in body.get('excursion') or []:                  # newest first
         mae = None if r.get('mae') is None else -r['mae']
         mfe = r.get('mfe')
         ex_rows.append(
@@ -605,7 +631,7 @@ for the colours.</span></div>
   <div><span>Capital used / trade</span><b>{'' if s.get('capital_used_avg') is None else f"{s['capital_used_avg']:.1f}% avg · {s.get('capital_used_max') or 0:.1f}% max"}</b></div></div></div>
 </section>
 <section class="panel jr"><h2>Trade journal <small>{len(trips)} closed
-trade(s), oldest first{account_line}</small></h2>{journal}{fee_line}</section>
+trade(s), newest first{account_line}</small></h2>{journal}{fee_line}</section>
 {volume}
 {excursion}
 <footer class="notes"><b>Net P&amp;L</b> is after every fee. <b>Fills</b>:
@@ -618,7 +644,12 @@ lost). <b>On margin</b>:
 net ÷ the margin both legs tied up at entry. <b>On capital</b>: net ÷
 the capital managed. <b>% of capital used</b>: the margin both legs tied
 up at entry ÷ the capital managed. <b>Max drawdown</b>: the worst fall of the running
-net from a peak, closed trades only. Funding is not included. Built from
+net from a peak, closed trades only. <b>Sharpe</b>: average return over
+its standard deviation; <b>Sortino</b>: over its downside deviation only
+(losses) - return per unit of risk, so trades of any size read on one
+scale. On capital: each day's net over the capital, days with no trade
+included, annualised by √365, risk-free 0. Per trade: each trade's net
+over its margin, not annualised. Funding is not included. Built from
 the desk’s own record of fills; past results do not promise future ones.
 </footer>
 </main></body></html>"""
@@ -699,6 +730,10 @@ def render_client(body, days=7.0, now=None, logo='', desk_name='Nexus',
              'after trading costs' if capital else 'capital not set'),
         '' if hide else
         tile('Net P&amp;L', cash(net), tone(net), 'after trading costs'),
+        tile('Sharpe · Sortino', ratio_pair(
+            (body.get('risk') or {}).get('sharpe'),
+            (body.get('risk') or {}).get('sortino')), '',
+             'return per unit of risk, by day, annualised'),
         tile('Max drawdown', DASH if not periods
              else pct(-on_cap(fall)) if capital else cash(-fall),
              'down' if fall else '',
@@ -727,6 +762,9 @@ def render_client(body, days=7.0, now=None, logo='', desk_name='Nexus',
             + ('' if hide else
                f'<td class="{tone(running)}">{cash(running)}</td>') +
             '</tr>')
+    # The latest period at the top; its cumulative figures were run in
+    # time order above.
+    rows.reverse()
     table = ('<table class="returns"><thead><tr>'
              f'<th class="l">{"Month" if monthly else "Day"}</th>' +
              ('' if hide else '<th>Net P&amp;L</th>') +
@@ -773,7 +811,9 @@ def render_client(body, days=7.0, now=None, logo='', desk_name='Nexus',
 <section class="panel"><h2>Returns by {unit}</h2>{table}</section>
 <footer class="notes"><b>Return</b> is the net result after trading
 costs, divided by the capital at the start of the period.
-<b>Cumulative return</b> adds each {unit}'s return. A result belongs to
+<b>Cumulative return</b> adds each {unit}'s return. <b>Sharpe</b> is the average daily return over its
+standard deviation, <b>Sortino</b> over its downside deviation only,
+annualised. A result belongs to
 the {unit} (UTC) its trade closed in. <b>Max drawdown</b>: the worst
 fall of the cumulative result from a peak, {unit} end to {unit} end.
 Funding is not included. Past results do not promise future ones.</footer>

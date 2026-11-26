@@ -283,8 +283,10 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
             body['account'] = analysis.attach_bills(body.get('journal'),
                                                     bills or [])
             # ...and the ledger's last balance against OKX's live one.
+            snap = status() or {}
             body['account']['reconcile'] = analysis.reconcile_balance(
-                body['account'], (status() or {}).get('accounts') or {})
+                body['account'], snap.get('accounts') or {},
+                snap.get('ledger'))
         except Exception as e:
             logging.error('the account ledger could not be read: %s', e)
             body['account'] = None

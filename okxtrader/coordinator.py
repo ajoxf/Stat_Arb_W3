@@ -4556,6 +4556,8 @@ class Coordinator:
             'pairs': pairs,
             'btc_dominance': self._btc_dominance(),
             'calendar': self._economic_calendar(pairs),
+            # How the last read of OKX's account ledger went.
+            'ledger': dict(getattr(self, 'ledger_status', None) or {}),
             # None unless the mirror is switched on in config.json.
             'mirror': (self.mirror.snapshot()
                        if getattr(self, 'mirror', None) is not None
@@ -4829,20 +4831,33 @@ class Coordinator:
         return self._read_bills(since)
 
     def _read_bills(self, since):
-        written = 0
+        """One read of every OKX account's ledger. The long first read
+        counts as done only once EVERY account answered in full - a
+        refused one is read again, never left with a hole in it - and
+        how the read went is published, beside the balance check."""
+        written, complete, errors = 0, True, {}
         for name, leg in self.legs.items():
             broker = getattr(leg, 'broker', None)
             if broker is None or not hasattr(broker, 'account_bills'):
                 continue
+            broker.last_error = None
             try:
                 rows = broker.account_bills(since)
             except Exception as e:
-                logging.info('bills: %s would not answer: %s', name, e)
-                continue
-            if rows is None:
-                continue
-            written += self.store.record_bills(name, rows)
-        self._bills_backfilled = True
+                rows = None
+                broker.last_error = str(e)
+            if broker.last_error:
+                complete = False
+                errors[name] = str(broker.last_error)[:200]
+                logging.info('bills: %s: %s', name, broker.last_error)
+            if rows:
+                written += self.store.record_bills(name, rows)
+        if complete:
+            self._bills_backfilled = True
+        self.ledger_status = {'read_at': self.clock(), 'rows': written,
+                              'complete': complete, 'errors': errors,
+                              'backfilled': getattr(self, '_bills_backfilled',
+                                                    False)}
         return written
 
     def resolve_leg(self, account, symbol, ticket=None):
