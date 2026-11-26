@@ -301,16 +301,6 @@ def test_keyless_bls_is_read_once_a_minute(tmp_path):
     assert cal._interval('claims', 1800) == 120.0
 
 
-def test_a_typed_forecast_reaches_the_snapshot(tmp_path):
-    clock = Clock(utc(2026, 12, 10, 12, 45))
-    cal = calendar(tmp_path, clock, Agencies())
-    (tmp_path / 'forecasts.json').write_text(json.dumps(
-        {'cpi:2026-12-10': {'cpi_mm': '0.3%'}}))
-    cal.step()
-    [cpi] = [e for e in cal.snapshot()['events'] if e['release'] == 'cpi']
-    assert cpi['figures'][0]['forecast'] == '0.3%'
-
-
 def test_the_state_survives_a_restart(tmp_path):
     clock = Clock(utc(2026, 11, 25, 13, 31))
     agencies = Agencies()
@@ -355,21 +345,6 @@ def _app(tmp_path):
                       db_path=str(tmp_path / 'x.db')).test_client()
 
 
-def test_a_forecast_typed_on_the_screen_is_saved_for_the_engine(tmp_path):
-    client = _app(tmp_path)
-    ok = client.post('/api/calendar/forecast', json={
-        'event': 'cpi:2026-12-10', 'figure': 'cpi_mm', 'value': '0.3%'})
-    assert ok.get_json()['ok'] is True
-    saved = json.loads((tmp_path / 'econ_forecasts.json').read_text())
-    assert saved == {'cpi:2026-12-10': {'cpi_mm': '0.3%'}}
-    bad = client.post('/api/calendar/forecast', json={
-        'event': 'cpi:2026-12-10', 'figure': 'cpi_mm', 'value': 'hot'})
-    assert bad.status_code == 400
-    client.post('/api/calendar/forecast', json={
-        'event': 'cpi:2026-12-10', 'figure': 'cpi_mm', 'value': ''})
-    assert json.loads((tmp_path / 'econ_forecasts.json').read_text()) == {}
-
-
 def test_the_keys_go_to_env_and_are_never_shown(tmp_path, monkeypatch):
     # Set then cleared: the test's own writes are undone afterwards.
     for key in ('EIA_API_KEY', 'BLS_API_KEY'):
@@ -396,3 +371,107 @@ def test_a_dol_page_that_does_not_read_is_said_not_waited_on(tmp_path):
     clock.at += 10
     cal.step()
     assert 'claims figure was not found' in cal.snapshot()['errors']['DOL']
+
+
+# -- ForexFactory: the schedule, the forecasts, the events no agency has ------
+
+FF_WEEK = [
+    {'title': 'Unemployment Claims', 'country': 'USD',
+     'date': '2026-11-25T08:30:00-05:00', 'impact': 'High',
+     'forecast': '221K', 'previous': '222K'},
+    {'title': 'FOMC Meeting Minutes', 'country': 'USD',
+     'date': '2026-11-25T14:00:00-05:00', 'impact': 'High',
+     'forecast': '', 'previous': ''},
+    {'title': 'CPI Flash Estimate y/y', 'country': 'EUR',
+     'date': '2026-11-27T05:00:00-05:00', 'impact': 'High',
+     'forecast': '2.1%', 'previous': '2.0%'},
+    {'title': 'German Ifo', 'country': 'EUR',
+     'date': '2026-11-24T04:00:00-05:00', 'impact': 'Medium',
+     'forecast': '88.0', 'previous': '87.5'},
+    {'title': 'BOJ Gov Speaks', 'country': 'JPY',
+     'date': '2026-11-26T01:00:00-05:00', 'impact': 'High'},
+    {'title': 'Manufacturing PMI', 'country': 'CNY',
+     'date': '2026-11-26T20:30:00-05:00', 'impact': 'High'}]
+
+
+def test_forexfactory_gives_only_the_high_impact_events():
+    rows = ec.parse_ff(FF_WEEK)
+    assert [r['title'] for r in rows] == [
+        'Unemployment Claims', 'FOMC Meeting Minutes',
+        'CPI Flash Estimate y/y', 'BOJ Gov Speaks', 'Manufacturing PMI']
+    assert rows[0]['at'] == utc(2026, 11, 25, 13, 30)
+    assert rows[0]['forecast'] == '221K' and rows[1]['forecast'] is None
+
+
+def test_forecasts_come_by_themselves_and_other_events_join_in(tmp_path):
+    clock = Clock(utc(2026, 11, 25, 13, 0))
+    agencies = Agencies()
+    agencies.pages['faireconomy'] = json.dumps(FF_WEEK)
+    cal = calendar(tmp_path, clock, agencies)
+    cal.step()
+    snap = cal.snapshot()
+    [claims] = [e for e in snap['events'] if e['id'] == 'claims:2026-11-25']
+    # The official release, with ForexFactory's consensus - nothing typed.
+    assert claims['figures'][0]['forecast'] == '221K'
+    names = [e['name'] for e in snap['events']]
+    assert 'FOMC Meeting Minutes' in names
+    assert 'CPI Flash Estimate y/y' in names                 # EUR: shown
+    assert 'BOJ Gov Speaks' in names                         # JPY: G10
+    assert 'Manufacturing PMI' not in names                  # CNY: not
+    # Matched to the official release, so not listed twice.
+    assert names.count('Unemployment Claims') == 0
+    [eur] = [e for e in snap['events'] if e['country'] == 'EUR']
+    assert eur['where'] == 'EU' and eur['status'] == 'upcoming'
+    assert snap['sources']['ForexFactory'].startswith('schedule')
+
+
+def test_an_agency_that_cannot_be_read_is_covered_by_forexfactory(tmp_path):
+    """DOL's page not read (the desk's Wednesday claims, Thanksgiving week):
+    ForexFactory's actual stands in, said as such, and the release is out
+    - not 'awaiting figures' a day later."""
+    clock = Clock(utc(2026, 11, 25, 13, 0))
+    agencies = Agencies()
+    week = [dict(r) for r in FF_WEEK]
+    agencies.pages['faireconomy'] = json.dumps(week)
+    cal = calendar(tmp_path, clock, agencies)
+    cal.step()
+    clock.at = utc(2026, 11, 25, 13, 30)
+    cal.step()
+    week[0]['actual'] = '216K'
+    agencies.pages['faireconomy'] = json.dumps(week)
+    clock.at += 900                  # the next read, a quarter hour on
+    cal.step()
+    [claims] = [e for e in cal.snapshot()['events']
+                if e['id'] == 'claims:2026-11-25']
+    assert claims['status'] == 'released' and claims['via'] == 'ForexFactory'
+    assert claims['figures'][0]['actual'] == '216K'
+    assert claims['figures'][0]['surprise'] == '5K below forecast'
+
+
+def test_a_release_forexfactory_has_on_another_day_is_one_release(tmp_path):
+    """The weekly rule says Thursday; ForexFactory says Wednesday (a
+    holiday the rule does not know): one row, at ForexFactory's time."""
+    clock = Clock(utc(2026, 11, 30, 9, 0))           # Monday
+    agencies = Agencies()
+    agencies.pages['faireconomy'] = json.dumps([
+        {'title': 'Unemployment Claims', 'country': 'USD',
+         'date': '2026-12-02T08:30:00-05:00', 'impact': 'High',
+         'forecast': '219K', 'previous': '216K'}])
+    cal = calendar(tmp_path, clock, agencies)
+    cal.step()
+    rows = [e for e in cal.snapshot()['events']
+            if 'laims' in e['name'] or e['release'] == 'claims']
+    assert len(rows) == 1
+    [claims] = rows
+    assert claims['at'] == utc(2026, 12, 2, 13, 30)
+    assert claims['figures'][0]['forecast'] == '219K'
+
+
+def test_a_release_still_waiting_is_not_next_for_a_day(tmp_path):
+    clock = Clock(utc(2026, 11, 25, 13, 30))
+    cal = calendar(tmp_path, clock, Agencies())
+    cal.step()
+    assert cal.snapshot()['next']['id'] == 'claims:2026-11-25'
+    clock.at = utc(2026, 11, 26, 9, 0)              # a day on, still due
+    cal.step()
+    assert cal.snapshot()['next']['id'] != 'claims:2026-11-25'

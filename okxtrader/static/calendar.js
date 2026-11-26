@@ -63,33 +63,62 @@
     if (event.status === 'released') { return 'out'; }
     if (event.status === 'due') { return 'awaiting'; }
     if (event.status === 'missed') { return 'not found'; }
+    if (event.status === 'past') { return 'passed'; }
     return countdown(event.at - now);
   }
 
   // -- the taskbar chip, and the box when a figure lands ------------------
 
+  function where(e) {
+    return e.where || 'US';
+  }
+
+  function note(text, kind) {
+    /* A small note at the top right, clear of the bars: it fades by
+     * itself after 20 s, or at a click. Nothing is kept on any bar. */
+    var box = document.getElementById('cal-notes');
+    if (!box) { return; }
+    var item = document.createElement('div');
+    item.className = 'cal-note' + (kind ? ' ' + kind : '');
+    var words = document.createElement('span');
+    words.textContent = text;
+    var close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'cal-note-x';
+    close.title = 'Close';
+    close.setAttribute('aria-label', 'Close');
+    close.textContent = '\u00d7';
+    item.appendChild(words);
+    item.appendChild(close);
+    item.addEventListener('click', function () { item.remove(); });
+    box.appendChild(item);
+    setTimeout(function () { item.classList.add('going'); }, 18000);
+    setTimeout(function () { item.remove(); }, 20000);
+  }
+
   function tick() {
     var cal = calendar();
-    if (!cal) { return; }
-    // A release ABOUT TO LAND: one box, once, when it is within the
-    // alert time (15 min) - nothing kept on the taskbar.
     var now = nowSec(cal);
-    var lead = (cal.alert_min || 15) * 60;
+    var lead = ((cal && cal.alert_min) || 15) * 60;
+    if (!cal) { return; }
+    // About to land: one note, once, inside the alert time.
     (cal.events || []).forEach(function (e) {
       if (e.status !== 'upcoming' || local.warned[e.id]) { return; }
       var ahead = e.at - now;
       if (ahead <= 0 || ahead > lead) { return; }
       local.warned[e.id] = true;
-      UI.toast('\u2605\u2605\u2605 US ' + e.name + ' (' + e.agency + ') in ' +
-        countdown(ahead) + ', at ' + hhmm(e.at) + ' UTC \u00b7 ' +
-        (e.figures || []).map(function (f) {
-          return f.name + ' previous ' + (f.previous || DASH) +
-            (f.forecast ? ', forecast ' + f.forecast : '');
-        }).join(' \u00b7 '), 'ok');
-      if (UI.sound) { UI.sound('placed'); }
+      var known = (e.figures || []).map(function (f) {
+        var bits = [];
+        if (f.forecast) { bits.push('forecast ' + f.forecast); }
+        if (f.previous) { bits.push('previous ' + f.previous); }
+        return bits.length ? (e.figures.length > 1 ? f.name + ' ' : '') +
+          bits.join(', ') : '';
+      }).filter(Boolean);
+      note('\u2605\u2605\u2605 ' + where(e) + ' ' + e.name + ' in ' +
+        countdown(ahead) + ' (' + hhmm(e.at) + ' UTC)' + (known.length
+          ? ' \u00b7 ' + known.join(' \u00b7 ') : ''), 'soon');
     });
-    if (!cal) { return; }
-    // A NEW release: a box and a sound. The first look only takes its
+    // Just out: a note and a sound. The first look only takes its
     // bearings - figures already out when the page opened are not news.
     var released = (cal.events || []).filter(function (e) {
       return e.status === 'released';
@@ -102,16 +131,16 @@
     released.forEach(function (e) {
       if (local.seen[e.id]) { return; }
       local.seen[e.id] = true;
-      var f = (e.figures || [])[0] || {};
-      UI.toast('RELEASED · US ' + ((e.figures || []).length === 1
-        ? '' : e.name + ': ') + (e.figures || [])
-        .map(function (x) {
-          return x.name + ' ' + (x.actual || DASH) + ' (previous ' +
-            (x.previous || DASH) + (x.forecast ? ', forecast ' + x.forecast
-              : '') + ')';
-        }).join(' · ') + (f.surprise ? ' · ' + f.surprise : ''),
-        'ok');
-      if (UI.sound) { UI.sound('filled'); }
+      var single = (e.figures || []).length === 1;
+      note('Released \u00b7 ' + where(e) + ' ' + (single ? '' : e.name +
+        ': ') + (e.figures || []).map(function (x) {
+          var bits = [];
+          if (x.forecast) { bits.push('forecast ' + x.forecast); }
+          if (x.previous) { bits.push('previous ' + x.previous); }
+          return x.name + ' ' + (x.actual || DASH) + (bits.length
+            ? ' (' + bits.join(', ') + ')' : '') + (x.surprise
+            ? ' \u00b7 ' + x.surprise : '');
+        }).join(' \u00b7 '), 'out');
     });
   }
 
@@ -126,14 +155,14 @@
       '<div class="titlebar"><span class="swatch"></span>' +
       '<span class="title">Economic calendar</span><span class="winbtns"><button class="winbtn close">' +
       '&times;</button></span></div><div class="ec-body"></div>' +
-      '<div class="note">Official sources only: BLS (CPI, jobs, PPI), DOL ' +
-      '(jobless claims), EIA (crude inventories). Times in UTC. A figure ' +
-      'is shown the moment the agency publishes it. Display only: ' +
-      'nothing here changes how the Algo trades.</div>';
+      '<div class="note">High-impact events from ForexFactory (time, ' +
+      'forecast, previous); US actuals from the agencies the moment they ' +
+      'publish: BLS (CPI, jobs, PPI), DOL (jobless claims), EIA (crude ' +
+      'inventories). Times in UTC. Display only: nothing here changes how ' +
+      'the Algo trades.</div>';
     panel.querySelector('.close').addEventListener('click', function () {
       UI.closePanel(UI.panelId('econcal'));
     });
-    panel.addEventListener('change', onChange);
     panel.addEventListener('click', onClick);
     document.getElementById('desktop').appendChild(panel);
     loadKeys();
@@ -149,7 +178,7 @@
   function draw(force) {
     var panel = document.querySelector('.window.econcal');
     if (!panel) { return; }
-    // Never redraw under a half-typed forecast or key.
+    // Never redraw under a half-typed key.
     var active = document.activeElement;
     if (!force && active && panel.contains(active) &&
         active.tagName === 'INPUT') { return; }
@@ -159,9 +188,9 @@
   function figureName(e, f, i) {
     // One figure: its own name says it. Several: the release, then each.
     if ((e.figures || []).length === 1) {
-      return '<b>US ' + escape(f.name) + '</b>';
+      return '<b>' + where(e) + ' ' + escape(f.name) + '</b>';
     }
-    return (i ? '' : '<b>US ' + escape(e.name) + '</b> · ') +
+    return (i ? '' : '<b>' + where(e) + ' ' + escape(e.name) + '</b> · ') +
       escape(f.name);
   }
 
@@ -203,13 +232,13 @@
     var last = cal.last;
     var out = '<div class="ec-cards">';
     out += next ? card('next', 'Next · ' + escape(next.agency),
-      'US ' + escape(next.name), hhmm(next.at) + ' UTC · <b class="' +
+      where(next) + ' ' + escape(next.name), hhmm(next.at) + ' UTC · <b class="' +
       'down">' + (next.status === 'due' ? 'awaiting figures'
         : 'in ' + countdown(next.at - now)) + '</b><br>' +
       figuresLine(next))
       : card('next', 'Next', DASH, 'nothing in the next week');
     out += last ? card('out', 'Just released · ' + hhmm(last.at) +
-      ' UTC', 'US ' + escape(last.name), (last.figures || []).map(
+      ' UTC', where(last) + ' ' + escape(last.name), (last.figures || []).map(
         function (f) {
           return escape(f.name) + ' <b class="up">' + escape(f.actual ||
             DASH) + '</b> (previous ' + escape(f.previous || DASH) +
@@ -218,15 +247,15 @@
         }).join('<br>'))
       : card('out', 'Just released', DASH, 'nothing this week yet');
     out += card('move', 'What the spreads did · 5 min after',
-      last ? 'US ' + escape(last.name) : DASH,
+      last ? where(last) + ' ' + escape(last.name) : DASH,
       last ? spreadMoves(last) : DASH);
     out += '</div>';
 
     out += '<table class="an-table ec-table"><thead><tr>' +
       '<th>Time (UTC)</th><th>In</th><th class="l">Source</th>' +
       '<th class="l">Release</th><th>Impact</th><th>Actual</th>' +
-      '<th title="Typed by you (from investing.com, say): no agency ' +
-      'publishes a forecast. The surprise is worked out against it.">' +
+      '<th title="ForexFactory\u2019s consensus forecast, read hourly. ' +
+      'The surprise is worked out against it.">' +
       'Forecast</th><th>Previous</th><th class="l">Surprise</th>' +
       '<th title="The first ladder’s mid spread, from the release to ' +
       'five minutes after">Spread 5 min after</th></tr></thead><tbody>';
@@ -255,11 +284,7 @@
           '<td class="l">' + figureName(e, f, i) + '</td>' +
           '<td class="ec-star">★★★</td>' +
           '<td><b>' + escape(f.actual || DASH) + '</b></td>' +
-          '<td><input class="ec-fc" data-event="' + escape(e.id) +
-            '" data-figure="' + escape(f.key) + '" value="' +
-            escape(f.forecast || '') + '" placeholder="' + (e.status ===
-            'released' ? DASH : 'type') + '" title="Your forecast for ' +
-            escape(f.name) + ', e.g. 0.3%, 221K or -0.6M"></td>' +
+          '<td>' + escape(f.forecast || DASH) + '</td>' +
           '<td>' + escape(f.previous || DASH) + '</td>' +
           '<td class="l">' + escape(f.surprise || DASH) + '</td>' +
           '<td>' + (i || move === undefined ? '' : (move > 0 ? '+' : '') +
@@ -272,7 +297,8 @@
     var sources = cal.sources || {};
     var errors = cal.errors || {};
     var keys = local.keys || {};
-    out += '<div class="ec-sources">' + ['BLS', 'DOL', 'EIA'].map(
+    out += '<div class="ec-sources">' + ['ForexFactory', 'BLS', 'DOL',
+                                         'EIA'].map(
       function (name) {
         var bad = errors[name] || errors[name + ' calendar'];
         return '<span class="' + (bad ? 'down' : '') + '"><b>' + name +
@@ -295,20 +321,6 @@
       ' <span class="hint">Telegram warns ' + (cal.alert_min || 15) +
       ' min before each release and again when it lands.</span></div>';
     return out;
-  }
-
-  function onChange(event) {
-    var input = event.target;
-    if (!input.classList || !input.classList.contains('ec-fc')) { return; }
-    fetch('/api/calendar/forecast', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({event: input.dataset.event,
-                            figure: input.dataset.figure,
-                            value: input.value})
-    }).then(function (r) { return r.json(); }).then(function (body) {
-      if (body.ok === false) { UI.toast(body.error); }
-      input.blur();
-    });
   }
 
   function onClick(event) {

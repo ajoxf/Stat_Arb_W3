@@ -803,9 +803,14 @@ def trade_fees(positions, fills):
                     if f.get('entry') == end
                     and (f.get('order_type') or '').lower()
                     in ('maker', 'taker'))
-            found += [f for f in mine
-                      if (f.get('account'), f.get('deal_id')) not in seen]
+            for f in mine:
+                if (f.get('account'), f.get('deal_id')) in seen:
+                    continue
+                f = dict(f, _leg=leg)
+                found.append(f)
             seen.update((f.get('account'), f.get('deal_id')) for f in mine)
+        # THE BREAKDOWN: each leg and end, maker and taker apart.
+        parts = {}
         maker = taker = 0.0
         n_maker = n_taker = 0
         priced = False
@@ -825,7 +830,13 @@ def trade_fees(positions, fills):
                 maker += cost
             else:
                 taker += cost
+            label = ('entry' if f.get('entry') == 'open' else 'exit') + \
+                '_' + f['_leg']
+            part = parts.setdefault(label, {'maker': 0.0, 'taker': 0.0})
+            part['maker' if kind == 'maker' else 'taker'] += cost
         out[position.get('position_id')] = {
+            'parts': {k: {m: round(v, 4) for m, v in p.items()}
+                      for k, p in parts.items()},
             'fills': fills_of, 'maker': maker, 'taker': taker,
             'n_maker': n_maker, 'n_taker': n_taker, 'priced': priced,
             'complete': priced and all(fills_of.values())}
@@ -876,6 +887,7 @@ def attach_fills(journal, positions, fills):
         maker, taker = got['maker'], got['taker']
         n_maker, n_taker = got['n_maker'], got['n_taker']
         priced = got['priced']
+        row['fee_parts'] = got.get('parts') or {}
         row['fills'] = fills_of
         notional = row.get('notional')
         row['maker_fills'], row['taker_fills'] = n_maker, n_taker

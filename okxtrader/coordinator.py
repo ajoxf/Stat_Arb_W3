@@ -157,6 +157,9 @@ class Coordinator:
                     os.path.join(here, 'econ_calendar.json'),
                     os.path.join(here, 'econ_forecasts.json'),
                     spreads=lambda: dict(self._calendar_spreads),
+                    currencies=str(self.config.get(
+                        'CALENDAR_CURRENCIES',
+                        'USD,EUR,JPY,GBP,CHF,CAD,AUD,NZD,SEK,NOK')).split(','),
                     env=self._calendar_env, clock=clock)
             except Exception as e:                # the desk runs without it
                 logging.warning('economic calendar off: %s', e)

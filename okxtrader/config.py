@@ -380,6 +380,8 @@ DEFAULT_SETTINGS = {
     # on the desk and in Telegram, and how long before one to warn.
     'CALENDAR_ON': True,
     'CALENDAR_ALERT_MIN': 15.0,
+    # Whose high-impact events ForexFactory adds: the G10 currencies.
+    'CALENDAR_CURRENCIES': 'USD,EUR,JPY,GBP,CHF,CAD,AUD,NZD,SEK,NOK',
     #: How often the margin for one spread is re-priced from the
     #: terminals. It moves with the price, but slowly.
     'MARGIN_TTL_SEC': 60.0,

@@ -104,7 +104,8 @@ def calendar_soon_text(event, now):
     """ECONOMIC EVENT IN 15 MIN: what, when, the forecast if one was
     typed and the last figure."""
     minutes = max(1, int(round((event['at'] - now) / 60.0)))
-    rows = [('Release', f"US {event['name']} ({event['agency']})"),
+    rows = [('Release', f"{event.get('where') or 'US'} {event['name']} "
+                        f"({event['agency']})"),
             ('At', time.strftime('%H:%M UTC', time.gmtime(event['at']))),
             ('Impact', 'high (3 star)')]
     for figure in event.get('figures') or ():
@@ -119,7 +120,8 @@ def calendar_soon_text(event, now):
 def calendar_out_text(event, pairs):
     """RELEASED: each figure against its previous (and the forecast,
     when one was typed), then where the desk's spreads stand."""
-    rows = [('Release', f"US {event['name']} ({event['agency']})")]
+    rows = [('Release', f"{event.get('where') or 'US'} {event['name']} "
+                        f"({event['agency']})")]
     for figure in event.get('figures') or ():
         words = (figure.get('actual') or '—') + \
             f"  (previous {figure.get('previous') or '—'}"

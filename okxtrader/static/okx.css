@@ -384,8 +384,6 @@
 .ec-table tr.ec-done td { color: #475467; }
 .ec-table td.ec-star { color: #b42318; letter-spacing: -1px; }
 .ec-table .down { color: #b42318; }
-.ec-table input.ec-fc { width: 64px; text-align: right; font: inherit;
-  border: 1px solid #c9cfd8; padding: 0 3px; background: #fff; }
 .ec-sources { margin-top: 6px; color: #475467; font-size: 11px; }
 .ec-sources .down { color: #b42318; }
 .ec-keys { margin-top: 6px; display: flex; flex-wrap: wrap; align-items: center;
@@ -400,3 +398,23 @@
 .window.econcal .ec-body { background: #fff; }
 .window.managed .ma-bad { color: #b42318; margin: 4px 0; font-weight: 600; }
 .window.managed .ma-found b.down { color: #b42318; }
+.window.econcal.maximized, .window.managed.maximized { display: flex; flex-direction: column; }
+.window.econcal.maximized .ec-body,
+.window.managed.maximized .ma-body { flex: 1 1 auto; min-height: 0; }
+
+/* A release about to land, or just out: a small note at the top right,
+   below the bars and the windows' own buttons. */
+#cal-notes { position: fixed; top: 46px; right: 12px; z-index: 9000; display: flex;
+  flex-direction: column; gap: 4px; align-items: flex-end; pointer-events: none; }
+.cal-note { pointer-events: auto; max-width: 380px; background: rgba(255, 255, 255, .95);
+  border: 1px solid #d0d5dd; border-left: 3px solid #667085; border-radius: 3px;
+  padding: 3px 8px; font-size: 11px; color: #344054; cursor: pointer;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .10); transition: opacity .8s; }
+.cal-note.soon { border-left-color: #b42318; }
+.cal-note.out { border-left-color: #1f9d55; }
+.cal-note.going { opacity: 0; }
+
+.cal-note { display: flex; align-items: flex-start; gap: 6px; }
+.cal-note-x { flex: 0 0 auto; border: 0; background: none; color: #667085;
+  font-size: 14px; line-height: 14px; padding: 0 0 0 2px; cursor: pointer; }
+.cal-note-x:hover { color: #b42318; }

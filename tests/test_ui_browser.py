@@ -7834,25 +7834,35 @@ def test_the_calendar_window_counts_down_and_shows_each_figure(page):
     page.evaluate('() => { window.MT5Calendar.local.warned = {}; }')
     try:
         publisher.publish()
-        # Nothing on the taskbar: a box, once, inside the alert time.
-        assert page.locator('#cal-chip').count() == 0
-        page.wait_for_selector('.toast:has-text("US CPI (BLS) in")',
-                               timeout=WAIT)
-        box = page.text_content('.toast:has-text("US CPI (BLS) in")')
-        assert 'in 12 min' in box or 'in 13 min' in box
-        assert 'CPI m/m previous 0.3%, forecast 0.3%' in box
+        # Nothing on any bar - top or bottom: one small note at the top
+        # right, once, inside the alert time.
+        assert page.locator('#cal-chip, #open-calendar, #cal-line') \
+            .count() == 0
+        page.wait_for_selector('.cal-note.soon', timeout=WAIT)
+        box = page.text_content('.cal-note.soon')
+        assert 'US CPI in 12 min' in box or 'US CPI in 13 min' in box
+        assert 'CPI m/m forecast 0.3%, previous 0.3%' in box
+        assert 'US CPI' not in page.text_content('#brand')
+        assert 'US CPI' not in page.text_content('#taskbar')
         publisher.publish()
         page.wait_for_timeout(600)
-        assert page.locator('.toast:has-text("US CPI (BLS) in")').count() == 1
-        page.click('#open-calendar')
+        assert page.locator('.cal-note.soon').count() == 1
+        # Closed by hand, at its x.
+        page.click('.cal-note.soon .cal-note-x')
+        assert page.locator('.cal-note.soon').count() == 0
+        # Opened from the + menu, with the other windows.
+        page.click('#add-panel')
+        page.click('#add-menu button[data-panel="econcal:"]')
         page.wait_for_selector('.window.econcal .ec-table', timeout=WAIT)
         text = page.text_content('.window.econcal')
         for word in ('US Initial jobless claims', '209K', '222K',
                      '12K below forecast', 'US CPI', 'Core CPI m/m',
                      'Crude oil inventories', '+0.710'):
             assert word in text, word
-        forecast = page.locator('.window.econcal input.ec-fc').first
-        assert forecast.input_value() == '221K'
+        # ForexFactory's forecast, as text: nothing to type.
+        assert page.locator('.window.econcal input.ec-fc').count() == 0
+        first = page.locator('.window.econcal .ec-table tbody tr').first
+        assert '221K' in first.text_content()
     finally:
         publisher.calendar = None
         publisher.publish()
@@ -7872,8 +7882,8 @@ def test_a_release_that_lands_gets_a_box(page):
                                timeout=WAIT)
         publisher.calendar = calendar_snapshot(now, released=True)
         publisher.publish()
-        page.wait_for_selector('.toast:has-text("RELEASED")', timeout=WAIT)
-        box = page.text_content('.toast:has-text("RELEASED")')
+        page.wait_for_selector('.cal-note.out', timeout=WAIT)
+        box = page.text_content('.cal-note.out')
         assert 'US Initial jobless claims 209K' in box
         assert 'forecast 221K' in box
     finally:

@@ -180,3 +180,20 @@ def test_a_trade_missing_a_legs_fills_keeps_the_desks_estimate():
              fill('d3', 11, 'close', 'maker', -0.30)]
     [row] = analysis.with_okx_fees([trade], fills)
     assert row['realized_pnl'] == 26.0 and 'fees_from' not in row
+
+
+def test_each_trades_fees_break_down_by_leg_and_end():
+    positions = [position('P1', 1000, 11, 12)]
+    journal = [{'position_id': 'P1', 'fees': 2.0}]
+    fills = [fill('d1', 11, 'open', 'maker', -0.20),
+             fill('d1b', 11, 'open', 'taker', -0.90),
+             fill('d2', 12, 'open', 'maker', -0.40),
+             fill('d3', 11, 'close', 'taker', -1.00),
+             fill('d4', 12, 'close', 'maker', -0.40)]
+    analysis.attach_fills(journal, positions, fills)
+    parts = journal[0]['fee_parts']
+    assert parts['entry_a'] == {'maker': 0.2, 'taker': 0.9}
+    assert parts['entry_b'] == {'maker': 0.4, 'taker': 0.0}
+    assert parts['exit_a'] == {'maker': 0.0, 'taker': 1.0}
+    assert parts['exit_b'] == {'maker': 0.4, 'taker': 0.0}
+    assert journal[0]['fee'] == 2.9

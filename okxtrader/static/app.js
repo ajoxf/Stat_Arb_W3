@@ -7970,9 +7970,24 @@ function anFeeCell(t) {
   var bp = t.fees_bp_notional === null || t.fees_bp_notional === undefined
     ? '' : ' \u00b7 ' + fmt(t.fees_bp_notional, 1) + ' bp of notional';
   if (t.fees_source === 'OKX') {
-    return '<td title="maker ' + escapeHtml(money(t.maker_fees)) +
-      ' \u00b7 taker ' + escapeHtml(money(t.taker_fees)) + ' (OKX)' + bp +
-      '">' + money(t.fee) + '</td>';
+    // THE BREAKDOWN, as OKX charged it: each leg and end, maker and
+    // taker apart.
+    var parts = t.fee_parts || {};
+    var lines = [['entry_a', 'Leg A in'], ['entry_b', 'Leg B in'],
+                 ['exit_a', 'Leg A out'], ['exit_b', 'Leg B out']]
+      .filter(function (p) { return parts[p[0]]; })
+      .map(function (p) {
+        var x = parts[p[0]];
+        var bits = [];
+        if (x.maker) { bits.push('maker ' + money(x.maker)); }
+        if (x.taker) { bits.push('taker ' + money(x.taker)); }
+        return p[1] + ': ' + money((x.maker || 0) + (x.taker || 0)) +
+          ' (' + bits.join(' + ') + ')';
+      });
+    return '<td class="an-fee" title="' + escapeHtml(
+      (lines.length ? lines.join('\n') + '\n' : '') + 'Total ' +
+      money(t.fee) + ' = maker ' + money(t.maker_fees) + ' + taker ' +
+      money(t.taker_fees) + ' (OKX)' + bp) + '">' + money(t.fee) + '</td>';
   }
   return '<td class="hint" title="the desk\u2019s estimate (gross less ' +
     'net, at your fee rates): OKX\u2019s own fills for this trade are not ' +
@@ -9826,7 +9841,7 @@ function anHeld(seconds) {
   // puts it back where it was. Per panel, kept across redraws.
 
   //: The windows that can be maximized, by the class they carry.
-  var MAXIMIZABLE = ['monitor', 'chartwin', 'calcwin'];
+  var MAXIMIZABLE = ['monitor', 'chartwin', 'calcwin', 'econcal', 'managed'];
 
   function canMaximize(node) {
     return MAXIMIZABLE.some(function (cls) {
@@ -10226,6 +10241,9 @@ function anHeld(seconds) {
         '<small>every ladder on one row each</small></button>' +
         '<button data-panel="' + panelId('monitor') + '">Trading Monitor' +
         '<small>positions, orders, fills, slippage, accounts</small>' +
+        '</button>' +
+        '<button data-panel="' + panelId('econcal') + '">Economic calendar' +
+        '<small>G10 high-impact releases: forecast, actual, surprise</small>' +
         '</button>';
       menu.innerHTML = html;
       menu.classList.remove('hidden');
@@ -10253,9 +10271,6 @@ function anHeld(seconds) {
     });
     el('open-managed').addEventListener('click', function () {
       openPanel(panelId('managed'));
-    });
-    el('open-calendar').addEventListener('click', function () {
-      openPanel(panelId('econcal'));
     });
     el('kill').addEventListener('click', function () {
       ask('Cancel everything, on every ladder?',
