@@ -1396,3 +1396,68 @@ def test_a_release_is_announced_ahead_and_again_when_it_lands():
     assert 'CPI m/m</b>  <code>0.4%  (previous 0.3%, forecast 0.3%)' in out
     assert 'Surprise</b>  <code>0.1 pt above forecast' in out
     assert 'Oil</b>  <code>-31.124' in out
+
+
+def _okx_fills(complete=True):
+    legs = {'leg_a': {'open_price': 89.05, 'close_price': 89.31,
+                      'gross': 5.2, 'fees': 0.9, 'maker': 2, 'taker': 0},
+            'leg_b': {'open_price': 101.9, 'close_price': 102.41,
+                      'gross': -1.1, 'fees': 0.7, 'maker': 1, 'taker': 1}}
+    return {'legs': legs, 'gross': 4.1, 'fees': 1.6, 'net': 2.5,
+            'complete': complete, 'maker': 3, 'taker': 1}
+
+
+def test_a_trade_exit_reports_okxs_own_fills_and_fees(bot):
+    holding(bot)
+    watch(bot)
+    closed = dict(POSITION, closed_at=POSITION['opened_at'] + 600,
+                  exit_spread=13.119, realized_pnl=3.85,
+                  close_reason='Algo: profit target (after costs)')
+    bot.desk.records['P7'] = {'ok': True, 'position': closed,
+                              'exit_prices': {'leg_a': 89.2, 'leg_b': 102.3},
+                              'okx': _okx_fills()}
+    bot.desk.snapshot['pairs'][KEY]['positions'] = []
+    [told] = watch(bot)
+    in_order(told, ['Leg A Entry</b>  <code>$89.0500',
+                    'Leg A Exit</b>  <code>$89.3100',
+                    'Leg B Entry</b>  <code>$101.9000',
+                    'Leg B Exit</b>  <code>$102.4100',
+                    'Gross PnL</b>  <code>$+4.1000  (OKX, both legs)',
+                    'Fees</b>  <code>-$1.6000  (OKX, both legs · '
+                    '3 maker / 1 taker fills)',
+                    'Net PnL</b>  <code>$+2.5000'])
+    assert 'Est. Fees' not in told
+
+
+def test_a_trade_exit_waits_for_okxs_fills_then_goes_without_them(bot):
+    holding(bot)
+    watch(bot)
+    closed = dict(POSITION, closed_at=POSITION['opened_at'] + 600,
+                  exit_spread=13.119, realized_pnl=3.85,
+                  close_reason='Algo: profit target (after costs)')
+    bot.desk.records['P7'] = {'ok': True, 'position': closed,
+                              'exit_prices': {'leg_a': 89.2, 'leg_b': 102.3},
+                              'okx': _okx_fills(complete=False)}
+    bot.desk.snapshot['pairs'][KEY]['positions'] = []
+    assert watch(bot) == []                     # the fills are not in yet
+    bot.desk.records['P7']['okx'] = _okx_fills()
+    [told] = watch(bot)
+    assert 'Net PnL</b>  <code>$+2.5000' in told
+
+
+def test_a_trade_exit_without_okxs_fills_goes_after_the_wait(bot):
+    holding(bot)
+    watch(bot)
+    closed = dict(POSITION, closed_at=POSITION['opened_at'] + 600,
+                  exit_spread=13.119, realized_pnl=3.85,
+                  close_reason='Algo: profit target (after costs)')
+    bot.desk.records['P7'] = {'ok': True, 'position': closed,
+                              'exit_prices': {'leg_a': 89.2, 'leg_b': 102.3},
+                              'okx': _okx_fills(complete=False)}
+    bot.desk.snapshot['pairs'][KEY]['positions'] = []
+    assert watch(bot) == []
+    bot.clock_.now += tg.EXIT_WAIT_SEC + 1
+    [told] = watch(bot)
+    assert 'Est. Fees' in told and 'not on record yet' in told
+    assert 'Net PnL</b>  <code>$+3.8500' in told
+    assert watch(bot) == []                     # told once

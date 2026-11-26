@@ -415,3 +415,65 @@ def test_a_ledger_read_short_of_an_orders_bills_does_not_replace_the_fills():
     [short] = journal[0]['ledger_short']
     assert short['order_id'] == 'o3' and short['bills'] == 0
     assert short['fills'] > 0 and short['ledger'] == 0
+
+
+def test_okx_exit_is_each_legs_own_fills_their_pnl_and_fees():
+    position = {'leg_a': {'volume': 2}, 'leg_b': {'volume': 3}}
+    fills = {'leg_a': [
+        {'entry': 'open', 'volume': 1, 'price': 100, 'fee': -0.1,
+         'order_type': 'maker'},
+        {'entry': 'open', 'volume': 1, 'price': 102, 'fee': -0.1,
+         'order_type': 'maker'},
+        {'entry': 'close', 'volume': 2, 'price': 105, 'fee': -0.25,
+         'profit': 8.0, 'order_type': 'taker'}],
+        'leg_b': [
+        {'entry': 'open', 'volume': 3, 'price': 50, 'fee': -0.15,
+         'order_type': 'maker'},
+        {'entry': 'close', 'volume': 3, 'price': 49, 'fee': -0.15,
+         'profit': -3.0, 'order_type': 'maker'}]}
+    got = analysis.okx_exit(position, fills)
+    assert got['complete']
+    assert got['legs']['leg_a']['open_price'] == 101
+    assert got['legs']['leg_a']['close_price'] == 105
+    assert got['gross'] == 5.0 and got['fees'] == pytest.approx(0.75)
+    assert got['net'] == pytest.approx(4.25)
+    assert (got['maker'], got['taker']) == (4, 1)
+    # Half of leg B's close not on record yet: not complete.
+    fills['leg_b'][1] = dict(fills['leg_b'][1], volume=1.5)
+    assert not analysis.okx_exit(position, fills)['complete']
+
+
+def test_the_position_endpoint_carries_okxs_fills_for_the_exit_message(
+        tmp_path):
+    app = _app(tmp_path, {})
+    db = Store(str(tmp_path / 'trader.db'))
+
+    class P:
+        def to_dict(self):
+            return {'position_id': 'X1', 'pair_key': 'A|B', 'side': 'SELL',
+                    'quantity': 1.0, 'opened_at': 100.0, 'closed_at': 200.0,
+                    'entry_spread': 1.0, 'exit_spread': 0.5,
+                    'realized_pnl': 1.0, 'spread_units': 1.0,
+                    'order_type': 'market', 'close_reason': 'x',
+                    'entry_slippage': 0.0, 'exit_slippage': 0.0,
+                    'click_to_on_ms': 0,
+                    'leg_a': {'account': 'okx', 'volume': 2,
+                              'position_tickets': ['t1']},
+                    'leg_b': {'account': 'okx', 'volume': 1,
+                              'position_tickets': ['t2']}}
+    db.save_position(P())
+
+    def deal(i, ticket, entry, vol, px, fee, pnl=0.0):
+        return {'inst_type': 'DEAL', 'deal_id': str(i), 'order_id': 'o%d' % i,
+                'position_id': ticket, 'symbol': 'S', 'pos_side': entry,
+                'order_type': 'maker', 'fill_qty': vol, 'fill_price': px,
+                'fee': fee, 'pnl': pnl, 'filled_at': 100000 + i}
+    db.record_fills('okx', [deal(1, 't1', 'open', 2, 10.0, -0.02),
+                            deal(2, 't2', 'open', 1, 20.0, -0.02),
+                            deal(3, 't1', 'close', 2, 11.0, -0.02, 2.0),
+                            deal(4, 't2', 'close', 1, 20.5, -0.02, -0.5)])
+    body = app.test_client().get('/api/position/X1').get_json()
+    okx = body['okx']
+    assert okx['complete'] and okx['legs']['leg_a']['close_price'] == 11.0
+    assert okx['gross'] == 1.5 and okx['fees'] == pytest.approx(0.08)
+    assert okx['net'] == pytest.approx(1.42)

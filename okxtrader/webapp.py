@@ -1461,6 +1461,17 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
             except Exception as e:                # a journal mid-write
                 logging.error('closing price of %s: %s', position_id, e)
                 exits[leg] = None
+        # WHAT OKX FILLED: each leg's own fills, open and close - the
+        # prices, P&L and fees the exit message reports.
+        okx = None
+        try:
+            okx = analysis.okx_exit(row, {
+                leg: db.ticket_fills((row.get(leg) or {}).get('account'),
+                                     (row.get(leg) or {})
+                                     .get('position_tickets'))
+                for leg in ('leg_a', 'leg_b')})
+        except Exception as e:                    # a journal mid-write
+            logging.error('OKX fills of %s: %s', position_id, e)
         opened = row.get('opened_at') or 0
         events = [e for e in db.events_between(
             ('algo_signal', 'algo_order'), opened - 120.0,
@@ -1468,6 +1479,7 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
             if e.get('pair_key') == row.get('pair_key')]
         entry_z, exit_z = analysis.algo_z(events)
         return jsonify({'ok': True, 'position': row, 'exit_prices': exits,
+                        'okx': okx,
                         'entry_z': entry_z.get(position_id),
                         'exit_z': exit_z.get(position_id)})
 

@@ -627,6 +627,20 @@ class Store:
         return sum(float(r['volume'] or 0) * float(r['price'] or 0)
                    for r in rows) / volume
 
+    def ticket_fills(self, account, tickets):
+        """Every fill - opening and closing - of these position tickets,
+        oldest first: what OKX itself filled the position at."""
+        tickets = [str(t) for t in tickets or ()]
+        if not account or not tickets:
+            return []
+        with self._connect() as connection:
+            rows = connection.execute(
+                'SELECT * FROM fills WHERE account = ? AND '
+                'position_ticket IN (%s) ORDER BY broker_time_ms, rowid'
+                % ','.join('?' * len(tickets)),
+                [str(account)] + tickets).fetchall()
+        return [dict(r) for r in rows]
+
     def closed_positions(self, limit=200):
         with self._connect() as connection:
             rows = connection.execute(

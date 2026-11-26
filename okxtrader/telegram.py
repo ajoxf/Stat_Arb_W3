@@ -65,6 +65,9 @@ ALLOWED_COMMANDS = frozenset({'set_algo', 'set_pair', 'flatten_pair', 'kill'})
 #: A price problem has to last this long before it is worth a message:
 #: a feed that is stale for one poll and back the next is not one.
 PROBLEM_SETTLE_SEC = 20.0
+#: How long a TRADE EXIT waits for OKX's fills of the close to be on
+#: record before it goes with the desk's own figures.
+EXIT_WAIT_SEC = 90.0
 
 #: OKX settles perpetual funding at these UTC times, every day.
 FUNDING_TIMES_UTC = ('00:00', '08:00', '16:00')
@@ -796,29 +799,51 @@ def trade_entry_text(position, ladder, levels=None, block=None,
 
 
 def trade_exit_text(record, ladder):
-    """TRADE EXIT, row for row as Stat_Arb_W3 sends it, then ANALYSIS."""
+    """TRADE EXIT, row for row as Stat_Arb_W3 sends it, then ANALYSIS.
+    Once OKX's own fills of both legs are on record (`record['okx']`
+    complete), the prices, P&L and fees are OKX's: each leg's average
+    fill price, the P&L OKX booked on the closing fills, and the fees it
+    charged. Until then, the desk's figures, the fees marked estimated."""
     position = record.get('position') or {}
     exits = record.get('exit_prices') or {}
-    pnl = position.get('realized_pnl')
+    okx = record.get('okx') or {}
+    actual = bool(okx.get('complete'))
+    pnl = okx.get('net') if actual else position.get('realized_pnl')
     result = '—' if pnl is None else ('PROFIT' if pnl >= 0 else 'LOSS')
     opened, closed = position.get('opened_at'), position.get('closed_at')
     held = None if not opened or not closed else closed - opened
     entry, exit_ = position.get('entry_spread'), position.get('exit_spread')
     change = None if entry is None or exit_ is None else \
         (exit_ - entry) * _sign(position.get('side'))
-    gross = level_money(position, exit_) if exit_ is not None else None
-    fees = None if gross is None or pnl is None else gross - pnl
+    if actual:
+        gross, fees = okx.get('gross'), okx.get('fees')
+    else:
+        gross = level_money(position, exit_) if exit_ is not None else None
+        fees = None if gross is None or pnl is None else gross - pnl
     rows = [('Reason', position.get('close_reason')),
             ('Duration', duration(held)),
             ('Exit Time', utc(closed)), None]
     for name, fill in _legs(position):
-        rows.append((f'Leg {name} Entry', price(fill.get('price'))))
-        # The broker's closing deals first; failing those, the close
-        # price the leg itself recorded when it was filled.
-        closed_at = exits.get('leg_' + name.lower())
+        leg = (okx.get('legs') or {}).get('leg_' + name.lower()) or {}
+        opened_at = (leg.get('open_price') if actual else None) \
+            or fill.get('price')
+        rows.append((f'Leg {name} Entry', price(opened_at)))
+        # OKX's closing fills first; failing those, the close price the
+        # leg itself recorded when it was filled.
+        closed_at = leg.get('close_price') if actual else None
+        if closed_at is None:
+            closed_at = exits.get('leg_' + name.lower())
         if closed_at is None:
             closed_at = fill.get('exit_price')
         rows.append((f'Leg {name} Exit', price(closed_at)))
+    if actual:
+        fee_row = ('Fees', f'{w3fee(fees, 4)}  (OKX, both legs \u00b7 '
+                           f'{okx.get("maker", 0)} maker / '
+                           f'{okx.get("taker", 0)} taker fills)')
+    else:
+        fee_row = ('Est. Fees', f'{w3fee(fees, 4)}  (commission, both legs;'
+                                f' OKX fills not on record yet)'
+                   if fees is not None else '—')
     rows += [None,
              ('Entry Spread', plain(entry, 4, True) + _z(record.get('entry_z'))),
              ('Exit Spread', plain(exit_, 4, True) + _z(record.get('exit_z'))),
@@ -833,9 +858,9 @@ def trade_exit_text(record, ladder):
              ('Latency', '—' if not position.get('exit_sent_at') or not closed
               else f'{(closed - position["exit_sent_at"]) * 1000:.0f} ms'),
              None,
-             ('Gross PnL', w3(gross, 4)),
-             ('Est. Fees', f'{w3fee(fees, 4)}  (commission, both legs)'
-              if fees is not None else '—'),
+             ('Gross PnL', w3(gross, 4) + ('  (OKX, both legs)'
+                                           if actual else '')),
+             fee_row,
              ('Net PnL', w3(pnl, 4) + pnl_shares(pnl, position)),
              ('Slippage', f'in {plain(position.get("entry_slippage"), 4, True)}'
                           f' / out '
@@ -2202,6 +2227,7 @@ class AlertWatch:
         self.live = {}              # pair -> is it LIVE
         self.signals = {}           # pair -> the last signal alert's id
         self.positions = {}         # id -> pair key
+        self.exit_wait = {}         # id -> when its exit was first seen
         self.summary_sent = {}      # pair -> the day its summary went
         self.funding_told = None    # the funding time last announced
         self.liquidation = {}       # (account, inst, side) -> told at
@@ -2268,8 +2294,20 @@ class AlertWatch:
                         record = lookup(pid) or {}
                     except Exception as e:
                         logging.warning('[telegram] position %s: %s', pid, e)
-                if record.get('ok') and (record.get('position') or {}) \
-                        .get('closed_at'):
+                closed_rec = record.get('ok') and \
+                    (record.get('position') or {}).get('closed_at')
+                # OKX's fills reach the journal a few seconds after the
+                # close: the message waits for them (EXIT_WAIT_SEC), so
+                # it reports what OKX filled and charged, not an estimate.
+                okx = record.get('okx')
+                if closed_rec and okx is not None and \
+                        not okx.get('complete'):
+                    since = self.exit_wait.setdefault(pid, now)
+                    if now - since < EXIT_WAIT_SEC:
+                        current[pid] = key        # asked again next pass
+                        continue
+                self.exit_wait.pop(pid, None)
+                if closed_rec:
                     out.append(trade_exit_text(record, name_of(key)))
                 else:
                     out.append(title('TRADE EXIT', now) + '\n' + table([
