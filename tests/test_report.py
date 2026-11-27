@@ -92,7 +92,9 @@ def _text(page):
 
 TRADE_DETAILS = ('ETH vs BTC perps', 'ethbtc', 'Short', 'Long', 'Manual', 'Algo',
                  'take profit', 'Trade journal', 'Breakdown', 'Win rate',
-                 'Trades closed', 'margin', '-20.00')
+                 'Trades closed', '-20.00')
+# (Margin IS on the client report, as each day's SUM - the capital
+# deployed and the return on it - never a trade's own.)
 
 
 def test_the_client_report_says_nothing_of_what_was_traded():
@@ -448,3 +450,25 @@ def test_a_testing_period_is_one_line_and_in_no_figure():
                          1_700_100_000)
     assert 'Track record from' in page
     assert '4 testing trade(s)' in page and 'not in any figure' in page
+
+
+def test_the_client_report_carries_the_capital_deployed_each_day():
+    """Two trades on one day, one after the other on $1,000 of margin
+    each: $1,000 deployed at most (not $2,000), the day's +$30 is +3% on
+    it, and +1.5% on the $2,000 of margin the two trades used."""
+    from okxtrader import report as rp
+    day = 1_700_006_400                       # 00:00 UTC
+    trips = [{'pnl': 10.0, 'margin': 1000.0, 'opened_at': day + 3600,
+              'closed_at': day + 7200},
+             {'pnl': 20.0, 'margin': 1000.0, 'opened_at': day + 7200,
+              'closed_at': day + 9000}]
+    [(label, (margin, peak))] = rp._deployed(trips, False).items()
+    assert (margin, peak) == (2000.0, 1000.0)
+    body = {'summary': {'capital': 10_000.0}, 'drawdown': {},
+            'journal': list(reversed(trips))}
+    page = rp.render_client(body, 7, day + 86400 * 2)
+    assert 'Capital<br><small>deployed</small>' in page
+    assert '$1,000.00' in page and '+3.00%' in page and '+1.50%' in page
+    # $1,000 deployed of the $10,000 managed.
+    assert 'Capital<br><small>utilised</small>' in page
+    assert '<td>10.0%</td>' in page

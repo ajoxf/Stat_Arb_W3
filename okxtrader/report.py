@@ -11,6 +11,7 @@ beside config.json, embedded in the page; without one, the Nexus mark.
 """
 
 import base64
+import calendar
 import html
 import os
 import re
@@ -805,6 +806,52 @@ def _periods(trips, days, now):
     return monthly, [tuple(out[k]) for k in sorted(out)]
 
 
+def _deployed(trips, monthly):
+    """{period label: (margin, peak)} - the CAPITAL DEPLOYED in each
+    period, as sums only:
+
+    - `margin`: the margin of the trades that CLOSED in it, each counted
+      once - what its result was earned on;
+    - `peak`: the most margin tied up AT ONCE at any moment in it (a
+      trade open across midnight counts in both days), so margin used
+      twice in a row is not counted twice."""
+    fmt, label = ('%Y-%m', '%b %Y') if monthly else ('%Y-%m-%d',
+                                                     '%a %d %b %Y')
+    closed = [t for t in trips if t.get('pnl') is not None
+              and t.get('closed_at') is not None]
+    out = {}
+    for t in closed:
+        at = time.gmtime(t['closed_at'])
+        key = time.strftime(fmt, at)
+        row = out.setdefault(key, [time.strftime(label, at), 0.0, 0.0])
+        row[1] += float(t.get('margin') or 0.0)
+    for key, row in out.items():
+        if monthly:
+            y, m = (int(x) for x in key.split('-'))
+            start = calendar.timegm((y, m, 1, 0, 0, 0))
+            end = calendar.timegm((y + (m == 12), m % 12 + 1, 1, 0, 0, 0))
+        else:
+            start = calendar.timegm(time.strptime(key, '%Y-%m-%d'))
+            end = start + 86400
+        moves = []
+        for t in closed:
+            opened = t.get('opened_at') or t['closed_at']
+            margin = float(t.get('margin') or 0.0)
+            if not margin or opened >= end or t['closed_at'] < start:
+                continue
+            moves.append((max(opened, start), 1, margin))
+            moves.append((min(t['closed_at'], end), 0, -margin))
+        # A close and an open at the same moment: the close first - the
+        # margin is freed before it is used again.
+        level = peak = 0.0
+        for _at, _kind, change in sorted(moves):
+            level += change
+            peak = max(peak, level)
+        row[2] = peak
+    return {row[0]: (round(row[1], 2), round(row[2], 2))
+            for row in out.values()}
+
+
 def render_client(body, days=7.0, now=None, logo='', desk_name='Nexus',
                   pnl='show', link=None):
     """The CLIENT's report: what the capital returned over the period,
@@ -878,14 +925,25 @@ def render_client(body, days=7.0, now=None, logo='', desk_name='Nexus',
              tone(worst and worst[1]), _e(worst[0]) if worst else ''),
     ])
 
+    deployed = _deployed(trips, monthly)
+
+    def share(value, base):
+        return None if not base else value / base * 100.0
     rows, running = [], 0.0
     for label, value in periods:
         running += value
+        margin, peak = deployed.get(label, (0.0, 0.0))
+        on_margin, on_used = share(value, margin), share(value, peak)
         rows.append(
             f'<tr><td class="l">{_e(label)}</td>' +
             ('' if hide else
              f'<td class="{tone(value)}">{cash(value)}</td>') +
             f'<td class="{tone(value)}">{pct(on_cap(value))}</td>'
+            + ('' if hide else
+               f'<td>{cash(peak, sign=False) if peak else DASH}</td>') +
+            f'<td>{DASH if not peak or not capital else f"{peak / capital * 100.0:.1f}%"}</td>'
+            f'<td class="{tone(on_used)}">{pct(on_used)}</td>'
+            f'<td class="{tone(on_margin)}">{pct(on_margin)}</td>'
             f'<td class="{tone(running)}"><b>{pct(on_cap(running))}</b></td>'
             + ('' if hide else
                f'<td class="{tone(running)}">{cash(running)}</td>') +
@@ -896,10 +954,15 @@ def render_client(body, days=7.0, now=None, logo='', desk_name='Nexus',
     table = ('<table class="returns"><thead><tr>'
              f'<th class="l">{"Month" if monthly else "Day"}</th>' +
              ('' if hide else '<th>Net P&amp;L</th>') +
-             '<th>Return</th><th>Cumulative return</th>' +
+             '<th>Return<br><small>on capital</small></th>' +
+             ('' if hide else '<th>Capital<br><small>deployed</small></th>') +
+             '<th>Capital<br><small>utilised</small></th>' +
+             '<th>Return on capital<br><small>deployed</small></th>'
+             '<th>Return<br><small>on margin</small></th>'
+             '<th>Cumulative return</th>' +
              ('' if hide else '<th>Cumulative P&amp;L</th>') +
              '</tr></thead><tbody>' +
-             (''.join(rows) or '<tr><td colspan="5">No result in this '
+             (''.join(rows) or '<tr><td colspan="9">No result in this '
                                'period.</td></tr>') + '</tbody></table>')
     modes = ''.join(
         f'<a class="{"on" if m == pnl else ""}" href="{_e(link(m))}">'
@@ -939,7 +1002,12 @@ def render_client(body, days=7.0, now=None, logo='', desk_name='Nexus',
 <section class="panel"><h2>Returns by {unit}</h2>{table}</section>
 <footer class="notes"><b>Return</b> is the net result after trading
 costs, divided by the capital at the start of the period.
-<b>Cumulative return</b> adds each {unit}'s return. <b>Sharpe</b> is the
+<b>Cumulative return</b> adds each {unit}'s return. <b>Capital
+deployed</b>: the most margin tied up at any one moment in the {unit}; <b>capital utilised</b> is
+that as a % of the capital managed;
+<b>return on capital deployed</b> is the net over it. <b>Return on
+margin</b>: the net over the margin of every trade closed in the {unit},
+each counted once. <b>Sharpe</b> is the
 average daily return on the account's equity over its standard deviation,
 <b>Sortino</b> over its downside deviation only - days with no trade
 included, annualised by √365, risk-free 0; ± is its standard error, wide
@@ -1017,7 +1085,8 @@ td.no { font-weight: 700; color: var(--navy); }
 .journal td.acct { font-weight: 600; color: var(--navy); }
 .journal th.nw { white-space: nowrap; }
 .excursion { margin-top: 2px; }
-.returns { font-size: 12px; max-width: 760px; }
+.returns { font-size: 12px; }
+.returns th small { font-weight: 400; opacity: .85; }
 .stats { margin: 0 0 12px; break-inside: avoid; }
 .stats .cols { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
 .stats table { font-size: 11px; }
