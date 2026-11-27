@@ -1422,11 +1422,29 @@ def test_a_trade_exit_reports_okxs_own_fills_and_fees(bot):
                     'Leg A Exit</b>  <code>$89.3100',
                     'Leg B Entry</b>  <code>$101.9000',
                     'Leg B Exit</b>  <code>$102.4100',
-                    'Gross PnL</b>  <code>$+4.1000  (OKX, both legs)',
+                    'Gross PnL</b>  <code>$+4.1000  (this trade\u2019s own OKX '
+                    'fills, both legs)',
                     'Fees</b>  <code>-$1.6000  (OKX, both legs · '
                     '3 maker / 1 taker fills)',
                     'Net PnL</b>  <code>$+2.5000'])
     assert 'Est. Fees' not in told
+    assert 'OKX booked' not in told              # nothing else was on
+
+
+def test_a_trade_exit_says_what_okx_booked_against_its_average(bot):
+    holding(bot)
+    watch(bot)
+    closed = dict(POSITION, closed_at=POSITION['opened_at'] + 600,
+                  exit_spread=13.119, realized_pnl=3.85,
+                  close_reason='Algo: profit target (after costs)')
+    bot.desk.records['P7'] = {'ok': True, 'position': closed,
+                              'exit_prices': {}, 'okx': dict(
+                                  _okx_fills(), okx_booked=-2.4)}
+    bot.desk.snapshot['pairs'][KEY]['positions'] = []
+    [told] = watch(bot)
+    assert 'PROFIT' in told
+    assert 'OKX booked</b>  <code>$-2.4000  (against its average entry' \
+        in told
 
 
 def test_a_trade_exit_waits_for_okxs_fills_then_goes_without_them(bot):

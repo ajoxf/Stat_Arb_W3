@@ -418,25 +418,28 @@ def test_a_ledger_read_short_of_an_orders_bills_does_not_replace_the_fills():
 
 
 def test_okx_exit_is_each_legs_own_fills_their_pnl_and_fees():
-    position = {'leg_a': {'volume': 2}, 'leg_b': {'volume': 3}}
+    position = {'leg_a': {'volume': 2, 'contract_size': 1.0},
+                'leg_b': {'volume': 3, 'contract_size': 1.0}}
     fills = {'leg_a': [
         {'entry': 'open', 'volume': 1, 'price': 100, 'fee': -0.1,
-         'order_type': 'maker'},
+         'order_type': 'maker', 'side': 'buy'},
         {'entry': 'open', 'volume': 1, 'price': 102, 'fee': -0.1,
-         'order_type': 'maker'},
+         'order_type': 'maker', 'side': 'buy'},
         {'entry': 'close', 'volume': 2, 'price': 105, 'fee': -0.25,
          'profit': 8.0, 'order_type': 'taker'}],
         'leg_b': [
         {'entry': 'open', 'volume': 3, 'price': 50, 'fee': -0.15,
-         'order_type': 'maker'},
+         'order_type': 'maker', 'side': 'sell'},
         {'entry': 'close', 'volume': 3, 'price': 49, 'fee': -0.15,
-         'profit': -3.0, 'order_type': 'maker'}]}
+         'profit': -3.0, 'order_type': 'maker', 'side': 'buy'}]}
     got = analysis.okx_exit(position, fills)
     assert got['complete']
     assert got['legs']['leg_a']['open_price'] == 101
     assert got['legs']['leg_a']['close_price'] == 105
-    assert got['gross'] == 5.0 and got['fees'] == pytest.approx(0.75)
-    assert got['net'] == pytest.approx(4.25)
+    # Leg A long 2 from 101 to 105: +8; leg B short 3 from 50 to 49: +3.
+    assert got['gross'] == 11.0 and got['fees'] == pytest.approx(0.75)
+    assert got['net'] == pytest.approx(10.25)
+    assert got['okx_booked'] == 5.0         # OKX's own, as it booked it
     assert (got['maker'], got['taker']) == (4, 1)
     # Half of leg B's close not on record yet: not complete.
     fills['leg_b'][1] = dict(fills['leg_b'][1], volume=1.5)
@@ -458,13 +461,17 @@ def test_the_position_endpoint_carries_okxs_fills_for_the_exit_message(
                     'entry_slippage': 0.0, 'exit_slippage': 0.0,
                     'click_to_on_ms': 0,
                     'leg_a': {'account': 'okx', 'volume': 2,
+                              'contract_size': 1.0,
                               'position_tickets': ['t1']},
                     'leg_b': {'account': 'okx', 'volume': 1,
+                              'contract_size': 1.0,
                               'position_tickets': ['t2']}}
     db.save_position(P())
 
     def deal(i, ticket, entry, vol, px, fee, pnl=0.0):
+        short = (ticket == 't2') == (entry == 'open')
         return {'inst_type': 'DEAL', 'deal_id': str(i), 'order_id': 'o%d' % i,
+                'side': 'sell' if short else 'buy',
                 'position_id': ticket, 'symbol': 'S', 'pos_side': entry,
                 'order_type': 'maker', 'fill_qty': vol, 'fill_price': px,
                 'fee': fee, 'pnl': pnl, 'filled_at': 100000 + i}
@@ -477,3 +484,19 @@ def test_the_position_endpoint_carries_okxs_fills_for_the_exit_message(
     assert okx['complete'] and okx['legs']['leg_a']['close_price'] == 11.0
     assert okx['gross'] == 1.5 and okx['fees'] == pytest.approx(0.08)
     assert okx['net'] == pytest.approx(1.42)
+
+
+def test_a_second_trades_take_profit_is_its_own_not_okxs_average():
+    """Two shorts on: the first at 110, the add at 120. The add's
+    take-profit closes ITS size at 112 - +8 a contract for it. OKX holds
+    one short averaged at 115 and books the close against that: +3. The
+    exit is the trade's own +8; OKX's figure is kept beside it."""
+    position = {'leg_a': {'volume': 1, 'contract_size': 1.0},
+                'leg_b': {'volume': 1, 'contract_size': 1.0}}
+    leg = [{'entry': 'open', 'volume': 1, 'price': 120, 'fee': 0,
+            'side': 'sell'},
+           {'entry': 'close', 'volume': 1, 'price': 112, 'fee': 0,
+            'profit': 3.0, 'side': 'buy'}]
+    got = analysis.okx_exit(position, {'leg_a': leg, 'leg_b': leg})
+    assert got['complete'] and got['gross'] == 16.0
+    assert got['okx_booked'] == 6.0

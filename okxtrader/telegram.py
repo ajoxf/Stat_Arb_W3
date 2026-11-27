@@ -798,6 +798,19 @@ def trade_entry_text(position, ladder, levels=None, block=None,
                   f'{ladder}') + '\n' + table(rows))
 
 
+def _okx_average_row(okx, gross, actual):
+    """OKX keeps ONE position per instrument and side, so with another
+    trade on it books a close against the average entry of both - a
+    figure that is not this trade's. Said when it differs, so the
+    numbers on OKX's own screen are not a surprise."""
+    booked = (okx or {}).get('okx_booked')
+    if not actual or booked is None or gross is None or \
+            abs(booked - gross) < 0.01:
+        return []
+    return [('OKX booked', f'{w3(booked, 4)}  (against its average entry '
+                           f'of every trade on - not this trade\u2019s)')]
+
+
 def trade_exit_text(record, ladder):
     """TRADE EXIT, row for row as Stat_Arb_W3 sends it, then ANALYSIS.
     Once OKX's own fills of both legs are on record (`record['okx']`
@@ -858,9 +871,11 @@ def trade_exit_text(record, ladder):
              ('Latency', '—' if not position.get('exit_sent_at') or not closed
               else f'{(closed - position["exit_sent_at"]) * 1000:.0f} ms'),
              None,
-             ('Gross PnL', w3(gross, 4) + ('  (OKX, both legs)'
+             ('Gross PnL', w3(gross, 4) + ('  (this trade\u2019s own OKX '
+                                           'fills, both legs)'
                                            if actual else '')),
              fee_row,
+             *_okx_average_row(okx, gross, actual),
              ('Net PnL', w3(pnl, 4) + pnl_shares(pnl, position)),
              ('Slippage', f'in {plain(position.get("entry_slippage"), 4, True)}'
                           f' / out '

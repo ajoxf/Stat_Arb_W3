@@ -1462,8 +1462,9 @@ def notional_traded(fills, sizes, now, date=None, date_ms=None):
 
 def okx_exit(position, fills_by_leg):
     """A CLOSED position as OKX filled it, leg by leg, from its own fills:
-    the average open and close price, the P&L OKX booked on the closing
-    fills (before fees), the fees OKX charged (open and close, maker and
+    the average open and close price, THIS trade's P&L on them (before
+    fees; `okx_booked` is OKX's own figure, against its average entry
+    when more than one trade is on), the fees OKX charged (open and close, maker and
     taker), and whether every contract opened has been closed on record
     - `complete`. `fills_by_leg`: {'leg_a': [fill rows], 'leg_b': ...}."""
     legs, complete = {}, True
@@ -1477,9 +1478,26 @@ def okx_exit(position, fills_by_leg):
             out[end + '_price'] = (sum(float(r.get('volume') or 0) *
                                        float(r.get('price') or 0)
                                        for r in mine) / vol) if vol else None
-        out['gross'] = round(sum(float(r.get('profit') or 0)
-                                 for r in rows if r.get('entry') == 'close'),
-                             6)
+        # THIS TRADE'S OWN P&L: its own closing fills against its own
+        # opening fills. Not OKX's fillPnl - OKX holds one position per
+        # instrument and side, so with two trades on it books a close
+        # against the AVERAGE entry of both: a take-profit on the second
+        # trade reads there as a loss when the first entered worse.
+        leg_info = (position or {}).get(leg) or {}
+        size = float(leg_info.get('contract_size') or 0) or None
+        opens = [r for r in rows if r.get('entry') == 'open']
+        sign = -1.0 if str((opens[0] if opens else {}).get('side') or
+                           leg_info.get('side') or '').lower() == 'sell' \
+            else 1.0
+        if size and out['open_price'] and out['close_price']:
+            out['gross'] = round((out['close_price'] - out['open_price']) *
+                                 out['close_volume'] * size * sign, 6)
+        else:
+            out['gross'] = None
+        # What OKX booked on the closing fills (against its average).
+        out['okx_booked'] = round(sum(float(r.get('profit') or 0)
+                                      for r in rows
+                                      if r.get('entry') == 'close'), 6)
         out['fees'] = round(-sum(float(r.get('fee') or 0) for r in rows), 6)
         out['maker'] = sum(1 for r in rows if r.get('order_type') == 'maker')
         out['taker'] = sum(1 for r in rows if r.get('order_type') == 'taker')
@@ -1489,9 +1507,13 @@ def okx_exit(position, fills_by_leg):
         if not need or out['close_volume'] + 1e-9 < need:
             complete = False
         legs[leg] = out
-    gross = round(sum(l['gross'] for l in legs.values()), 6)
+    if any(l['gross'] is None for l in legs.values()):
+        complete = False
+    gross = round(sum(l['gross'] or 0.0 for l in legs.values()), 6)
     fees = round(sum(l['fees'] for l in legs.values()), 6)
     return {'legs': legs, 'gross': gross, 'fees': fees,
             'net': round(gross - fees, 6), 'complete': complete,
+            'okx_booked': round(sum(l['okx_booked'] for l in legs.values()),
+                                6),
             'maker': sum(l['maker'] for l in legs.values()),
             'taker': sum(l['taker'] for l in legs.values())}
