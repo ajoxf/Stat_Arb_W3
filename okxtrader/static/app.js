@@ -1913,6 +1913,36 @@
   //: Before the engine has read the account's own rates: OKX's regular
   //: USDT-margined perpetual rates (0.020% maker, 0.050% taker).
   var SZ_REGULAR = {level: 'Regular', maker: 2.0, taker: 5.0, live: false};
+  //: OKX's FUTURES fee tiers for this account, as its own fee page shows
+  //: them (Futures tab, AED): [tier, assets from (AED), 30-day volume
+  //: from (AED), maker bp, taker bp]. A tier is reached on assets OR on
+  //: volume - whichever is higher. A negative maker fee is a rebate.
+  var SZ_TIERS = [
+    ['Regular', 0, 0, 2.0, 5.0],
+    ['VIP 1', 400001, 18000001, 1.6, 4.5],
+    ['VIP 2', 750001, 36000001, 1.5, 3.6],
+    ['VIP 3', 7500001, 180000001, 1.0, 2.8],
+    ['VIP 4', 20000001, 720000001, 0.8, 2.7],
+    ['VIP 5', 75000001, 2160000001, 0.5, 2.6],
+    ['VIP 6', 180000001, 3600000001, 0.0, 2.5],
+    ['VIP 7', 360000001, 5400000001, -0.1, 2.3],
+    ['VIP 8', 900000001, 7200000001, -0.25, 2.0],
+    ['VIP 9', 1800000001, 72000000001, -0.5, 1.5]];
+  var SZ_AED_PER_USD = 3.6725;
+
+  function sizingTier(capital, volume) {
+    /* The tier a row reaches: on its capital held as assets, or on its
+     * 30-day volume - the higher of the two, as OKX ranks it. */
+    var assets = capital * SZ_AED_PER_USD, traded = volume * SZ_AED_PER_USD;
+    var tier = SZ_TIERS[0], on = null;
+    SZ_TIERS.forEach(function (t) {
+      if (assets >= t[1] || traded >= t[2]) {
+        tier = t;
+        on = traded >= t[2] ? 'volume' : 'assets';
+      }
+    });
+    return [tier[0], 0, tier[3], tier[4], on];
+  }
   var SZ_WINS = [55, 60, 62.5, 65, 70, 75, 80];
   var SZ_LOSS_SHARES = [5, 10, 15, 20, 25, 30, 35];
 
@@ -1987,10 +2017,9 @@
     var point = position / mk.per;
     var perMonth = cfg.perDay * 30;
     var volume = position * 2 * perMonth;
-    // The fees of the account's OWN tier, as OKX reports it - not a
-    // table: a tier the account has not reached is not its price.
-    var fee = mk.fee || SZ_REGULAR;
-    var tier = [fee.level, 0, fee.maker, fee.taker];
+    // The tier THIS row reaches - its volume or its capital - from the
+    // account's own OKX futures fee table.
+    var tier = sizingTier(capital, volume);
     var takerShare = (100 - cfg.makerPct) / 100;
     var perTradeVolume = position * 2;
     var fees = perTradeVolume * ((1 - takerShare) * tier[2] +
@@ -2500,7 +2529,8 @@
     var ex = sizingRow(100e3, cfg, mk);
     html += '<div class="sz-sum">At $100k capital: target <b>+' +
       usd(ex.target) + '</b> net, stop <b>−' + usd(ex.stop) +
-      '</b> all in, fees <b>' + usd(ex.fees) + '</b> a trade (' +
+      '</b> all in, fees <b>' + (ex.fees < 0 ? '\u2212' + usd(-ex.fees) +
+        ' (a rebate)' : usd(ex.fees)) + '</b> a trade (' +
       (ex.feePts || 0).toFixed(1) + ' pts) → the spread moves <b>' +
       (ex.targetPts || 0).toFixed(1) + ' pts</b> to the target, <b>' +
       (ex.stopPts || 0).toFixed(1) + ' pts</b> to the stop' +
@@ -2552,9 +2582,14 @@
         (r.stopPts || 0).toFixed(1) + '</td><td>' + (r.volume >= 1e9
           ? '$' + (r.volume / 1e9).toFixed(2) + 'B'
           : '$' + Math.round(r.volume / 1e6).toLocaleString('en-US') + 'M') +
-        '</td><td>' + escapeHtml(r.tier[0]) + '</td><td>' +
-        fmt(r.tier[2], 1) + ' / ' + fmt(r.tier[3], 1) + '</td><td>' +
-        usd(r.fees) + '</td><td class="' + beCls +
+        '</td><td title="' + escapeHtml(r.tier[4]
+          ? 'reached on its ' + r.tier[4] : 'below VIP 1') + '">' +
+        escapeHtml(r.tier[0]) + (r.tier[4] ? ' <small>(' +
+          escapeHtml(r.tier[4]) + ')</small>' : '') + '</td><td>' +
+        fmt(r.tier[2], 2).replace(/(\.\d)0$/, '$1') + ' / ' +
+        fmt(r.tier[3], 1) + '</td><td>' +
+        (r.fees < 0 ? '\u2212' + usd(-r.fees) + ' <small>rebate</small>'
+         : usd(r.fees)) + '</td><td class="' + beCls +
         '">' + (r.breakEven === null ? DASH : r.breakEven.toFixed(1) + '%') +
         '</td><td class="' + cls + '">' + (r.month >= 0 ? '+' : '−') +
         k(r.month) + '</td><td class="' + cls + '">' +
@@ -2568,9 +2603,13 @@
     html += '</tbody></table></div><div class="sz-notes">' +
       '<b>Target</b> is the profit after every cost; <b>Stop</b> is the ' +
       'whole loss, costs included. <b>Fees</b> follow the maker / taker ' +
-      'mix at this account’s own OKX fee tier' + (mk.fee && mk.fee.live
-        ? '' : ' (not read yet: the regular rates)') + ', the rates OKX ' +
-      'reports for it - when OKX moves the account up a tier, they follow. ' +
+      'mix at the tier each row reaches on OKX’s futures fee table for ' +
+      'this account: Regular 2.0 / 5.0 bp below 18M AED of 30-day volume ' +
+      'and 400k AED of assets, down to VIP 9 (−0.5 / 1.5 bp) - on volume ' +
+      'or assets, whichever is higher, at 3.6725 AED a dollar. A ' +
+      'negative maker fee is a rebate. The volume tier comes once a ' +
+      'month at that volume is behind it; the first month pays the tier ' +
+      'the account is on. ' +
       'They set how far the spread must ' +
       'move: target + fees to win, stop − fees before the stop. ' +
       '<b>Break-even win</b> = stop ÷ (target + stop). <b>Stop move ' +
@@ -6800,9 +6839,11 @@
     node.querySelector('.monitor-note').textContent =
       state.monitorTab === 'sizing'
       ? 'A planning table, worked out here from the live prices, beta and ' +
-        'leverage of the ETH vs BTC ladder, and the fees of this ' +
-        'account\u2019s own OKX tier. Target is the profit after every cost; ' +
-        'stop is the whole loss. Nothing here sends an order.'
+        'leverage of the ETH vs BTC ladder. Fees: the tier each row reaches ' +
+        'on OKX\u2019s futures table (30-day volume or assets, at 3.6725 ' +
+        'AED a dollar), once a month at that volume is behind it. Target ' +
+        'is the profit after every cost; stop is the whole loss. Nothing ' +
+        'here sends an order.'
       : state.monitorTab === 'mirror'
       ? 'The Algo\u2019s trades, copied into each follower account at its ' +
         'multiple, and closed when the trade closes. Set in config.json ' +
