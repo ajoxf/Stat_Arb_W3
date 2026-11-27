@@ -6727,6 +6727,14 @@
         if (e.target.classList.contains('an-capital')) {
           saveCapital(e.target.value);
         }
+        if (e.target.classList.contains('an-track')) {
+          fetch('/api/settings', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({fields: {TRACK_RECORD_FROM:
+                                           e.target.value || ''}})
+          }).then(function () { loadAnalysis(true); })
+            .catch(function () { loadAnalysis(true); });
+        }
         if (e.target.classList.contains('an-zone-days')) {
           state.zoneDays = Number(e.target.value);
           state.zoneDate = '';          // a range and a day are exclusive
@@ -9015,7 +9023,16 @@ function anHeld(seconds) {
       '">' + (anBalanceCapital() ? ' <small class="hint" title="Nothing ' +
         'typed: the balance OKX holds now (the equity of the accounts ' +
         'the ladders trade) is the capital. Type a figure to fix it ' +
-        'instead.">= account balance</small>' : '') + '</label> \u00b7 <label title="Show the money each trade made, ' +
+        'instead.">= account balance</small>' : '') + '</label>' +
+      // THE TRACK RECORD'S START: the testing before it is set aside -
+      // said in one line, and in no statistic. Saved as the
+      // TRACK_RECORD_FROM setting; blank = the whole record.
+      ' \u00b7 <label title="The day the track record starts (UTC). ' +
+      'Trades opened before it were testing: they are left out of every ' +
+      'statistic here and on the reports, and said in one line.">Track ' +
+      'record from <input class="an-track" type="date" value="' +
+      escapeHtml((a && a.track_record_from) || '') + '"></label>' +
+      ' \u00b7 <label title="Show the money each trade made, ' +
       'mask it with dots, or leave the column out - for a screen or a ' +
       'report that others see. The percentages stay.">Net P&amp;L ' +
       '<select class="an-pnl">' + [['show', 'show'], ['mask', 'mask'],
@@ -9031,6 +9048,13 @@ function anHeld(seconds) {
       reportLink('client', 'Client report', 'Returns only - no ladder, ' +
         'instrument or count of trades - to share with a client') +
       '</div>';
+    if (a && a.testing) {
+      html += '<p class="hint an-testing">Track record from <b>' +
+        escapeHtml(a.track_record_from) + '</b>. Before it, ' +
+        a.testing.trades + ' testing trade(s), ' + a.testing.wins +
+        ' won, net ' + money(a.testing.net) + ' - left out of every ' +
+        'figure below and on the reports.</p>';
+    }
     if (a === null) {
       return html + '<p class="hint">reading the record\u2026</p></div>';
     }
@@ -9212,17 +9236,21 @@ function anHeld(seconds) {
              s.capital ? 'net P&L \u00f7 the ' + money(s.capital) +
                ' capital managed' : 'set the capital you manage above') +
       (function () {
-        var r = a.risk || {};
+        var r = a.performance || {};
         function two(x) { return x === null || x === undefined ? DASH
           : fmt(x, 2); }
+        function pc(x) { return x === null || x === undefined ? DASH
+          : fmt(x, 2) + '%'; }
         return anTile('Sharpe \u00b7 Sortino', two(r.sharpe) + ' \u00b7 ' +
-          two(r.sortino), '', 'Return per unit of risk. On capital, by ' +
-          'day (' + (r.days || 0) + ' days, no-trade days included), ' +
-          'annualised by \u221a365, risk-free 0. Per trade on margin (' +
-          (r.trades || 0) + ' trades): ' + two(r.trade_sharpe) +
-          ' \u00b7 ' + two(r.trade_sortino) + ', average ' +
-          (r.avg_on_margin === null || r.avg_on_margin === undefined ? DASH
-            : fmt(r.avg_on_margin, 2) + '%') + ' on margin.');
+          two(r.sortino), '', 'Return per unit of risk: daily returns on ' +
+          'the account\u2019s equity (' + (r.days || 0) + ' days, no-trade ' +
+          'days included), annualised by \u221a365, risk-free 0. ' +
+          'Standard error \u00b1' + two(r.sharpe_se) +
+          ((r.days || 0) < 90 ? ' - under 90 days, indicative only' : '') +
+          '. Time-weighted return ' + pc(r.twr) + ', max drawdown ' +
+          pc(r.max_dd_pct) + ' of the equity\u2019s peak; on margin, ' +
+          'weighted ' + pc(r.margin_weighted) + ', median trade ' +
+          pc(r.median_on_margin) + '.');
       })() +
       anTile('Capital used', s.capital_used_avg === null ||
                s.capital_used_avg === undefined ? DASH

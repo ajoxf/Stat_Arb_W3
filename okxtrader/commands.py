@@ -29,6 +29,14 @@ from .config import _clean_max_positions
 from .models import OrderType, OvernightMode, TimeInForce
 
 
+def _track_record_date(value):
+    """'YYYY-MM-DD' (a real date) or '' - anything else is refused."""
+    text = str(value or '').strip()
+    if text:
+        time.strptime(text, '%Y-%m-%d')
+    return text
+
+
 class CommandLog:
     """Append-only commands, written by the web process."""
 
@@ -323,6 +331,7 @@ class CommandRunner:
         'REFUSE_SHARED_ACCOUNT': lambda v: bool(v),
         'TP_TARGET_PCT_OF_MARGIN': lambda v: max(0.0, float(v)),
         'CAPITAL_MANAGED': lambda v: max(0.0, float(v or 0.0)),
+        'TRACK_RECORD_FROM': _track_record_date,
         'RECENTRE_SEC': lambda v: max(0.0, min(300.0, float(v))),
         'REPEG_DEAD_BAND_TICKS': float,
         'MAX_QUOTE_AGE_SEC': float,

@@ -372,6 +372,11 @@ DEFAULT_SETTINGS = {
     #: capital it used are read against it there; 0 = not set, and
     #: those columns are a dash. Nothing is sized or sent from it.
     'CAPITAL_MANAGED': 0.0,
+    #: THE TRACK RECORD'S START, a UTC date 'YYYY-MM-DD': trades opened
+    #: before it were the testing period - the reports and the Analysis
+    #: tab say what it was in one line and leave it out of every
+    #: statistic. '' = the whole record is the track record.
+    'TRACK_RECORD_FROM': '',
     #: How often BTC.D (Bitcoin's share of the crypto market, from
     #: CoinGecko) is read for the Algo panel and Telegram, in seconds.
     #: 0 = not read at all. A reading only: nothing is decided from it.

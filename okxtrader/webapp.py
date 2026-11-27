@@ -17,9 +17,10 @@ Two rules from the spec shape the endpoints here:
   response body, for the panel to print.
 """
 
+import calendar
 import datetime
-import logging
 import json
+import logging
 import os
 import re
 import secrets
@@ -328,6 +329,41 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
             return maker(key, secret, passphrase, demo)
         return OKXClient(key, secret, passphrase, demo=demo)
 
+    def track_record_since(raw):
+        """The track record's start as a UTC timestamp, from the
+        TRACK_RECORD_FROM setting; None when it is not set."""
+        text = str((raw.get('settings') or {}).get('TRACK_RECORD_FROM')
+                   or '').strip()
+        if not text:
+            return None
+        try:
+            return float(calendar.timegm(time.strptime(text, '%Y-%m-%d')))
+        except ValueError:
+            return None
+
+    def track_record(raw, positions, start, capital, capital_source):
+        """(live positions, testing summary, period start, equity at the
+        start): the trades before the track record's start set aside as
+        the testing period, and the equity the time-weighted return is
+        chained from - the balance now less everything closed since the
+        period began, where the capital IS the balance."""
+        since = track_record_since(raw)
+        live, test = analysis.split_track_record(positions, since)
+        period_start = start
+        if since is not None and (period_start is None
+                                  or since > period_start):
+            period_start = since
+        if period_start is None:
+            opened = [p.get('opened_at') for p in live if p.get('opened_at')]
+            period_start = min(opened) if opened else None
+        equity = capital
+        if capital and capital_source == 'balance':
+            closed = sum(float(p.get('realized_pnl') or 0.0) for p in live
+                         if p.get('closed_at') is not None)
+            equity = capital - closed
+        return (live, analysis.testing_summary(test, since), period_start,
+                equity)
+
     def desk_capital(raw):
         """THE CAPITAL returns are read against: the CAPITAL_MANAGED
         setting when one is set, otherwise the BALANCE OKX holds now -
@@ -579,6 +615,15 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
         if unknown:
             return jsonify({'ok': False,
                             'error': 'not a setting: ' + ', '.join(unknown)}), 400
+        if 'TRACK_RECORD_FROM' in fields:
+            text = str(fields.get('TRACK_RECORD_FROM') or '').strip()
+            try:
+                if text:
+                    time.strptime(text, '%Y-%m-%d')
+            except ValueError:
+                return jsonify({'ok': False, 'error': 'the track record '
+                                'starts on a date: YYYY-MM-DD'}), 400
+            fields['TRACK_RECORD_FROM'] = text
         raw = cfg.load_raw(config_path)
         raw.setdefault('settings', {}).update(fields)
         cfg.save_raw(config_path, raw)
@@ -748,7 +793,12 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
         names = {key: (pair or {}).get('name') or key
                  for key, pair in (raw.get('pairs') or {}).items()}
         capital, capital_source = desk_capital(raw)
-        body = analysis.report(positions, events, now=now, capital=capital)
+        positions, testing, period_start, start_equity = track_record(
+            raw, positions, start, capital, capital_source)
+        body = analysis.report(positions, events, now=now, capital=capital,
+                               start_equity=start_equity,
+                               period_start=period_start)
+        body['testing'] = testing
         body.setdefault('summary', {})['capital_source'] = capital_source
         analysis.number_trades(body, analysis.trade_numbers(
             db.positions_between(None, None)))
@@ -789,11 +839,19 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
                 if p.get('closed_at') is not None
                 and (start is None or p['closed_at'] >= start)]
             closed, _fills, _bills = okx_net(db, closed, now)
+            # The CLIENT sees the track record only: the testing period
+            # is not theirs to be shown.
+            since = track_record_since(raw)
+            closed = [p for p in closed if since is None
+                      or (p.get('opened_at') or 0) >= since]
             base, base_source = capital, capital_source
             if capital_source == 'balance' and capital:
                 base = start_capital(capital, closed)
                 base_source = 'balance at the start'
-            client = analysis.report(closed, now=now, capital=base)
+            client_start = start if since is None else max(start or since,
+                                                            since)
+            client = analysis.report(closed, now=now, capital=base,
+                                     period_start=client_start)
             client.setdefault('summary', {})['capital_source'] = base_source
             page = trade_report.render_client(
                 client, days, now, logo=trade_report.logo_html(folder),
@@ -1346,8 +1404,14 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
         names = {key: (pair or {}).get('name') or key
                  for key, pair in (raw.get('pairs') or {}).items()}
         capital, capital_source = desk_capital(raw)
+        positions, testing, period_start, start_equity = track_record(
+            raw, positions, start, capital, capital_source)
         body = analysis.report(positions, events, shadows, excursions, now,
-                               capital=capital)
+                               capital=capital, start_equity=start_equity,
+                               period_start=period_start)
+        body['testing'] = testing
+        body['track_record_from'] = (raw.get('settings') or {}).get(
+            'TRACK_RECORD_FROM') or ''
         body.setdefault('summary', {})['capital_source'] = capital_source
         # TRADE NO, over the whole record: a trade keeps its number in
         # every window and on every ladder filter.

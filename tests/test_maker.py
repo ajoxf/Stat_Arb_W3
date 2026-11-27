@@ -486,3 +486,47 @@ def test_a_close_with_one_leg_done_crosses_the_other_after_five_seconds(
     assert position.closed_at is not None
     assert desk.sim.positions == {} and _live(desk.sim) == []
     assert '5s' in (closes.done[0].get('note') or '')
+
+
+def test_with_two_trades_on_the_exit_closes_its_own_trade_not_the_first(
+        desk, closes):
+    """Two trades on the SAME instruments - OKX holds them as one
+    position per instrument. The second trade's take-profit closes the
+    SECOND trade: its own tickets, its own size. The first stays on,
+    tickets and all, at OKX and on the desk. Neither FIFO nor LIFO: the
+    trade whose exit fired."""
+    first = _open(desk)
+    second = _open(desk)
+    first_tickets = {k: list(getattr(first, 'leg_' + k).position_tickets)
+                     for k in 'ab'}
+    second_tickets = {k: list(getattr(second, 'leg_' + k).position_tickets)
+                      for k in 'ab'}
+    assert not set(first_tickets['a']) & set(second_tickets['a'])
+    held_before = {k: dict(v) for k, v in desk.sim.positions.items()}
+
+    closes.start(desk.pair, second, desk.md(), 'Algo: profit target')
+    job = closes.jobs[second.position_id]
+    # Every closing order names one of the SECOND trade's tickets.
+    for key, leg in job.legs.items():
+        named = {o['pos_ticket'] for o in leg['orders'].values()}
+        assert named == {int(t) for t in second_tickets[key]}
+    _fill_close(desk, closes, second)
+    desk.clock.t += 1
+    closes.step(desk.pair, desk.md())
+    assert closes.done[-1]['ok']
+    assert second.closed_at is not None
+    assert first.closed_at is None and first.is_open
+    # The first trade's tickets are still on the books, at full size.
+    ledger = desk.broker.ledger['positions']
+    for key in 'ab':
+        for t in first_tickets[key]:
+            assert str(t) in ledger
+            assert ledger[str(t)]['volume'] == pytest.approx(
+                getattr(first, 'leg_' + key).volume)
+        for t in second_tickets[key]:
+            assert str(t) not in ledger
+    # ...and OKX - one position per instrument and side, averaged -
+    # holds exactly the first trade's size.
+    assert set(desk.sim.positions) == set(held_before)
+    for key, row in desk.sim.positions.items():
+        assert row['pos'] == pytest.approx(held_before[key]['pos'] / 2)

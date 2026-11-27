@@ -1277,14 +1277,20 @@ def risk_ratios(trips, capital=0.0, now=None):
 
 
 def report(positions, events=(), shadows=(), excursions=None, now=0.0,
-           capital=0.0):
+           capital=0.0, start_equity=None, period_start=None):
     """Everything the tab shows, from what is recorded. `capital`: what
-    the trader manages (CAPITAL_MANAGED), 0 when not set."""
+    the trader manages (CAPITAL_MANAGED), 0 when not set. `start_equity`:
+    the account's equity when the period began, which the time-weighted
+    return is chained from (the capital when not given); `period_start`:
+    when the period began, so its quiet first days count as days."""
     positions = list(positions or ())
     entry_z, exit_z = algo_z(events)
     trips = journal(positions, entry_z, exit_z, capital)
+    base = start_equity if start_equity else capital
     return {'summary': summary(positions, capital),
             'risk': risk_ratios(trips, capital, now),
+            'performance': performance(trips, base, now, period_start),
+            'period_start': period_start, 'start_equity': base,
             'drawdown': drawdown(positions, capital),
             'stop_study': stop_study(positions, capital),
             'excursion': excursion_rows(positions),
@@ -1517,3 +1523,185 @@ def okx_exit(position, fills_by_leg):
                                 6),
             'maker': sum(l['maker'] for l in legs.values()),
             'taker': sum(l['taker'] for l in legs.values())}
+
+
+def _median(values):
+    values = sorted(v for v in values if v is not None)
+    n = len(values)
+    if not n:
+        return None
+    mid = n // 2
+    return values[mid] if n % 2 else (values[mid - 1] + values[mid]) / 2.0
+
+
+def daily_returns(trips, start_equity, first_day=None, last_day=None):
+    """[(UTC day, P&L, return)] from the first day to the last, each
+    day's closed net over the EQUITY at the start of that day (the
+    starting equity plus everything closed before it) - the returns a
+    time-weighted return is chained from. A day with no trade is a
+    return of 0: the capital was still there."""
+    closed = [t for t in trips or () if t.get('pnl') is not None
+              and t.get('closed_at') is not None]
+    if not closed or not start_equity or start_equity <= 0:
+        return []
+    by_day = {}
+    for t in closed:
+        day = int(t['closed_at'] // 86400)
+        by_day[day] = by_day.get(day, 0.0) + t['pnl']
+    first = min(by_day) if first_day is None else min(first_day, min(by_day))
+    last = max(by_day) if last_day is None else max(last_day, max(by_day))
+    equity, out = float(start_equity), []
+    for day in range(first, last + 1):
+        pnl = by_day.get(day, 0.0)
+        out.append((day, pnl, pnl / equity if equity > 0 else 0.0))
+        equity += pnl
+    return out
+
+
+def sharpe_annual(returns, per_year=365.0):
+    """(Sharpe, Sortino, standard error of the Sharpe), annualised from
+    daily returns, risk-free 0. The standard error is Lo's (2002):
+    sqrt((1 + SR^2 / 2) / n) per day, annualised - with a few weeks of
+    days it is as large as the Sharpe itself, and the reader is told."""
+    import math
+    n = len(returns)
+    sharpe, sortino = _ratios(returns, math.sqrt(per_year))
+    if sharpe is None:
+        return None, sortino, None
+    daily = sharpe / math.sqrt(per_year)
+    se = math.sqrt((1.0 + daily * daily / 2.0) / n) * math.sqrt(per_year)
+    return sharpe, sortino, round(se, 2)
+
+
+def performance(trips, start_equity, now=None, period_start=None):
+    """THE STATISTICS AN ALLOCATOR READS, on the trades given:
+
+    - RETURNS on the account, TIME-WEIGHTED: each day's net over the
+      equity at the start of that day, chained. Not annualised under a
+      year (GIPS: a part-year return is never annualised).
+    - RISK: volatility and Sharpe / Sortino from those daily returns,
+      annualised by sqrt(365) (crypto trades every day), risk-free 0,
+      with the Sharpe's standard error; the deepest fall of the equity
+      from a peak, trade by trade, as a % of that peak; best and worst
+      day; the share of trading days that made money.
+    - TRADES: win rate, profit factor, expectancy (mean net a trade) and
+      the MEDIAN trade beside it - one outlier cannot carry a median -
+      the payoff ratio, and the return on margin WEIGHTED by the margin
+      each trade used (sum of net / sum of margin) with the median trade
+      on margin: a small test trade weighs what it risked.
+    """
+    import math
+    closed = sorted((t for t in trips or () if t.get('pnl') is not None
+                     and t.get('closed_at') is not None),
+                    key=lambda t: t['closed_at'])
+    out = {'trades': len(closed), 'start_equity': start_equity}
+    if not closed:
+        return out
+    first_day = int(period_start // 86400) if period_start else None
+    last_day = int(now // 86400) if now else None
+    days = daily_returns(closed, start_equity, first_day, last_day)
+    rets = [r for _d, _p, r in days]
+    if rets:
+        growth = 1.0
+        for r in rets:
+            growth *= 1.0 + r
+        out['days'] = len(rets)
+        out['twr'] = round((growth - 1.0) * 100.0, 3)
+        out['annualised'] = (round((growth ** (365.0 / len(rets)) - 1.0)
+                                   * 100.0, 2) if len(rets) >= 365
+                             else None)
+        if len(rets) >= 2:
+            mean = sum(rets) / len(rets)
+            var = sum((r - mean) ** 2 for r in rets) / (len(rets) - 1)
+            out['volatility'] = round(math.sqrt(var) * math.sqrt(365.0)
+                                      * 100.0, 2)
+        out['sharpe'], out['sortino'], out['sharpe_se'] = \
+            sharpe_annual(rets)
+        traded = [(p, r) for _d, p, r in days if p]
+        out['traded_days'] = len(traded)
+        out['positive_days'] = (round(100.0 * sum(1 for p, _r in traded
+                                                  if p > 0) / len(traded), 1)
+                                if traded else None)
+        out['best_day'] = round(max(rets) * 100.0, 3)
+        out['worst_day'] = round(min(rets) * 100.0, 3)
+        out['end_equity'] = round(start_equity + sum(p for _d, p, _r
+                                                     in days), 2)
+    # Max drawdown on the EQUITY, trade by trade, as a % of its peak.
+    if start_equity and start_equity > 0:
+        equity = peak = float(start_equity)
+        worst = 0.0
+        for t in closed:
+            equity += t['pnl']
+            peak = max(peak, equity)
+            worst = max(worst, (peak - equity) / peak if peak > 0 else 0.0)
+        out['max_dd_pct'] = round(worst * 100.0, 3)
+        if worst > 0 and out.get('twr') is not None:
+            out['return_over_dd'] = round(out['twr'] / (worst * 100.0), 2)
+    pnls = [t['pnl'] for t in closed]
+    wins = [p for p in pnls if p > 0]
+    losses = [p for p in pnls if p <= 0]
+    out['win_rate'] = round(100.0 * len(wins) / len(pnls), 1)
+    out['profit_factor'] = (round(sum(wins) / -sum(losses), 2)
+                            if losses and sum(losses) < 0 else None)
+    out['expectancy'] = round(sum(pnls) / len(pnls), 2)
+    out['median_trade'] = round(_median(pnls), 2)
+    out['payoff'] = (round((sum(wins) / len(wins)) /
+                           -(sum(losses) / len(losses)), 2)
+                     if wins and losses and sum(losses) < 0 else None)
+    based = [t for t in closed if t.get('margin')]
+    used = sum(float(t['margin']) for t in based)
+    out['margin_weighted'] = (round(sum(t['pnl'] for t in based) / used
+                                    * 100.0, 3) if used else None)
+    out['median_on_margin'] = (None if not based else round(_median(
+        [t.get('pct_margin') for t in based]), 3))
+    held = [t.get('held_sec') for t in closed if t.get('held_sec')]
+    out['median_held'] = _median(held)
+    return out
+
+
+def group_stats(trips, start_equity, period_start=None, now=None):
+    """One Breakdown row's risk-adjusted figures, on the SAME days and
+    the same equity as the whole: the margin-weighted return, the median
+    trade on margin, and the annualised Sharpe of its daily P&L."""
+    closed = [t for t in trips or () if t.get('pnl') is not None
+              and t.get('closed_at') is not None]
+    based = [t for t in closed if t.get('margin')]
+    used = sum(float(t['margin']) for t in based)
+    first_day = int(period_start // 86400) if period_start else None
+    last_day = int(now // 86400) if now else None
+    days = daily_returns(closed, start_equity, first_day, last_day)
+    sharpe, _sortino, se = sharpe_annual([r for _d, _p, r in days]) \
+        if len(days) >= 2 else (None, None, None)
+    return {'margin_weighted': (round(sum(t['pnl'] for t in based) / used
+                                      * 100.0, 3) if used else None),
+            'median_on_margin': (None if not based else round(_median(
+                [t.get('pct_margin') for t in based]), 3)),
+            'median_trade': (None if not closed else
+                             round(_median([t['pnl'] for t in closed]), 2)),
+            'sharpe': sharpe, 'sharpe_se': se}
+
+
+def split_track_record(positions, since):
+    """(live, testing): the trades opened on or after the track record's
+    start, and those before it - the testing period, which no statistic
+    of the track record includes. `since` None: all of it is live."""
+    rows = list(positions or ())
+    if not since:
+        return rows, []
+    live = [p for p in rows if (p.get('opened_at') or 0) >= since]
+    test = [p for p in rows if (p.get('opened_at') or 0) < since]
+    return live, test
+
+
+def testing_summary(positions, since):
+    """What the testing period was, in one line's figures."""
+    closed = [p for p in positions or () if p.get('closed_at') is not None
+              and _pnl(p) is not None]
+    if not closed:
+        return None
+    return {'since': since, 'trades': len(closed),
+            'wins': sum(1 for p in closed if _pnl(p) > 0),
+            'net': round(sum(_pnl(p) for p in closed), 2),
+            'first': min(p.get('opened_at') or p['closed_at']
+                         for p in closed),
+            'last': max(p['closed_at'] for p in closed)}

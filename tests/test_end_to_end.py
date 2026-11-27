@@ -632,8 +632,9 @@ def test_the_printable_report_covers_the_same_trade(desk, round_turn):
     assert response.status_code == 200
     page = response.get_data(as_text=True)
     assert 'Trading Report' in page and 'class="mark"' in page
-    for heading in ('Net P&amp;L', 'Return on capital', 'Return on margin',
-                    'Win rate', 'Max drawdown', 'Equity curve',
+    for heading in ('Net P&amp;L', 'Return', 'time-weighted', 'On margin',
+                    'Win rate', 'Max drawdown', 'Performance statistics',
+                    'Equity curve',
                     'Trade journal', 'Print / Save as PDF'):
         assert heading in page, heading
     assert '1 closed' in page and 'Last day' in page

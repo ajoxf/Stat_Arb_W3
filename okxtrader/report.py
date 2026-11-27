@@ -258,38 +258,135 @@ def _group(trips, key):
     return out
 
 
-def split_table(title, groups, cash=None, hide=False):
+def split_table(title, groups, cash=None, hide=False, equity=None,
+                period_start=None, now=None):
+    """One Breakdown table. Each row on the same basis as the whole:
+    its Sharpe from ITS daily P&L over the SAME days and the same
+    equity, annualised; its return on margin WEIGHTED by the margin its
+    trades used; the median trade beside the net."""
     if not groups:
         return ''
     cash = cash or money
 
-    def money_cells(g):
+    def figures(g):
+        from . import analysis
+        return analysis.group_stats(g['trips'], equity, period_start, now)
+
+    def money_cells(g, f):
         if hide:
             return ''
         return (f'<td class="{tone(g["net"])}">{cash(g["net"])}</td>'
-                f'<td class="{tone(g["net"])}">{cash(g["net"] / g["n"])}</td>'
+                f'<td class="{tone(f["median_trade"])}">'
+                f'{cash(f["median_trade"])}</td>'
                 f'<td>{cash(g["fees"], sign=False)}</td>')
-    def risk_cells(g):
-        # ON MARGIN, per trade: the like-for-like reading across ladders
-        # and sizes - average return, and Sharpe on it.
-        r = analysis_risk(g['trips'])
-        avg, sharpe = r.get('avg_on_margin'), r.get('trade_sharpe')
-        return (f'<td class="{tone(avg)}">{pct(avg)}</td>'
+
+    def risk_cells(f):
+        weighted, sharpe = f['margin_weighted'], f['sharpe']
+        return (f'<td class="{tone(weighted)}">{pct(weighted)}</td>'
                 f'<td>{DASH if sharpe is None else f"{sharpe:.2f}"}</td>')
-    rows = ''.join(
-        f'<tr><td class="l">{_e(name)}</td><td>{g["n"]}</td>'
-        f'<td>{g["wins"]} / {g["n"] - g["wins"]}</td>'
-        f'<td>{100.0 * g["wins"] / g["n"]:.1f}%</td>'
-        + money_cells(g) + risk_cells(g) +
-        f'<td>{held(g["held"] / g["n"])}</td></tr>'
-        for name, g in sorted(groups.items()))
+    rows = []
+    for name, g in sorted(groups.items()):
+        f = figures(g)
+        rows.append(
+            f'<tr><td class="l">{_e(name)}</td><td>{g["n"]}</td>'
+            f'<td>{g["wins"]} / {g["n"] - g["wins"]}</td>'
+            f'<td>{100.0 * g["wins"] / g["n"]:.1f}%</td>'
+            + money_cells(g, f) + risk_cells(f) +
+            f'<td>{held(g["held"] / g["n"])}</td></tr>')
     return (f'<table class="split"><thead><tr><th class="l">{_e(title)}</th>'
             '<th>Trades</th><th>Won / lost</th><th>Win rate</th>' +
-            ('' if hide else '<th>Net P&amp;L</th><th>Per trade</th>'
+            ('' if hide else '<th>Net P&amp;L</th><th>Median trade</th>'
                              '<th>Fees</th>') +
-            '<th>Avg on margin</th><th>Sharpe</th>'
-            '<th>Avg held</th></tr></thead><tbody>' + rows +
+            '<th>On margin<br><small>weighted</small></th>'
+            '<th>Sharpe<br><small>annualised</small></th>'
+            '<th>Avg held</th></tr></thead><tbody>' + ''.join(rows) +
             '</tbody></table>')
+
+
+def sharpe_words(perf):
+    """Under the Sharpe: what it is measured on, how sure it is, and -
+    with too few days to read much into it - that it is indicative."""
+    days = perf.get('days') or 0
+    se = perf.get('sharpe_se')
+    if perf.get('sharpe') is None:
+        return 'daily, annualised - too few days to measure'
+    words = f'daily on equity, annualised · ±{se:.2f} · {days} days'
+    return words + (' · indicative under 90 days' if days < 90 else '')
+
+
+def testing_line(testing, cash):
+    """The testing period, set aside: one line, never a statistic."""
+    if not testing:
+        return ''
+    since = time.strftime('%d %b %Y', time.gmtime(testing['since']))
+    return (f'<section class="testing"><b>Track record from {since}.</b> '
+            f'Before it, {testing["trades"]} testing trade(s) '
+            f'({testing["wins"]} won, net {cash(testing["net"])}) - '
+            'not in any figure on this report.</section>')
+
+
+def stats_panel(perf, d, gross, fees, hide, cash):
+    """PERFORMANCE STATISTICS, the way an allocator reads a track
+    record: returns, risk and trades side by side."""
+    if not perf.get('trades'):
+        return ''
+
+    def row(label, value, cls=''):
+        return (f'<tr><td class="l">{label}</td>'
+                f'<td class="{cls}">{value}</td></tr>')
+
+    def num(x, digits=2):
+        return DASH if x is None else f'{x:.{digits}f}'
+    returns = ''.join([
+        row('Return, time-weighted', pct(perf.get('twr'), 2),
+            tone(perf.get('twr'))),
+        row('Annualised', DASH if perf.get('annualised') is None
+            else pct(perf['annualised'], 1)),
+        row('Best day', pct(perf.get('best_day'), 2),
+            tone(perf.get('best_day'))),
+        row('Worst day', pct(perf.get('worst_day'), 2),
+            tone(perf.get('worst_day'))),
+        row('Days in profit', DASH if perf.get('positive_days') is None
+            else f'{perf["positive_days"]:.0f}% of '
+                 f'{perf.get("traded_days") or 0} trading days'),
+        row('Days measured', str(perf.get('days') or 0))])
+    risk = ''.join([
+        row('Sharpe, annualised', num(perf.get('sharpe')) + (
+            '' if perf.get('sharpe_se') is None
+            else f' <small>±{perf["sharpe_se"]:.2f}</small>')),
+        row('Sortino, annualised', num(perf.get('sortino'))),
+        row('Volatility, annualised', pct(perf.get('volatility'), 1)),
+        row('Max drawdown', pct(-(perf.get('max_dd_pct') or 0), 2),
+            'down' if perf.get('max_dd_pct') else ''),
+        row('Return ÷ max drawdown', num(perf.get('return_over_dd'))),
+        row('Deepest point inside a trade', DASH if d.get(
+            'open_max_pct_capital') is None
+            else pct(-d['open_max_pct_capital'], 2), 'down')])
+    trades = ''.join([
+        row('Trades · win rate', f'{perf.get("trades")} · '
+            + (DASH if perf.get('win_rate') is None
+               else f'{perf["win_rate"]:.1f}%')),
+        row('Profit factor · payoff', num(perf.get('profit_factor')) + ' · '
+            + num(perf.get('payoff'))),
+        row('On margin, weighted', pct(perf.get('margin_weighted'), 2),
+            tone(perf.get('margin_weighted'))),
+        row('Median trade on margin', pct(perf.get('median_on_margin'), 2),
+            tone(perf.get('median_on_margin'))),
+        '' if hide else row('Mean · median trade',
+                            cash(perf.get('expectancy')) + ' · '
+                            + cash(perf.get('median_trade'))),
+        row('Fees, of gross', DASH if not gross or gross <= 0
+            else f'{fees / gross * 100.0:.1f}%'),
+        row('Median time held', held(perf.get('median_held')))])
+    return ('<section class="panel stats"><h2>Performance statistics '
+            '<small>daily returns on the account\u2019s equity, '
+            'risk-free 0</small></h2><div class="cols">'
+            f'<table><thead><tr><th class="l" colspan="2">Returns</th></tr>'
+            f'</thead><tbody>{returns}</tbody></table>'
+            f'<table><thead><tr><th class="l" colspan="2">Risk</th></tr>'
+            f'</thead><tbody>{risk}</tbody></table>'
+            f'<table><thead><tr><th class="l" colspan="2">Trades</th></tr>'
+            f'</thead><tbody>{trades}</tbody></table></div></section>')
 
 
 def analysis_risk(trips):
@@ -343,50 +440,50 @@ def render(body, names=None, days=7.0, pair_key=None, now=None,
                 f'<div class="tn">{note}</div></div>')
 
     capital = s.get('capital')
-    risk = body.get('risk') or {}
+    perf = body.get('performance') or {}
+    base = perf.get('start_equity') or capital
+    sharpe_note = sharpe_words(perf)
     tiles = ''.join([
         '' if hide else
         tile('Net P&amp;L', cash(s.get('net_pnl')), tone(s.get('net_pnl')),
              'after every fee'),
-        tile('Return on capital', pct(s.get('return_on_capital')),
-             tone(s.get('return_on_capital')),
-             (f'on {money(capital, sign=False)} managed' if pnl == 'show'
-              else 'on the capital managed') if capital
-             else 'capital not set'),
-        tile('Return on margin', pct(s.get('return_on_margin')),
-             tone(s.get('return_on_margin')),
-             f'{s.get("margin_trades") or 0} trades with margin priced'),
-        tile('Sharpe · Sortino', ratio_pair(risk.get('sharpe'),
-                                            risk.get('sortino')), '',
-             f'on capital, by day, annualised · per trade on margin '
-             f'{ratio_pair(risk.get("trade_sharpe"), risk.get("trade_sortino"))}'),
-        tile('Win rate', '' if s.get('win_rate') is None
-             else f'{s["win_rate"]:.1f}%', '',
+        tile('Return', pct(perf.get('twr'), 2), tone(perf.get('twr')),
+             ('time-weighted, on ' + (money(base, sign=False)
+                                      if pnl == 'show' else 'the equity')
+              + ' at the start · ' + (
+                  f'{pct(perf["annualised"], 1)} a year'
+                  if perf.get('annualised') is not None
+                  else 'under a year: not annualised'))
+             if base else 'capital not set'),
+        tile('Sharpe · Sortino', ratio_pair(perf.get('sharpe'),
+                                            perf.get('sortino')), '',
+             sharpe_note),
+        tile('Max drawdown', DASH if perf.get('max_dd_pct') is None
+             else pct(-perf['max_dd_pct'], 2),
+             'down' if perf.get('max_dd_pct') else '',
+             'of the equity at its peak' + (
+                 f' · {cash(-d["max"])}' if d.get('max') and not hide
+                 and pnl == 'show' else '')),
+        tile('Win rate', '' if perf.get('win_rate') is None
+             else f'{perf["win_rate"]:.1f}%', '',
              f'{s.get("wins") or 0} won · {s.get("losses") or 0} lost'),
+        tile('Profit factor', DASH if perf.get('profit_factor') is None
+             else f'{perf["profit_factor"]:.2f}', '',
+             'won ÷ lost · payoff ' + (DASH if perf.get('payoff') is None
+                                       else f'{perf["payoff"]:.2f}')),
+        tile('On margin', pct(perf.get('margin_weighted'), 2),
+             tone(perf.get('margin_weighted')),
+             'weighted by the margin each trade used · median trade '
+             + pct(perf.get('median_on_margin'), 2)),
+        '' if hide else
+        tile('Median trade', cash(perf.get('median_trade')),
+             tone(perf.get('median_trade')),
+             'mean ' + cash(perf.get('expectancy')) + ' a trade'),
         tile('Trades closed', str(s.get('closed') or 0), '',
              f'{s.get("open") or 0} still open'),
-        tile('Max drawdown', DASH if d.get('max') is None
-             else (pct(-d['max'] / capital * 100.0) if hide and capital
-                   else cash(-d['max'])), 'down' if d.get('max') else '',
-             'worst fall from a peak' + (', of capital' if hide and capital
-                                         else '')),
-        tile('Deepest open DD', DASH if d.get('open_max') is None
-             else (pct(-d['open_max_pct_capital'])
-                   if hide and d.get('open_max_pct_capital') is not None
-                   else cash(-d['open_max'])), 'down' if d.get('open_max')
-             else '', 'worst point while a trade was open' + (
-                 f", {pct(-d['open_max_pct_capital'])} of capital"
-                 if d.get('open_max_pct_capital') is not None and not hide
-                 and pnl == 'show' else '')),
-        tile('Profit factor', f'{factor:.2f}' if factor else DASH, '',
-             'won ÷ lost, in money') if hide else
-        tile('Avg win / loss', f'<span class="pair">{cash(avg_win)} /</span>'
-             f' <span class="pair">{cash(avg_loss)}</span>', 'two-line',
-             'profit factor ' + (f'{factor:.2f}' if factor else DASH)),
-        '' if hide else
-        tile('Gross → fees', f'{cash(gross)}', '',
-             f'fees {cash(fees, sign=False)}'),
     ])
+    stats = stats_panel(perf, d, gross, fees, hide, cash)
+    testing = testing_line(body.get('testing'), cash)
 
     def fee_cell(t):
         fee = t.get('fee', t.get('fees'))
@@ -577,11 +674,13 @@ def render(body, names=None, days=7.0, pair_key=None, now=None,
         def axis(v):
             return ''
     curve = equity_svg(trips, cash=axis)
+    basis = dict(cash=cash, hide=hide, equity=base,
+                 period_start=body.get('period_start'), now=now)
     by_pair = split_table('Ladder', _group(
-        trips, lambda t: name(t.get('pair_key'))), cash=cash, hide=hide)
+        trips, lambda t: name(t.get('pair_key'))), **basis)
     by_who = split_table('Who traded', _group(
         trips, lambda t: 'Algo' if t.get('source') == 'ALGO' else 'Manual'),
-        cash=cash, hide=hide)
+        **basis)
     extremes = '' if hide else (
         f'<div><span>Best trade</span><b class="up">'
         f'{cash(d.get("best_trade"))}</b></div>'
@@ -621,7 +720,8 @@ for the colours.</span></div>
   <h1>Trading Report</h1><div class="sub">ETH vs BTC spread desk · OKX</div></div></div>
   <div class="meta">{meta_html}</div>
 </header>
-<section class="tiles">{tiles}</section>
+{testing}<section class="tiles">{tiles}</section>
+{stats}
 <section class="two">
   <div class="panel"><h2>Equity curve <small>running net {'' if pnl == 'show'
   else ('as a share of capital ' if capital else '')}after each closed
@@ -643,13 +743,20 @@ the fees as a share of what the spread move made (a dash where the move
 lost). <b>On margin</b>:
 net ÷ the margin both legs tied up at entry. <b>On capital</b>: net ÷
 the capital managed. <b>% of capital used</b>: the margin both legs tied
-up at entry ÷ the capital managed. <b>Max drawdown</b>: the worst fall of the running
-net from a peak, closed trades only. <b>Sharpe</b>: average return over
-its standard deviation; <b>Sortino</b>: over its downside deviation only
-(losses) - return per unit of risk, so trades of any size read on one
-scale. On capital: each day's net over the capital, days with no trade
-included, annualised by √365, risk-free 0. Per trade: each trade's net
-over its margin, not annualised. Funding is not included. Built from
+up at entry ÷ the capital managed. <b>Return</b>: time-weighted - each
+day's net ÷ the equity at the start of that day, chained; a period under
+a year is never annualised. <b>Sharpe</b> and <b>Sortino</b>: the daily
+returns' mean over their standard deviation (Sortino: over the losses'
+deviation only), days with no trade counted, annualised by √365,
+risk-free 0; ± is the Sharpe's standard error (Lo, 2002) - under 90 days
+it is wide, and the figure indicative. <b>Max drawdown</b>: the deepest
+fall of the equity from a peak, trade by trade, as a % of that peak.
+<b>On margin, weighted</b>: every trade's net ÷ every trade's margin, so
+each trade weighs what it risked; the <b>median</b> trade beside it is
+the typical one, which one outlier cannot move. <b>Profit factor</b>:
+won ÷ lost, in money; <b>payoff</b>: the average win ÷ the average loss.
+In the Breakdown, each row's Sharpe is on the same days and equity as
+the whole. Funding is not included. Built from
 the desk’s own record of fills; past results do not promise future ones.
 </footer>
 </main></body></html>"""
@@ -731,9 +838,9 @@ def render_client(body, days=7.0, now=None, logo='', desk_name='Nexus',
         '' if hide else
         tile('Net P&amp;L', cash(net), tone(net), 'after trading costs'),
         tile('Sharpe · Sortino', ratio_pair(
-            (body.get('risk') or {}).get('sharpe'),
-            (body.get('risk') or {}).get('sortino')), '',
-             'return per unit of risk, by day, annualised'),
+            (body.get('performance') or {}).get('sharpe'),
+            (body.get('performance') or {}).get('sortino')), '',
+             sharpe_words(body.get('performance') or {})),
         tile('Max drawdown', DASH if not periods
              else pct(-on_cap(fall)) if capital else cash(-fall),
              'down' if fall else '',
@@ -888,6 +995,13 @@ td.no { font-weight: 700; color: var(--navy); }
 .journal th.nw { white-space: nowrap; }
 .excursion { margin-top: 2px; }
 .returns { font-size: 12px; max-width: 760px; }
+.stats { margin: 0 0 12px; break-inside: avoid; }
+.stats .cols { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.stats table { font-size: 11px; }
+.stats td.l { color: #33404f; }
+.stats td small { color: var(--mute); }
+.testing { margin: 10px 0 0; padding: 6px 10px; font-size: 11px; background: #fff7e0;
+  border: 1px solid #f0d48a; border-radius: 3px; }
 .returns td, .returns th { padding: 5px 10px; }
 .tiles.client { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
 .tiles.client .tv { font-size: 22px; }

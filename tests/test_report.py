@@ -429,6 +429,19 @@ def test_the_reports_carry_sharpe_and_sortino():
     page = report.render(body, {'ethbtc': 'ETH vs BTC'}, 7, None,
                          1_700_100_000)
     assert 'Sharpe · Sortino' in page
-    assert '<th>Avg on margin</th><th>Sharpe</th>' in page
+    assert 'On margin<br><small>weighted</small>' in page
+    assert 'Sharpe<br><small>annualised</small>' in page
+    assert 'Performance statistics' in page
+    assert 'Avg on margin' not in page
     client = report.render_client(body, 7, 1_700_100_000)
     assert 'Sharpe · Sortino' in client
+
+
+def test_a_testing_period_is_one_line_and_in_no_figure():
+    body = _full()
+    body['testing'] = {'since': 1_699_900_000, 'trades': 4, 'wins': 1,
+                       'net': -12.5, 'first': 1, 'last': 2}
+    page = report.render(body, {'ethbtc': 'ETH vs BTC'}, 7, None,
+                         1_700_100_000)
+    assert 'Track record from' in page
+    assert '4 testing trade(s)' in page and 'not in any figure' in page

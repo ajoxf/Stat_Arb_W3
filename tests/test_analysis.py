@@ -625,3 +625,48 @@ def test_too_little_to_measure_is_a_dash_not_a_number():
                               {'pnl': 6.0, 'closed_at': 2 * 86400.0}],
                              capital=1000.0, now=2 * 86400.0)
     assert r['sharpe'] is not None and r['sortino'] is None
+
+
+def _trip(day, pnl, margin=1000.0, held=600):
+    at = day * 86400 + 3600
+    return {'pnl': pnl, 'closed_at': at, 'opened_at': at - held,
+            'held_sec': held, 'margin': margin,
+            'pct_margin': pnl / margin * 100.0}
+
+
+def test_performance_is_time_weighted_on_the_equity_day_by_day():
+    from okxtrader import analysis
+    # $10,000 at the start: +100 on day 0, nothing on day 1, -50 on day 2.
+    trips = [_trip(0, 100.0), _trip(2, -50.0)]
+    perf = analysis.performance(trips, 10_000.0, now=2 * 86400 + 7200)
+    assert perf['days'] == 3
+    # (1 + 100/10000) x (1 - 50/10100) - 1 = +0.5%
+    assert perf['twr'] == pytest.approx(0.5, abs=1e-3)
+    assert perf['annualised'] is None          # under a year: never
+    assert perf['sharpe'] is not None and perf['sharpe_se'] > 0
+    # The equity fell from its 10,100 peak to 10,050: 0.495%.
+    assert perf['max_dd_pct'] == pytest.approx(0.495, abs=1e-3)
+    assert perf['positive_days'] == 50.0 and perf['traded_days'] == 2
+
+
+def test_a_small_test_trade_weighs_what_it_risked():
+    """Margin-weighted, not averaged: a -50% loss on $100 of margin and
+    a +5% gain on $10,000 is +4.45% on what was risked - a simple
+    average of the two would say -22.5%."""
+    from okxtrader import analysis
+    trips = [_trip(0, -50.0, margin=100.0), _trip(1, 500.0, margin=10_000)]
+    perf = analysis.performance(trips, 50_000.0, now=86400 * 2)
+    assert perf['margin_weighted'] == pytest.approx(4.455, abs=1e-3)
+    assert perf['median_trade'] == 225.0
+    assert perf['profit_factor'] == 10.0
+
+
+def test_the_testing_period_is_set_aside_by_its_start():
+    from okxtrader import analysis
+    rows = [{'opened_at': 100.0, 'closed_at': 150.0, 'realized_pnl': -5.0},
+            {'opened_at': 300.0, 'closed_at': 350.0, 'realized_pnl': 9.0}]
+    live, test = analysis.split_track_record(rows, 200.0)
+    assert [r['opened_at'] for r in live] == [300.0]
+    summary = analysis.testing_summary(test, 200.0)
+    assert summary['trades'] == 1 and summary['net'] == -5.0
+    assert analysis.split_track_record(rows, None) == (rows, [])
