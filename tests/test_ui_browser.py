@@ -7472,6 +7472,12 @@ def test_the_sizing_tab_is_the_sheet_live_with_a_win_rate_toggle(page):
     # 420) / 346 = 3.1 pts to the stop.
     assert hundred.nth(8).text_content() == '3.8'
     assert hundred.nth(9).text_content() == '3.1'
+    # 25 trading days a month: 75 trades, +4.5% of capital, and the
+    # $100k row trades $1.2M x 2 x 75 = $180M.
+    typed('days', '25', '75 trades a month')
+    assert '+4.5% of capital' in page.text_content('.monitor .sz-sum')
+    assert rows.nth(5).locator('td').nth(10).text_content() == '$180M'
+    typed('days', '30', '90 trades a month')
     # 30% free capital: $70k margin at 20x.
     typed('makerPct', '100', '+5.4% of capital')
     typed('freePct', '30', '+14.2% of capital')

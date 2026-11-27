@@ -1948,7 +1948,7 @@
 
   function sizingSettings() {
     /* Every assumption on the Sizing tab, the trader's to change. */
-    var d = {win: 65, perDay: 3, freePct: 40, lev: 0,
+    var d = {win: 65, perDay: 3, days: 30, freePct: 40, lev: 0,
              target: 1.5, targetBase: 'margin',
              stop: 1.5, stopBase: 'capital', makerPct: 100};
     return Object.assign(d, state.sizing || {});
@@ -2015,7 +2015,9 @@
     var margin = capital * (100 - cfg.freePct) / 100;
     var position = margin * lev;
     var point = position / mk.per;
-    var perMonth = cfg.perDay * 30;
+    // Trading DAYS a month: OKX's tier is on 30 calendar days, and a
+    // month of 25 trading days trades 25 days' volume in them.
+    var perMonth = cfg.perDay * (cfg.days || 30);
     var volume = position * 2 * perMonth;
     // The tier THIS row reaches - its volume or its capital - from the
     // account's own OKX futures fee table.
@@ -2379,7 +2381,8 @@
       ['Stop', cfg.stop + '% of ' + cfg.stopBase],
       ['Maker / taker fills', cfg.makerPct + '% / ' + (100 - cfg.makerPct) +
         '%'],
-      ['Trades a day', cfg.perDay + ' (' + cfg.perDay * 30 + ' a month)'],
+      ['Trades a day', cfg.perDay + ' on ' + (cfg.days || 30) +
+        ' trading days (' + cfg.perDay * (cfg.days || 30) + ' a month)'],
       ['Leverage', lev + 'x'],
       ['Prices', mk.live ? 'ETH ' + mk.eth.toFixed(2) + ', BTC ' +
         Math.round(mk.btc).toLocaleString('en-US') : 'no live price: ETH ' +
@@ -2465,7 +2468,7 @@
   function sizingPane() {
     var cfg = sizingSettings();
     var mk = sizingMarket();
-    var perMonth = cfg.perDay * 30;
+    var perMonth = cfg.perDay * (cfg.days || 30);
     function k(x) {
       var a = Math.abs(x);
       // A million and up in M: "$1.25M", not "$1,250k".
@@ -2517,6 +2520,7 @@
       input('makerPct', 'Maker fills', 5, '% (taker ' +
         (100 - cfg.makerPct) + '%)') +
       input('perDay', 'Trades / day', 1) +
+      input('days', 'Trading days / month', 1) +
       '<label class="sz-field"><span>Leverage</span><input class="sz-input" ' +
         'id="sz-lev" type="number" min="1" step="1" data-key="lev" value="' +
         (cfg.lev || '') + '" placeholder="' + mk.lev + '">x</label>' +
@@ -2616,7 +2620,8 @@
       'in red:</b> the fees alone use up the stop. ' +
       '<b>$ / point:</b> P&amp;L ' +
       'for one point of spread (−20 → −19). <b>Volume</b> = ' +
-      'position × 2 × trades. <b>Not included:</b> slippage on stops, ' +
+      'position × 2 (open and close) × trades a day × trading days a ' +
+      'month. <b>Not included:</b> slippage on stops, ' +
       'funding.' +
       '</div></div>';
     return html;
@@ -6754,6 +6759,8 @@
             else if (!isFinite(v) || v < 0) { return; }
             if ((key === 'win' || key === 'freePct' || key === 'makerPct') &&
                 v > 100) { v = 100; }
+            // A month has 1 to 31 trading days.
+            if (key === 'days') { v = Math.min(31, Math.max(1, Math.round(v))); }
             next[key] = v;
           }
           state.sizing = next;
