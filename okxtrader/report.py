@@ -108,6 +108,19 @@ def size(value):
     return f'{value:,.2f}'.rstrip('0').rstrip('.')
 
 
+def window_text(window):
+    """'20 Nov 2026 14:05 – 27 Nov 2026 19:10 UTC (7.2 days) · ' - the
+    time frame a figure covers, or '' when it is not known."""
+    if not window or window[0] is None or window[1] is None:
+        return ''
+    since, until = window
+    stamp = '%d %b %Y %H:%M'
+    days = max(0.0, (until - since) / 86400.0)
+    return (f'<b>{time.strftime(stamp, time.gmtime(since))} – '
+            f'{time.strftime(stamp, time.gmtime(until))} UTC</b> '
+            f'({days:.1f} days) · ')
+
+
 def volume_html(v, pnl='show'):
     """VOLUME TRADED over the period: every deal, the ones that opened a
     position and the ones that closed one, instrument by instrument -
@@ -147,7 +160,8 @@ def volume_html(v, pnl='show'):
         rows.append(row('Opening deals', 'open', v['open'], None, True))
         rows.append(row('Closing deals', 'close', v['close'], None, True))
     rows.append(row('Total', 'both', v, None, True))
-    return ('<section class="panel jr"><h2>Volume traded <small>every '
+    return ('<section class="panel jr"><h2>Volume traded <small>'
+            + window_text(v.get('window')) + 'every '
             'deal, opening and closing: 1 lot bought and sold to close is 2 '
             'lots · notional = lots × contract size × price</small></h2>'
             '<table class="journal volume"><thead><tr>'
@@ -338,8 +352,9 @@ def stats_panel(perf, d, gross, fees, hide, cash):
     def num(x, digits=2):
         return DASH if x is None else f'{x:.{digits}f}'
     returns = ''.join([
-        row('Return, time-weighted', pct(perf.get('twr'), 2),
-            tone(perf.get('twr'))),
+        row('Return, time-weighted', pct(perf.get('twr'), 2) + (
+            f' <small>over {perf["days"]} days</small>'
+            if perf.get('days') else ''), tone(perf.get('twr'))),
         row('Annualised', DASH if perf.get('annualised') is None
             else pct(perf['annualised'], 1)),
         row('Best day', pct(perf.get('best_day'), 2),
@@ -448,7 +463,8 @@ def render(body, names=None, days=7.0, pair_key=None, now=None,
         tile('Net P&amp;L', cash(s.get('net_pnl')), tone(s.get('net_pnl')),
              'after every fee'),
         tile('Return', pct(perf.get('twr'), 2), tone(perf.get('twr')),
-             ('time-weighted, on ' + (money(base, sign=False)
+             (f'over {perf.get("days") or 0} days, time-weighted, on '
+              + (money(base, sign=False)
                                       if pnl == 'show' else 'the equity')
               + ' at the start · ' + (
                   f'{pct(perf["annualised"], 1)} a year'
@@ -827,6 +843,9 @@ def render_client(body, days=7.0, now=None, logo='', desk_name='Nexus',
     best = max(periods, key=lambda p: p[1]) if periods else None
     worst = min(periods, key=lambda p: p[1]) if periods else None
     unit = 'month' if monthly else 'day'
+    # The DAYS the return is over: the period's own, or - the whole
+    # record - from the first trade's day to today.
+    span_days = (body.get('performance') or {}).get('days')
 
     def tile(label, value, cls='', note=''):
         return (f'<div class="tile"><div class="tl">{label}</div>'
@@ -834,7 +853,9 @@ def render_client(body, days=7.0, now=None, logo='', desk_name='Nexus',
                 f'<div class="tn">{note}</div></div>')
     tiles = ''.join([
         tile('Return on capital', pct(ret), tone(ret),
-             'after trading costs' if capital else 'capital not set'),
+             (f'over {span_days} days, after trading costs'
+              if span_days else 'after trading costs')
+             if capital else 'capital not set'),
         '' if hide else
         tile('Net P&amp;L', cash(net), tone(net), 'after trading costs'),
         tile('Sharpe · Sortino', ratio_pair(
@@ -918,9 +939,11 @@ def render_client(body, days=7.0, now=None, logo='', desk_name='Nexus',
 <section class="panel"><h2>Returns by {unit}</h2>{table}</section>
 <footer class="notes"><b>Return</b> is the net result after trading
 costs, divided by the capital at the start of the period.
-<b>Cumulative return</b> adds each {unit}'s return. <b>Sharpe</b> is the average daily return over its
-standard deviation, <b>Sortino</b> over its downside deviation only,
-annualised. A result belongs to
+<b>Cumulative return</b> adds each {unit}'s return. <b>Sharpe</b> is the
+average daily return on the account's equity over its standard deviation,
+<b>Sortino</b> over its downside deviation only - days with no trade
+included, annualised by √365, risk-free 0; ± is its standard error, wide
+under 90 days, when the figure is indicative. A result belongs to
 the {unit} (UTC) its trade closed in. <b>Max drawdown</b>: the worst
 fall of the cumulative result from a peak, {unit} end to {unit} end.
 Funding is not included. Past results do not promise future ones.</footer>

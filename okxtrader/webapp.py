@@ -806,7 +806,10 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
         # VOLUME over the report's period, opening and closing deals
         # apart, instrument by instrument.
         try:
-            since = (start if start is not None
+            # The same window as the statistics: from the period's (or
+            # the track record's) start, to now.
+            since = (period_start if period_start is not None
+                     else start if start is not None
                      else min((p.get('opened_at') or now
                                for p in positions), default=now))
             deals = db.fills(pair_key=pair_key, ours_only=True,
@@ -819,6 +822,8 @@ def create_app(status_path='status.json', command_path='commands.jsonl',
                 deals, sizes, now, date='period',
                 date_ms=(int(since * 1000), int(now * 1000) + 1))[
                     'total'].get('date')
+            if body['volume']:
+                body['volume']['window'] = (since, now)
         except Exception as e:
             logging.error('volume could not be read: %s', e)
             body['volume'] = None

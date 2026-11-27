@@ -412,7 +412,10 @@ def test_the_report_carries_the_volume_opening_and_closing_apart():
     body['volume'] = analysis.notional_traded(
         deals, {('okx', 'BTC-USDT-SWAP'): 0.01}, now, date='period',
         date_ms=(int((now - 3600) * 1000), int(now * 1000)))['total']['date']
+    body['volume']['window'] = (now - 7 * 86400, now)
     page = report.render(body, {'ethbtc': 'ETH vs BTC'}, 7, None, now)
+    # The time frame it covers, said in its heading.
+    assert '08 Jan 2027 08:00 – 15 Jan 2027 08:00 UTC</b> (7.0 days)' in page
     section = page[page.index('Volume traded'):]
     for word in ('Opening deals', 'Closing deals', 'BTC-USDT-SWAP',
                  '1 lot bought and sold to close is 2 lots',
