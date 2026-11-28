@@ -1610,6 +1610,10 @@ def performance(trips, start_equity, now=None, period_start=None):
         out['annualised'] = (round((growth ** (365.0 / len(rets)) - 1.0)
                                    * 100.0, 2) if len(rets) >= 365
                              else None)
+        # The pace, compounded to a month and a year - a projection of
+        # the period, said as one where it is under a year.
+        out['monthly'], out['annual_pace'] = scaled_returns(
+            (growth - 1.0) * 100.0, len(rets))
         if len(rets) >= 2:
             mean = sum(rets) / len(rets)
             var = sum((r - mean) ** 2 for r in rets) / (len(rets) - 1)
@@ -1705,3 +1709,20 @@ def testing_summary(positions, since):
             'first': min(p.get('opened_at') or p['closed_at']
                          for p in closed),
             'last': max(p['closed_at'] for p in closed)}
+
+
+#: Days in an average month (365.25 / 12).
+MONTH_DAYS = 30.4375
+
+
+def scaled_returns(return_pct, days):
+    """(monthly %, annualised %) from a return over `days`, compounded:
+    (1 + r) ** (30.44 / days) - 1 and (1 + r) ** (365 / days) - 1. A
+    PROJECTION of the period's pace, not a forecast; None under a day."""
+    if return_pct is None or not days or days < 1:
+        return None, None
+    growth = 1.0 + return_pct / 100.0
+    if growth <= 0:
+        return -100.0, -100.0
+    return (round((growth ** (MONTH_DAYS / days) - 1.0) * 100.0, 2),
+            round((growth ** (365.0 / days) - 1.0) * 100.0, 2))

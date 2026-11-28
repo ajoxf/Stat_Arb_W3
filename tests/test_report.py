@@ -439,7 +439,7 @@ def test_the_reports_carry_sharpe_and_sortino():
     assert 'Performance statistics' in page
     assert 'Avg on margin' not in page
     client = report.render_client(body, 7, 1_700_100_000)
-    assert 'Sharpe · Sortino' in client
+    assert 'Sharpe ratio' in client and 'Sortino' in client
 
 
 def test_a_testing_period_is_one_line_and_in_no_figure():
@@ -472,3 +472,22 @@ def test_the_client_report_carries_the_capital_deployed_each_day():
     # $1,000 deployed of the $10,000 managed.
     assert 'Capital<br><small>utilised</small>' in page
     assert '<td>10.0%</td>' in page
+
+
+def test_the_return_says_its_days_and_its_monthly_and_annual_pace():
+    import pytest
+    from okxtrader import analysis as an
+    # +1.13% over 7 days: (1.0113)^(30.4375/7) - 1 and ^(365/7) - 1.
+    month, year = an.scaled_returns(1.13, 7)
+    assert month == pytest.approx(5.00, abs=0.01)
+    assert year == pytest.approx(79.66, abs=0.01)
+    assert an.scaled_returns(None, 7) == (None, None)
+    body = _client_body()
+    page = report.render_client(body, 7, 1_700_200_000)
+    assert 'Return on capital (' in page and ' days)' in page
+    assert 'Monthly return' in page and 'Annualised return' in page
+    assert 'a projection of the pace, not a forecast' in page
+    assert 'Sharpe ratio' in page
+    assert report.pace(123456.0) == '> +10,000%'
+    assert 'Sharpe ratio' in page
+    assert report.pace(123456.0) == '> +10,000%'

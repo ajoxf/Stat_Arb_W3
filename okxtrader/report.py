@@ -88,6 +88,15 @@ def spread(x):
     return whole + '.' + frac.ljust(2, '0')
 
 
+def pace(x, places=2):
+    """A projected return: as `pct`, but past ±10,000% it says so
+    rather than print a number no one can read - a short period's pace
+    compounded to a year can run to dozens of digits."""
+    if x is not None and abs(x) >= 10000:
+        return ('> +' if x > 0 else '< −') + '10,000%'
+    return pct(x, places)
+
+
 def held(seconds):
     if seconds is None:
         return DASH
@@ -353,11 +362,18 @@ def stats_panel(perf, d, gross, fees, hide, cash):
     def num(x, digits=2):
         return DASH if x is None else f'{x:.{digits}f}'
     returns = ''.join([
-        row('Return, time-weighted', pct(perf.get('twr'), 2) + (
-            f' <small>over {perf["days"]} days</small>'
-            if perf.get('days') else ''), tone(perf.get('twr'))),
-        row('Annualised', DASH if perf.get('annualised') is None
-            else pct(perf['annualised'], 1)),
+        row('Return, time-weighted' + (f' ({perf["days"]} days)'
+                                       if perf.get('days') else ''),
+            pct(perf.get('twr'), 2), tone(perf.get('twr'))),
+        row('Monthly, compounded', pace(perf.get('monthly'), 2),
+            tone(perf.get('monthly'))),
+        row('Annualised', (pct(perf['annualised'], 1)
+                           if perf.get('annualised') is not None
+                           else pace(perf.get('annual_pace'), 1)
+                           + (f' <small>projected from {perf["days"]} '
+                              'days</small>' if perf.get('days') else '')),
+            tone(perf.get('annualised') if perf.get('annualised')
+                 is not None else perf.get('annual_pace'))),
         row('Best day', pct(perf.get('best_day'), 2),
             tone(perf.get('best_day'))),
         row('Worst day', pct(perf.get('worst_day'), 2),
@@ -463,14 +479,14 @@ def render(body, names=None, days=7.0, pair_key=None, now=None,
         '' if hide else
         tile('Net P&amp;L', cash(s.get('net_pnl')), tone(s.get('net_pnl')),
              'after every fee'),
-        tile('Return', pct(perf.get('twr'), 2), tone(perf.get('twr')),
-             (f'over {perf.get("days") or 0} days, time-weighted, on '
-              + (money(base, sign=False)
-                                      if pnl == 'show' else 'the equity')
-              + ' at the start · ' + (
+        tile('Return' + (f' ({perf["days"]} days)' if perf.get('days')
+                         else ''), pct(perf.get('twr'), 2),
+             tone(perf.get('twr')),
+             ('time-weighted · ' + (
                   f'{pct(perf["annualised"], 1)} a year'
                   if perf.get('annualised') is not None
-                  else 'under a year: not annualised'))
+                  else f'≈ {pace(perf.get("monthly"), 2)} a month at '
+                       'this pace'))
              if base else 'capital not set'),
         tile('Sharpe · Sortino', ratio_pair(perf.get('sharpe'),
                                             perf.get('sortino')), '',
@@ -892,23 +908,33 @@ def render_client(body, days=7.0, now=None, logo='', desk_name='Nexus',
     unit = 'month' if monthly else 'day'
     # The DAYS the return is over: the period's own, or - the whole
     # record - from the first trade's day to today.
-    span_days = (body.get('performance') or {}).get('days')
+    span_days = ((body.get('performance') or {}).get('days')
+                 or (int(round(days)) if days > 0 else None))
+    from .analysis import scaled_returns
+    monthly_ret, annual_ret = scaled_returns(ret, span_days)
 
     def tile(label, value, cls='', note=''):
         return (f'<div class="tile"><div class="tl">{label}</div>'
                 f'<div class="tv {cls}">{value}</div>'
                 f'<div class="tn">{note}</div></div>')
     tiles = ''.join([
-        tile('Return on capital', pct(ret), tone(ret),
-             (f'over {span_days} days, after trading costs'
-              if span_days else 'after trading costs')
-             if capital else 'capital not set'),
+        tile('Return on capital' + (f' ({span_days} days)' if span_days
+                                    else ''), pct(ret), tone(ret),
+             'after trading costs' if capital else 'capital not set'),
+        tile('Monthly return', pace(monthly_ret), tone(monthly_ret),
+             f'compounded from {span_days} days' if span_days else ''),
+        tile('Annualised return', pace(annual_ret, 1), tone(annual_ret),
+             (f'compounded from {span_days} days'
+              + (' - a projection of the pace, not a forecast'
+                 if span_days < 365 else '')) if span_days else ''),
         '' if hide else
         tile('Net P&amp;L', cash(net), tone(net), 'after trading costs'),
-        tile('Sharpe · Sortino', ratio_pair(
-            (body.get('performance') or {}).get('sharpe'),
-            (body.get('performance') or {}).get('sortino')), '',
-             sharpe_words(body.get('performance') or {})),
+        tile('Sharpe ratio', DASH if (body.get('performance') or {}).get(
+            'sharpe') is None else f"{body['performance']['sharpe']:.2f}",
+             '', 'Sortino ' + (DASH if (body.get('performance') or {}).get(
+                 'sortino') is None
+                 else f"{body['performance']['sortino']:.2f}") + ' · '
+             + sharpe_words(body.get('performance') or {})),
         tile('Max drawdown', DASH if not periods
              else pct(-on_cap(fall)) if capital else cash(-fall),
              'down' if fall else '',
@@ -1095,7 +1121,7 @@ td.no { font-weight: 700; color: var(--navy); }
 .testing { margin: 10px 0 0; padding: 6px 10px; font-size: 11px; background: #fff7e0;
   border: 1px solid #f0d48a; border-radius: 3px; }
 .returns td, .returns th { padding: 5px 10px; }
-.tiles.client { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
+.tiles.client { grid-template-columns: repeat(4, 1fr); }
 .tiles.client .tv { font-size: 22px; }
 .journal tbody tr:nth-child(even) td { background: var(--band); }
 .journal thead { display: table-header-group; }

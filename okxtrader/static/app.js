@@ -9229,12 +9229,27 @@ function anHeld(seconds) {
              'net P&L \u00f7 the margin both legs used, over the ' +
              (s.margin_trades || 0) + ' closed trade(s) whose margin was ' +
              'priced') +
-      anTile('Return on capital', s.return_on_capital === null ||
+      anTile('Return on capital' + ((a.performance || {}).days
+               ? ' (' + a.performance.days + ' days)' : ''),
+             s.return_on_capital === null ||
                s.return_on_capital === undefined ? DASH
                : pctSigned(s.return_on_capital, 2),
              anSign(s.return_on_capital),
-             s.capital ? 'net P&L \u00f7 the ' + money(s.capital) +
-               ' capital managed' : 'set the capital you manage above') +
+             s.capital ? (function () {
+               var days = (a.performance || {}).days;
+               var r = s.return_on_capital;
+               var note = 'net P&L \u00f7 the ' + money(s.capital) +
+                 ' capital managed';
+               if (!days || r === null || r === undefined) { return note; }
+               var g = 1 + r / 100;
+               var month = g > 0 ? (Math.pow(g, 30.4375 / days) - 1) * 100
+                 : -100;
+               var year = g > 0 ? (Math.pow(g, 365 / days) - 1) * 100 : -100;
+               return note + ' \u2014 \u2248 ' +
+                 pctSigned(month, 2) + ' a month, ' + pctSigned(year, 1) +
+                 ' a year at this pace (compounded; a projection, not a ' +
+                 'forecast)';
+             })() : 'set the capital you manage above') +
       (function () {
         var r = a.performance || {};
         function two(x) { return x === null || x === undefined ? DASH
