@@ -360,8 +360,10 @@ def _open(desk):
 @pytest.fixture
 def closes(desk):
     from okxtrader.maker import MakerCloses
-    mc = MakerCloses({}, {'okx': desk.leg}, desk.maker.executor,
-                     clock=desk.clock)
+    # One slice: these are tests of the close itself; sliced closes
+    # have their own below.
+    mc = MakerCloses({'MAKER_SLICES': 1}, {'okx': desk.leg},
+                     desk.maker.executor, clock=desk.clock)
     done = []
     mc.on_done = lambda job, answer: done.append(answer)
     mc.done = done
@@ -680,3 +682,83 @@ def test_a_small_order_is_cut_into_fewer_slices():
                                       'b': MakerLeg('b', 'x', 'B', 'SELL', 2,
                                                     1)})
     assert m._slice_goals(pair, job) == {'a': [1.0], 'b': [2.0]}
+
+
+# -- SLICED exits ---------------------------------------------------------------
+
+
+def _open_size(desk, spreads):
+    desk.maker.start(desk.pair, SpreadSide.BUY, desk.md(), spreads)
+    desk.fill('a')
+    desk.fill('b')
+    desk.tick()
+    return desk.done.pop().position
+
+
+def _fill_live_closes(desk, mc, position, legs=('a', 'b')):
+    job = mc.jobs[position.position_id]
+    for key in legs:
+        for t, o in job.legs[key]['orders'].items():
+            if o['live']:
+                so = desk.sim.orders[desk.broker.ledger['orders'][str(t)]
+                                     ['ord_id']]
+                desk.sim._fill(so, so['sz'] - so['accFillSz'],
+                               float(so['px']), taker=False)
+
+
+def test_a_sliced_exit_closes_one_slice_at_a_time_all_as_maker(desk, closes):
+    closes.config['MAKER_SLICES'] = 3
+    position = _open_size(desk, 3)               # A 3 lots, B 6
+    closes.start(desk.pair, position, desk.md(), 'Algo: profit target')
+    job = closes.jobs[position.position_id]
+    assert len(job.goals['a']) == 3
+    live = {o['instId']: float(o['sz']) for o in _live(desk.sim)}
+    assert live == {'BTC-USDT-SWAP': 1.0, 'ETH-USDT-SWAP': 2.0}
+    for n in range(3):
+        _fill_live_closes(desk, closes, position)
+        desk.clock.t += 1
+        closes.step(desk.pair, desk.md())
+    assert closes.done and closes.done[-1]['ok']
+    assert position.closed_at is not None
+    assert desk.sim.positions == {}
+    closing = [f for f in desk.sim.fills if f['side'] in ('sell',)
+               and f['instId'] == 'BTC-USDT-SWAP']
+    assert all(f['execType'] == 'M' for f in desk.sim.fills)
+
+
+def test_a_lagging_exit_slice_crosses_only_that_slice(desk, closes):
+    closes.config.update({'MAKER_SLICES': 3, 'MAKER_LEG_GAP_SEC': 5.0})
+    position = _open_size(desk, 3)
+    closes.start(desk.pair, position, desk.md(), 'Algo: profit target')
+    job = closes.jobs[position.position_id]
+    n0 = len(desk.sim.fills)
+    _fill_live_closes(desk, closes, position, legs=('a',))
+    for _ in range(7):
+        desk.clock.t += 1
+        closes.step(desk.pair, desk.md())
+    takers = [f for f in desk.sim.fills[n0:] if f['execType'] == 'T']
+    # ETH's 2 lots of slice 1 only - not all 6.
+    assert sum(float(f['fillSz']) for f in takers) == pytest.approx(2.0)
+    assert job.slice == 1 and position.closed_at is None
+    assert len(_live(desk.sim)) == 2
+
+
+def test_a_take_profit_slice_not_filled_books_a_partial_close(desk, closes):
+    """Held to its take-profit: slice 1 closed, slice 2 not filled in
+    time - one third is booked closed, the rest stays ON (nothing at
+    market), for the Algo to work the target again."""
+    closes.config.update({'MAKER_SLICES': 3, 'MAKER_SLICE_SEC': 10.0})
+    position = _open_size(desk, 3)
+    md = desk.md()
+    level = md['short_spread'] - 100.0           # well inside: held there
+    closes.start(desk.pair, position, md, 'Algo: profit target',
+                 level=level)
+    _fill_live_closes(desk, closes, position)
+    for _ in range(13):
+        desk.clock.t += 1
+        closes.step(desk.pair, desk.md())
+    answer = closes.done[-1]
+    assert answer['ok'] and answer.get('partial')
+    assert position.closed_at is None
+    assert position.leg_a.volume == pytest.approx(2.0)
+    assert not any(f['execType'] == 'T' for f in desk.sim.fills)

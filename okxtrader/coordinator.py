@@ -1470,6 +1470,12 @@ class Coordinator:
                                      reason=answer.get('reason'))
                 return
             self.remember(job.position)
+            if answer.get('ok') and answer.get('partial'):
+                # Some slices closed and the rest is still on (a take-
+                # profit slice not filled in time): the Algo works the
+                # target again for what is left.
+                self.algos.exit_retry(job.pair_key,
+                                      job.position.position_id)
             if not answer.get('ok') and self.store is not None:
                 self.store.event('refused', job.pair_key,
                                  reason=f'maker close of '

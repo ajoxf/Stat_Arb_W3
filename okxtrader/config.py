@@ -151,10 +151,12 @@ DEFAULT_SETTINGS = {
     #: never within MAKER_SAFETY_BPS of the other side - in a one-tick
     #: book that sat ~1 bp behind the touch (60 ticks on BTC).
     'MAKER_PRICE': 'TOUCH',
-    #: An entry is filled in this many SLICES, one at a time, each on
-    #: both legs before the next rests: at most one slice can ever be on
-    #: with its other half missing, and only that slice crosses at
-    #: market. 1 = the whole order at once.
+    #: Entries AND maker exits are filled in this many SLICES, one at a
+    #: time, each on both legs before the next rests: at most one slice
+    #: can ever be on (or off) with its other half missing, and only
+    #: that slice crosses at market. A take-profit slice not filled in
+    #: time books what closed and leaves the rest on, for the Algo to
+    #: work again. 1 = the whole order at once.
     'MAKER_SLICES': 3,
     #: How long each slice after the first has to fill as maker. Not
     #: filled: the slices that are on book as the position.

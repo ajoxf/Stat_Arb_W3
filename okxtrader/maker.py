@@ -91,6 +91,35 @@ def rest_price(cfg, side, bid, ask):
     return touch_price(side, bid, ask)
 
 
+def cumulative_slices(totals, metas, wanted):
+    """{key: [cumulative lots after slice 1, 2, ...]}: each leg's total
+    cut into `wanted` equal pieces, every piece a tradable size (down to
+    the leg's step, never under its minimum) - fewer pieces where it
+    cannot be cut that fine, and one where it cannot be cut at all."""
+    from . import sizing
+    for n in range(max(1, int(wanted)), 0, -1):
+        goals, ok = {}, True
+        for key, total in totals.items():
+            meta = metas.get(key) or {}
+            cum = []
+            for i in range(1, n + 1):
+                lots = (float(total) if i == n else sizing.round_step(
+                    float(total) * i / n, meta.get('volume_step'),
+                    down=True))
+                piece = lots - (cum[-1] if cum else 0.0)
+                if piece <= 1e-12 or piece < float(
+                        meta.get('volume_min') or 0.0) - 1e-9:
+                    ok = False
+                    break
+                cum.append(lots)
+            if not ok:
+                break
+            goals[key] = cum
+        if ok:
+            return goals
+    return {k: [float(t)] for k, t in totals.items()}
+
+
 def recovery_price(side, bid, ask, nudge_bps):
     """A recovering leg: its own touch, `nudge_bps` toward the market."""
     if side == 'BUY':
@@ -346,34 +375,13 @@ class MakerFills:
 
     def _slice_goals(self, pair, job):
         """{leg: [cumulative lots after slice 1, 2, ...]}: the order cut
-        into MAKER_SLICES equal pieces on BOTH legs, each a tradable
-        size - fewer slices where a piece would be under a leg's
-        minimum. Only one slice is ever resting, so at most one slice
-        can be on with its other half missing."""
-        from . import sizing
-        wanted = max(1, int(self._cfg('MAKER_SLICES', 3)))
-        metas = {'a': pair.meta_a or {}, 'b': pair.meta_b or {}}
-        for n in range(wanted, 0, -1):
-            goals, ok = {}, True
-            for key, ml in job.legs.items():
-                meta = metas[key]
-                cum = []
-                for i in range(1, n + 1):
-                    lots = (ml.planned if i == n else sizing.round_step(
-                        ml.planned * i / n, meta.get('volume_step'),
-                        down=True))
-                    piece = lots - (cum[-1] if cum else 0.0)
-                    if piece <= 1e-12 or piece < float(
-                            meta.get('volume_min') or 0.0) - 1e-9:
-                        ok = False
-                        break
-                    cum.append(lots)
-                if not ok:
-                    break
-                goals[key] = cum
-            if ok:
-                return goals
-        return {k: [ml.planned] for k, ml in job.legs.items()}
+        into MAKER_SLICES equal pieces on BOTH legs. Only one slice is
+        ever resting, so at most one slice can be on with its other half
+        missing."""
+        return cumulative_slices(
+            {k: ml.planned for k, ml in job.legs.items()},
+            {'a': pair.meta_a or {}, 'b': pair.meta_b or {}},
+            self._cfg('MAKER_SLICES', 3))
 
     def _slice_done(self, ml):
         return ml.filled >= ml.goal - max(1e-12, ml.planned * 1e-6)
@@ -950,6 +958,10 @@ class CloseJob:
         self.next_peg = now
         self.legs = {}                     # 'a'|'b' -> dict
         self.why = None
+        #: SLICES, as an entry's: each leg's cumulative goals, and the
+        #: slice being worked.
+        self.goals = {}
+        self.slice = 0
 
     def to_dict(self, now):
         legs = []
@@ -968,6 +980,8 @@ class CloseJob:
                 'side': self.position.side.value, 'phase': 'closing',
                 'spreads': self.position.quantity, 'level': self.level,
                 'held_at_level': self.held,
+                'slice': self.slice + 1,
+                'slices': len(next(iter(self.goals.values()), [None])),
                 'age_sec': round(now - self.started, 1), 'legs': legs,
                 'reason': self.why}
 
@@ -1091,29 +1105,26 @@ class MakerCloses:
             held = {str(p['ticket']): float(p['volume']) for p in live}
             bid, ask = md.get(f'leg_{key}_bid'), md.get(f'leg_{key}_ask')
             leg['sent'] = ask if leg['close_side'] == 'BUY' else bid
-            price = targets.get(key) or rest_price(
-                self._raw, leg['close_side'], bid, ask)
-            for ticket in leg['tickets']:
-                volume = held.get(str(ticket))
-                if not volume:
-                    continue
-                leg['found'] += volume
-                placed = runner.place_limit(
-                    leg['symbol'], leg['close_side'], volume, price,
-                    comment=f'{TAG}C:{key.upper()}', post_only=True,
-                    position_ticket=int(ticket))
-                if not placed or not placed.get('ok'):
-                    self._pull(job)
-                    return self._market(
-                        pair, position, md, reason,
-                        f'the closing order was refused: '
-                        f'{(placed or {}).get("error")}')
-                leg['orders'][placed['ticket']] = {
-                    'pos_ticket': int(ticket), 'volume': volume,
-                    'filled': 0.0, 'avg': None, 'live': True,
-                    'price': placed.get('price', price), 'target': price,
-                    'amends': 0}
+            leg['held'] = {str(t): held.get(str(t), 0.0)
+                           for t in leg['tickets'] if held.get(str(t))}
+            leg['found'] = sum(leg['held'].values())
             job.legs[key] = leg
+        # SLICES: only the first rests now; each next one when both legs
+        # of this one are closed.
+        job.goals = cumulative_slices(
+            {k: leg['found'] for k, leg in job.legs.items()},
+            {'a': pair.meta_a or {}, 'b': pair.meta_b or {}},
+            self._cfg('MAKER_SLICES', 3))
+        for key, leg in job.legs.items():
+            price = targets.get(key) or rest_price(
+                self._raw, leg['close_side'], md.get(f'leg_{key}_bid'),
+                md.get(f'leg_{key}_ask'))
+            refused = self._rest_close(pair, job, key, price)
+            if refused:
+                self._pull(job)
+                return self._market(pair, position, md, reason,
+                                    f'the closing order was refused: '
+                                    f'{refused}')
         self.jobs[pid] = job
         logging.info('%s: maker close %s of %s - closing orders resting at '
                      'the touch', pair.key, job.id, pid)
@@ -1160,6 +1171,9 @@ class MakerCloses:
                 order['avg'] = state.get('price') or order['avg']
                 order['live'] = bool(state.get('still_open')) and \
                     not state.get('cancelled')
+                # Pulled on purpose: never re-placed as if OKX had
+                # cancelled it (a slice moving on pulls what is left).
+                order['replaced'] = True
 
     def abandon(self, position_id, why='closed another way'):
         """Something else is closing this position now (CLOSE ALL, the
@@ -1183,6 +1197,129 @@ class MakerCloses:
     def _left(self, leg):
         return leg['found'] - sum(o['filled'] for o in leg['orders'].values())
 
+    def _closed(self, leg):
+        return sum(o['filled'] for o in leg['orders'].values())
+
+    def _goal(self, job, key):
+        goals = (job.goals or {}).get(key)
+        return goals[job.slice] if goals else job.legs[key]['found']
+
+    def _rest_close(self, pair, job, key, price):
+        """Rest closing orders on one leg up to this slice's goal, spread
+        over its tickets, each closing ITS ticket. None, or the refusal."""
+        leg = job.legs[key]
+        resting = sum(o['volume'] - o['filled']
+                      for o in leg['orders'].values() if o['live'])
+        want = self._goal(job, key) - self._closed(leg) - resting
+        runner = self._runner(leg)
+        for ticket in leg['tickets']:
+            if want <= max(1e-12, leg['found'] * 1e-6):
+                break
+            room = leg['held'].get(str(ticket), 0.0) - sum(
+                (o['filled'] + (o['volume'] - o['filled'] if o['live']
+                                else 0.0))
+                for o in leg['orders'].values()
+                if str(o['pos_ticket']) == str(ticket))
+            volume = min(room, want)
+            if volume <= 1e-12:
+                continue
+            placed = runner.place_limit(
+                leg['symbol'], leg['close_side'], volume, price,
+                comment=f'{TAG}C:{key.upper()}', post_only=True,
+                position_ticket=int(ticket))
+            if not placed or not placed.get('ok'):
+                return (placed or {}).get('error') or 'refused'
+            leg['orders'][placed['ticket']] = {
+                'pos_ticket': int(ticket), 'volume': volume,
+                'filled': 0.0, 'avg': None, 'live': True,
+                'price': placed.get('price', price), 'target': price,
+                'amends': 0}
+            want -= volume
+        return None
+
+    def _next_close_slice(self, pair, job, md, now):
+        """This slice is closed on both legs: rest the next one, with its
+        own MAKER_SLICE_SEC."""
+        last = len(next(iter(job.goals.values()))) - 1
+        while job.slice < last and all(
+                self._closed(leg) >= self._goal(job, k) - 1e-9
+                for k, leg in job.legs.items()):
+            job.slice += 1
+        job.first_fill_at = None
+        job.deadline = now + self._cfg('MAKER_SLICE_SEC', 10.0)
+        targets = (self._close_targets(pair, job, md, tuple(job.legs))
+                   if md and not md.get('guard_reason') else {})
+        for key, leg in job.legs.items():
+            price = targets.get(key)
+            if price is None:
+                return self._end_short(pair, job, now,
+                                       'no clean price for the next slice')
+            refused = self._rest_close(pair, job, key, price)
+            if refused:
+                return self._end_short(pair, job, now,
+                                       f'the next slice was refused: '
+                                       f'{refused}')
+        logging.info('%s: maker close %s of %s - slice %d of %d resting',
+                     pair.key, job.id, job.position.position_id,
+                     job.slice + 1, last + 1)
+
+    def _cross_close_lag(self, pair, job, now):
+        """One leg's slice closed, the other's not: close what the
+        lagging leg is missing AT MARKET, by ticket - that slice only -
+        so both legs are closed in the same proportion again."""
+        self._pull(job)
+        fracs = {k: (self._closed(l) / l['found'] if l['found'] else 1.0)
+                 for k, l in job.legs.items()}
+        lead = max(fracs, key=fracs.get)
+        for key, leg in job.legs.items():
+            missing = fracs[lead] * leg['found'] - self._closed(leg)
+            if key == lead or missing <= max(1e-12, leg['found'] * 1e-6):
+                continue
+            from . import sizing
+            meta = (pair.meta_a if key == 'a' else pair.meta_b) or {}
+            missing = sizing.round_step(missing, meta.get('volume_step'))
+            if missing <= 0:
+                continue
+            got = self.executor.close_tickets(
+                self._runner(leg), leg['symbol'], leg['tickets'],
+                leg['entry_side'], volume=missing, comment='CLOSE')
+            for i, c in enumerate((got or {}).get('closed') or ()):
+                leg['orders'][f'X{job.slice}-{i}-{key}'] = {
+                    'pos_ticket': int(c['ticket']), 'volume': c['volume'],
+                    'filled': float(c['volume'] or 0.0),
+                    'avg': c.get('price'), 'live': False,
+                    'price': c.get('price'), 'target': c.get('price'),
+                    'amends': 0, 'market': True}
+            logging.warning('%s: maker close %s - slice %d: leg %s closed, '
+                            'leg %s not in %gs: %g lots of leg %s closed at '
+                            'market', pair.key, job.id, job.slice + 1,
+                            lead.upper(), key.upper(),
+                            self._cfg('MAKER_LEG_GAP_SEC', 5.0), missing,
+                            key.upper())
+        job.first_fill_at = None
+
+    def _end_short(self, pair, job, now, why):
+        """The close cannot go on as maker. Held to a level (a take-
+        profit): what is closed is booked, both legs in proportion, and
+        the rest stays ON for the Algo to work again. Otherwise the rest
+        is closed at market - a close is owed."""
+        self._pull(job)
+        if job.level is not None:
+            self._settle(pair, job, market={},
+                         note=f'{why} - the slices closed are booked, the '
+                              f'rest stays open and the target is worked '
+                              f'again')
+            return
+        market = {}
+        for key, leg in job.legs.items():
+            if self._left(leg) <= max(1e-9, leg['found'] * 1e-6):
+                continue
+            market[key] = self.executor.close_tickets(
+                self._runner(leg), leg['symbol'], leg['tickets'],
+                leg['entry_side'], comment='CLOSE')
+        self._settle(pair, job, market, note=f'{why} - the rest closed at '
+                                             f'market')
+
     def _step(self, pair, job, md):
         now = self.clock()
         if now < job.next_peg and now < job.deadline:
@@ -1197,13 +1334,19 @@ class MakerCloses:
                for leg in job.legs.values()):
             self._settle(pair, job, market={})
             return
-        filled_any = any(sum(o['filled'] for o in leg['orders'].values())
-                         > 0 for leg in job.legs.values())
-        if filled_any and job.first_fill_at is None:
-            job.first_fill_at = now
-        fracs = [1.0 - self._left(leg) / leg['found'] if leg['found'] else 1.0
+        filled_any = any(self._closed(leg) > 0 for leg in job.legs.values())
+        # THIS SLICE closed on both legs: the next one rests.
+        if all(self._closed(leg) >= self._goal(job, k)
+               - max(1e-12, leg['found'] * 1e-6)
+               for k, leg in job.legs.items()):
+            self._pull(job)
+            self._next_close_slice(pair, job, md, now)
+            return
+        fracs = [self._closed(leg) / leg['found'] if leg['found'] else 1.0
                  for leg in job.legs.values()]
         split = len(fracs) == 2 and abs(fracs[0] - fracs[1]) > 1e-6
+        if split and job.first_fill_at is None:
+            job.first_fill_at = now
         gap_over = (job.first_fill_at is not None and split and
                     now - job.first_fill_at >= self._cfg('MAKER_LEG_GAP_SEC',
                                                          5.0))
@@ -1227,23 +1370,28 @@ class MakerCloses:
                     logging.exception('maker close %s: on_done raised: %s',
                                       job.id, e)
             return
-        if now >= job.deadline or gap_over:
-            self._pull(job)
-            market = {}
-            for key, leg in job.legs.items():
-                if self._left(leg) <= max(eps, leg['found'] * 1e-6):
-                    continue
-                market[key] = self.executor.close_tickets(
-                    self._runner(leg), leg['symbol'], leg['tickets'],
-                    leg['entry_side'], comment='CLOSE')
-            self._settle(pair, job, market,
-                         note=(f'one leg closed, the other not in '
-                               f'{self._cfg("MAKER_LEG_GAP_SEC", 5.0):g}s '
-                               f'— the rest closed at market')
-                         if gap_over and now < job.deadline else
-                         f'not all filled as maker in '
-                         f'{self._cfg("MAKER_TIMEOUT_SEC", 30.0):g}s '
-                         f'— the rest closed at market')
+        if gap_over:
+            # One leg of this slice closed, the other not in time: that
+            # slice's missing part closes at market, then the next slice
+            # rests as maker (or, out of time, the close ends short).
+            self._cross_close_lag(pair, job, now)
+            if all(self._left(leg) <= max(eps, leg['found'] * 1e-6)
+                   for leg in job.legs.values()):
+                self._settle(pair, job, market={},
+                             note=f'one leg closed, the other not in '
+                                  f'{self._cfg("MAKER_LEG_GAP_SEC", 5.0):g}s'
+                                  f' — the rest closed at market')
+            elif now < job.deadline:
+                self._next_close_slice(pair, job, md, now)
+            else:
+                self._end_short(pair, job, now, 'out of time')
+            return
+        if now >= job.deadline:
+            if split:
+                self._cross_close_lag(pair, job, now)
+            self._end_short(pair, job, now,
+                            f'slice {job.slice + 1} not filled as maker in '
+                            f'time')
             return
         if not md or md.get('guard_reason'):
             return
