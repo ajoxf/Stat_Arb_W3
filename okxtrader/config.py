@@ -157,7 +157,7 @@ DEFAULT_SETTINGS = {
     #: that slice crosses at market. A take-profit slice not filled in
     #: time books what closed and leaves the rest on, for the Algo to
     #: work again. 1 = the whole order at once.
-    'MAKER_SLICES': 3,
+    'MAKER_SLICES': 2,
     #: How long each slice after the first has to fill as maker. Not
     #: filled: the slices that are on book as the position.
     'MAKER_SLICE_SEC': 10.0,

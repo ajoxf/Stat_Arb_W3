@@ -381,7 +381,7 @@ class MakerFills:
         return cumulative_slices(
             {k: ml.planned for k, ml in job.legs.items()},
             {'a': pair.meta_a or {}, 'b': pair.meta_b or {}},
-            self._cfg('MAKER_SLICES', 3))
+            self._cfg('MAKER_SLICES', 2))
 
     def _slice_done(self, ml):
         return ml.filled >= ml.goal - max(1e-12, ml.planned * 1e-6)
@@ -1114,7 +1114,7 @@ class MakerCloses:
         job.goals = cumulative_slices(
             {k: leg['found'] for k, leg in job.legs.items()},
             {'a': pair.meta_a or {}, 'b': pair.meta_b or {}},
-            self._cfg('MAKER_SLICES', 3))
+            self._cfg('MAKER_SLICES', 2))
         for key, leg in job.legs.items():
             price = targets.get(key) or rest_price(
                 self._raw, leg['close_side'], md.get(f'leg_{key}_bid'),
