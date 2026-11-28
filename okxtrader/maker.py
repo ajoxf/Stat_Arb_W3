@@ -71,6 +71,26 @@ def passive_price(side, bid, ask, offset_bps, safety_bps):
     return max(ask * (1 - offset_bps / 1e4), bid * (1 + safety_bps / 1e4))
 
 
+def touch_price(side, bid, ask):
+    """JOIN THE TOUCH: a BUY at the best bid, a SELL at the best ask -
+    first in the queue at the price that trades next, post-only so it
+    can only ever be maker. The W3 price (`passive_price`) sat 1 bp
+    BEHIND the touch in a one-tick book: about 60 ticks on BTC and 17 on
+    ETH, so a leg filled only when the market moved through it - and the
+    other leg, now further away, crossed at market as taker."""
+    return bid if side == 'BUY' else ask
+
+
+def rest_price(cfg, side, bid, ask):
+    """Where a maker order rests: at the touch (MAKER_PRICE 'TOUCH', the
+    default) or W3's offset price ('W3'). `cfg(name, default)`."""
+    if str(cfg('MAKER_PRICE', 'TOUCH')).strip().upper() == 'W3':
+        return passive_price(side, bid, ask,
+                             float(cfg('MAKER_OFFSET_BPS', 1.0)),
+                             float(cfg('MAKER_SAFETY_BPS', 1.0)))
+    return touch_price(side, bid, ask)
+
+
 def recovery_price(side, bid, ask, nudge_bps):
     """A recovering leg: its own touch, `nudge_bps` toward the market."""
     if side == 'BUY':
@@ -87,6 +107,9 @@ class MakerLeg:
         self.symbol = symbol
         self.side = side                     # 'BUY' | 'SELL'
         self.planned = float(planned)        # lots
+        #: What this leg must have filled by the end of the SLICE being
+        #: worked: the whole of it when the order is not sliced.
+        self.goal = float(planned)
         self.contract = contract
         self.live = None                     # resting ticket, or None
         self.price = None                    # where it rests
@@ -167,6 +190,10 @@ class MakerJob:
         #: When the first leg first filled: the other then has
         #: MAKER_LEG_GAP_SEC to fill as maker before it crosses.
         self.first_fill_at = None
+        #: SLICES: each leg's cumulative goals, one per slice, and the
+        #: slice being worked. One slice is the whole order.
+        self.goals = {}
+        self.slice = 0
 
     def to_dict(self, now):
         return {'id': self.id, 'pair': self.pair_key,
@@ -176,6 +203,8 @@ class MakerJob:
                 'age_sec': round(now - self.started, 1),
                 'legs': [l.to_dict() for l in self.legs.values()],
                 'held_at_level': self.held,
+                'slice': self.slice + 1,
+                'slices': len(next(iter(self.goals.values()), [None])),
                 'reason': self.reason}
 
 
@@ -199,6 +228,23 @@ class MakerFills:
             return float(self.config.get(name, default))
         except (TypeError, ValueError):
             return default
+
+    def _raw(self, name, default):
+        return self.config.get(name, default)
+
+    def _at_touch(self):
+        return str(self._raw('MAKER_PRICE', 'TOUCH')).strip().upper() \
+            != 'W3'
+
+    def _moved(self, target, resting):
+        """Whether a resting order must follow its target: at the touch,
+        any move of the touch at all (it must stay FIRST in the queue);
+        on W3's price, MAKER_AMEND_BPS."""
+        if resting is None:
+            return True
+        if self._at_touch():
+            return abs(target - resting) > 1e-12 * max(1.0, abs(resting))
+        return _bps(target, resting) > self._cfg('MAKER_AMEND_BPS', 1.0)
 
     def enabled(self, pair):
         """Maker unless the desk or this pair says otherwise. The W3
@@ -259,6 +305,9 @@ class MakerFills:
                 pair.symbol_a if leg == 'a' else pair.symbol_b,
                 sides[leg].value, plan[f'leg_{leg}_lots'],
                 plan[f'leg_{leg}_contract'])
+        job.goals = self._slice_goals(pair, job)
+        for leg in ('a', 'b'):
+            job.legs[leg].goal = job.goals[leg][0]
 
         # BOTH LEGS AT ONCE, as the original desk settled on (June 2026):
         # placed one after the other, the 200-400 ms between them was
@@ -295,6 +344,86 @@ class MakerFills:
         result.working = job.id
         return result
 
+    def _slice_goals(self, pair, job):
+        """{leg: [cumulative lots after slice 1, 2, ...]}: the order cut
+        into MAKER_SLICES equal pieces on BOTH legs, each a tradable
+        size - fewer slices where a piece would be under a leg's
+        minimum. Only one slice is ever resting, so at most one slice
+        can be on with its other half missing."""
+        from . import sizing
+        wanted = max(1, int(self._cfg('MAKER_SLICES', 3)))
+        metas = {'a': pair.meta_a or {}, 'b': pair.meta_b or {}}
+        for n in range(wanted, 0, -1):
+            goals, ok = {}, True
+            for key, ml in job.legs.items():
+                meta = metas[key]
+                cum = []
+                for i in range(1, n + 1):
+                    lots = (ml.planned if i == n else sizing.round_step(
+                        ml.planned * i / n, meta.get('volume_step'),
+                        down=True))
+                    piece = lots - (cum[-1] if cum else 0.0)
+                    if piece <= 1e-12 or piece < float(
+                            meta.get('volume_min') or 0.0) - 1e-9:
+                        ok = False
+                        break
+                    cum.append(lots)
+                if not ok:
+                    break
+                goals[key] = cum
+            if ok:
+                return goals
+        return {k: [ml.planned] for k, ml in job.legs.items()}
+
+    def _slice_done(self, ml):
+        return ml.filled >= ml.goal - max(1e-12, ml.planned * 1e-6)
+
+    def _matched(self, job):
+        """Both legs on in the same proportion, and something on."""
+        frac = [l.filled / l.planned if l.planned else 0.0
+                for l in job.legs.values()]
+        return min(frac) > 0 and max(frac) - min(frac) <= 1e-6
+
+    def _next_slice(self, pair, job, md, now):
+        """The slice just worked is on, both legs. Rest the next one -
+        or, with none left, book the position. Each slice has its own
+        MAKER_SLICE_SEC to fill."""
+        goals = job.goals or {k: [l.planned] for k, l in job.legs.items()}
+        a, b = job.legs['a'], job.legs['b']
+        if self._done_filling(a) and self._done_filling(b):
+            self._finish(pair, job)
+            return
+        # The next slice whose goal is still ahead of what is on (a
+        # cross can have filled past a slice's own goal).
+        last = len(goals['a']) - 1
+        while job.slice < last and \
+                a.filled >= goals['a'][job.slice] - 1e-9 and \
+                b.filled >= goals['b'][job.slice] - 1e-9:
+            job.slice += 1
+        a.goal, b.goal = goals['a'][job.slice], goals['b'][job.slice]
+        job.first_fill_at = None
+        job.deadline = now + self._cfg('MAKER_SLICE_SEC', 10.0)
+        job.phase = 'resting'
+        if not md or md.get('guard_reason'):
+            # No clean price to rest the next slice on: book what is on.
+            job.reason = 'the next slice had no clean price to rest on'
+            self._finish(pair, job)
+            return
+        targets = self._held_targets(pair, job, md, ('a', 'b'))
+        placed = self._rest_both(pair, job, md, targets)
+        if not all(placed.values()):
+            for k in ('a', 'b'):
+                if placed[k]:
+                    self._cancel(pair, job.legs[k])
+            job.reason = 'the next slice could not be placed'
+            if self._matched(job):
+                self._finish(pair, job)
+            else:
+                self._cross_the_lag(pair, job, md, now)
+            return
+        logging.info('%s: maker fill %s - slice %d of %d resting', pair.key,
+                     job.id, job.slice + 1, len(goals['a']))
+
     def _legs(self, job):
         return {k: l.as_fill() for k, l in job.legs.items()}
 
@@ -311,9 +440,7 @@ class MakerFills:
         bid, ask = self._touch(md or {}, ml)
         if not bid or not ask:
             return None
-        return passive_price(ml.side, bid, ask,
-                             self._cfg('MAKER_OFFSET_BPS', 1.0),
-                             self._cfg('MAKER_SAFETY_BPS', 1.0))
+        return rest_price(self._raw, ml.side, bid, ask)
 
     def _held_targets(self, pair, job, md, keys):
         """Each leg's maker price - and, for a click at a level, never
@@ -374,7 +501,8 @@ class MakerFills:
             return out
         with ThreadPoolExecutor(max_workers=2) as pool:
             futures = {k: pool.submit(self._rest, pair, job, job.legs[k], md,
-                                      True, None, 0.0, targets[k])
+                                      True, job.legs[k].goal
+                                      - job.legs[k].filled, 0.0, targets[k])
                        for k in keys}
             for k, future in futures.items():
                 try:
@@ -395,9 +523,7 @@ class MakerFills:
             return False
         if price is None:
             if offset:
-                price = passive_price(ml.side, bid, ask,
-                                      self._cfg('MAKER_OFFSET_BPS', 1.0),
-                                      self._cfg('MAKER_SAFETY_BPS', 1.0))
+                price = rest_price(self._raw, ml.side, bid, ask)
             else:
                 price = recovery_price(ml.side, bid, ask, nudge_bps)
         if ml.sent_price is None:
@@ -498,9 +624,12 @@ class MakerFills:
             return
         job.next_peg = now + self._cfg('MAKER_REPEG_SEC', 1.0)
         rest_a, rest_b = self._read(a), self._read(b)
-        done_a, done_b = self._done_filling(a), self._done_filling(b)
+        done_a, done_b = self._slice_done(a), self._slice_done(b)
         if done_a and done_b:
-            self._finish(pair, job)
+            # This slice is on, both legs: the next one, or the booking.
+            self._cancel(pair, a)
+            self._cancel(pair, b)
+            self._next_slice(pair, job, md, now)
             return
         # ONE LEG FILLED, THE OTHER NOT: it gets MAKER_LEG_GAP_SEC (5 s)
         # to fill as maker, then crosses at market - a leg is not left on
@@ -525,7 +654,7 @@ class MakerFills:
                 if resting or done or ml.live is not None:
                     continue
                 target = self._held_targets(pair, job, md, (key,)).get(key)
-                left = ml.planned - ml.filled
+                left = ml.goal - ml.filled
                 if target is None or left <= ml.planned * 1e-6:
                     continue
                 if self._rest(pair, job, ml, md, True, left, 0.0, target):
@@ -558,7 +687,13 @@ class MakerFills:
                              and not getattr(job, 'cancelled', False))
                 self._fail(pair, job, refused=True)
                 return
-            if self._done_filling(a) and self._done_filling(b):
+            if self._matched(job):
+                # Every slice so far is on, both legs, and the one being
+                # worked put nothing on alone: book what is on.
+                if not (self._done_filling(a) and self._done_filling(b)):
+                    job.reason = (f'slice {job.slice + 1} of '
+                                  f'{len(job.goals.get("a") or [1])} not '
+                                  f'filled: {why} - booked what is on')
                 self._finish(pair, job)
                 return
             job.reason = why
@@ -578,8 +713,7 @@ class MakerFills:
                 continue
             # Against the price actually RESTING (the original desk's
             # drift-aware amend), not last second's target.
-            if _bps(target, ml.target or target) > \
-                    self._cfg('MAKER_AMEND_BPS', 1.0):
+            if self._moved(target, ml.target):
                 self._amend(ml, target)
 
     def _cross_the_lag(self, pair, job, md, now):
@@ -631,7 +765,14 @@ class MakerFills:
             f'leg {lag.upper()} crossed at market after '
             f'{waited:.1f}s alone')
         if got >= volume - max(1e-12, volume * 1e-6):
-            self._finish(pair, job)
+            # Matched again. More slices to go, and time: the next one
+            # rests as maker; otherwise the position is booked.
+            if self._matched(job) and job.goals and \
+                    job.slice + 1 < len(job.goals.get('a') or []) and \
+                    now < job.deadline:
+                self._next_slice(pair, job, md, now)
+            else:
+                self._finish(pair, job)
             return
         # The market order did not (fully) go: the old path, maker
         # recovery and then the unwind, so nothing stays on alone.
@@ -725,8 +866,14 @@ class MakerFills:
         elapsed_ms = (now - job.started) * 1000.0
         fills = self._legs(job)
         sides = {k: OrderSide(l.side) for k, l in job.legs.items()}
+        # A fill that stopped short (a slice not filled in time) is a
+        # position of the size that went ON, not the size asked for.
+        frac = min((l.filled / l.planned if l.planned else 1.0)
+                   for l in job.legs.values())
+        spreads = job.spreads if frac >= 0.999 else round(
+            job.spreads * frac, 8)
         position = self.executor._book_position(
-            pair, job.side, job.spreads, job.plan, fills, sides,
+            pair, job.side, spreads, job.plan, fills, sides,
             job.decision_spread, elapsed_ms)
         position.order_type = OrderType.LIMIT
         self.executor.timings.append(elapsed_ms)
@@ -846,6 +993,9 @@ class MakerCloses:
         self.on_done = None                # (job, settle result)
 
     _cfg = MakerFills._cfg
+    _raw = MakerFills._raw
+    _at_touch = MakerFills._at_touch
+    _moved = MakerFills._moved
 
     def closing_ids(self):
         return set(self.jobs)
@@ -872,9 +1022,7 @@ class MakerCloses:
                 dict(zip(('a', 'b'),
                          job.position.side.leg_sides()))[key].opposite.value)
             if bid and ask:
-                targets[key] = passive_price(
-                    close_side, bid, ask, self._cfg('MAKER_OFFSET_BPS', 1.0),
-                    self._cfg('MAKER_SAFETY_BPS', 1.0))
+                targets[key] = rest_price(self._raw, close_side, bid, ask)
         if job.level is None or not MakerFills._hold_level(self):
             return targets
         beta = float(pair.hedge_ratio or 1.0)
@@ -943,10 +1091,8 @@ class MakerCloses:
             held = {str(p['ticket']): float(p['volume']) for p in live}
             bid, ask = md.get(f'leg_{key}_bid'), md.get(f'leg_{key}_ask')
             leg['sent'] = ask if leg['close_side'] == 'BUY' else bid
-            price = targets.get(key) or passive_price(
-                leg['close_side'], bid, ask,
-                self._cfg('MAKER_OFFSET_BPS', 1.0),
-                self._cfg('MAKER_SAFETY_BPS', 1.0))
+            price = targets.get(key) or rest_price(
+                self._raw, leg['close_side'], bid, ask)
             for ticket in leg['tickets']:
                 volume = held.get(str(ticket))
                 if not volume:
@@ -1129,8 +1275,8 @@ class MakerCloses:
                                  '%s (OKX cancelled the post-only order)',
                                  pair.key, job.id, key.upper(), target)
             for ticket, order in leg['orders'].items():
-                if not order['live'] or _bps(target, order['target']) <= \
-                        self._cfg('MAKER_AMEND_BPS', 1.0):
+                if not order['live'] or not self._moved(target,
+                                                        order['target']):
                     continue
                 answer = self._runner(leg).modify_order(ticket, target)
                 if answer and answer.get('ok'):

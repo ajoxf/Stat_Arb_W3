@@ -145,6 +145,20 @@ DEFAULT_SETTINGS = {
     #: One leg filled and the other not: the other gets this long to fill
     #: as maker, then what it is missing crosses at market (taker).
     'MAKER_LEG_GAP_SEC': 5.0,
+    #: Where a maker order rests: 'TOUCH' (the default) JOINS the best
+    #: bid / ask, post-only - first in line at the price that trades
+    #: next. 'W3' is the original desk's price: MAKER_OFFSET_BPS inside,
+    #: never within MAKER_SAFETY_BPS of the other side - in a one-tick
+    #: book that sat ~1 bp behind the touch (60 ticks on BTC).
+    'MAKER_PRICE': 'TOUCH',
+    #: An entry is filled in this many SLICES, one at a time, each on
+    #: both legs before the next rests: at most one slice can ever be on
+    #: with its other half missing, and only that slice crosses at
+    #: market. 1 = the whole order at once.
+    'MAKER_SLICES': 3,
+    #: How long each slice after the first has to fill as maker. Not
+    #: filled: the slices that are on book as the position.
+    'MAKER_SLICE_SEC': 10.0,
     'MAKER_OFFSET_BPS': 1.0,
     #: How far a maker order is kept from the OTHER side of its book.
     #: 1.0, as the original desk settled on with post-only: at 0.5 OKX

@@ -362,6 +362,9 @@ def stats_panel(perf, d, gross, fees, hide, cash):
     def num(x, digits=2):
         return DASH if x is None else f'{x:.{digits}f}'
     returns = ''.join([
+        row('Gross return on capital, before fees',
+            DASH if not perf.get('start_equity') else
+            pct(gross / perf['start_equity'] * 100.0), tone(gross)),
         row('Return, time-weighted' + (f' ({perf["days"]} days)'
                                        if perf.get('days') else ''),
             pct(perf.get('twr'), 2), tone(perf.get('twr'))),
@@ -407,6 +410,8 @@ def stats_panel(perf, d, gross, fees, hide, cash):
         '' if hide else row('Mean · median trade',
                             cash(perf.get('expectancy')) + ' · '
                             + cash(perf.get('median_trade'))),
+        '' if hide else row('Gross P&amp;L · fees', cash(gross) + ' · '
+                            + cash(fees, sign=False)),
         row('Fees, of gross', DASH if not gross or gross <= 0
             else f'{fees / gross * 100.0:.1f}%'),
         row('Median time held', held(perf.get('median_held')))])
@@ -479,6 +484,13 @@ def render(body, names=None, days=7.0, pair_key=None, now=None,
         '' if hide else
         tile('Net P&amp;L', cash(s.get('net_pnl')), tone(s.get('net_pnl')),
              'after every fee'),
+        '' if hide else
+        tile('Gross P&amp;L', cash(gross), tone(gross),
+             f'before fees · fees {cash(fees, sign=False)}' + (
+                 f' ({fees / gross * 100.0:.0f}% of gross)'
+                 if gross and gross > 0 else '')),
+        tile('Gross return', DASH if not base else pct(gross / base * 100.0),
+             tone(gross), 'on capital, before fees'),
         tile('Return' + (f' ({perf["days"]} days)' if perf.get('days')
                          else ''), pct(perf.get('twr'), 2),
              tone(perf.get('twr')),
@@ -868,6 +880,19 @@ def _deployed(trips, monthly):
             for row in out.values()}
 
 
+def _gross_periods(trips, monthly):
+    """{period label: gross P&L} - before fees, summed as the net is."""
+    fmt, label = ('%Y-%m', '%b %Y') if monthly else ('%Y-%m-%d',
+                                                     '%a %d %b %Y')
+    out = {}
+    for t in trips:
+        if t.get('closed_at') is None or t.get('gross_pnl') is None:
+            continue
+        name = time.strftime(label, time.gmtime(t['closed_at']))
+        out[name] = round(out.get(name, 0.0) + t['gross_pnl'], 2)
+    return out
+
+
 def render_client(body, days=7.0, now=None, logo='', desk_name='Nexus',
                   pnl='show', link=None):
     """The CLIENT's report: what the capital returned over the period,
@@ -908,6 +933,8 @@ def render_client(body, days=7.0, now=None, logo='', desk_name='Nexus',
     unit = 'month' if monthly else 'day'
     # The DAYS the return is over: the period's own, or - the whole
     # record - from the first trade's day to today.
+    gross_total = (round(sum(v for v in _gross_periods(
+        trips, monthly).values()), 2) if periods else None)
     span_days = ((body.get('performance') or {}).get('days')
                  or (int(round(days)) if days > 0 else None))
     from .analysis import scaled_returns
@@ -921,12 +948,20 @@ def render_client(body, days=7.0, now=None, logo='', desk_name='Nexus',
         tile('Return on capital' + (f' ({span_days} days)' if span_days
                                     else ''), pct(ret), tone(ret),
              'after trading costs' if capital else 'capital not set'),
+        tile('Gross return on capital', pct(on_cap(gross_total)),
+             tone(gross_total), 'before trading costs (fees)'
+             if capital else 'capital not set'),
         tile('Monthly return', pace(monthly_ret), tone(monthly_ret),
              f'compounded from {span_days} days' if span_days else ''),
         tile('Annualised return', pace(annual_ret, 1), tone(annual_ret),
              (f'compounded from {span_days} days'
               + (' - a projection of the pace, not a forecast'
                  if span_days < 365 else '')) if span_days else ''),
+        '' if hide else
+        tile('Gross P&amp;L', cash(gross_total), tone(gross_total),
+             'before trading costs · costs ' + cash(
+                 None if gross_total is None or net is None
+                 else gross_total - net, sign=False)),
         '' if hide else
         tile('Net P&amp;L', cash(net), tone(net), 'after trading costs'),
         tile('Sharpe ratio', DASH if (body.get('performance') or {}).get(
@@ -952,6 +987,7 @@ def render_client(body, days=7.0, now=None, logo='', desk_name='Nexus',
     ])
 
     deployed = _deployed(trips, monthly)
+    gross_by = _gross_periods(trips, monthly)
 
     def share(value, base):
         return None if not base else value / base * 100.0
@@ -960,10 +996,13 @@ def render_client(body, days=7.0, now=None, logo='', desk_name='Nexus',
         running += value
         margin, peak = deployed.get(label, (0.0, 0.0))
         on_margin, on_used = share(value, margin), share(value, peak)
+        gross_day = gross_by.get(label)
         rows.append(
             f'<tr><td class="l">{_e(label)}</td>' +
             ('' if hide else
+             f'<td class="{tone(gross_day)}">{cash(gross_day)}</td>'
              f'<td class="{tone(value)}">{cash(value)}</td>') +
+            f'<td class="{tone(gross_day)}">{pct(on_cap(gross_day))}</td>'
             f'<td class="{tone(value)}">{pct(on_cap(value))}</td>'
             + ('' if hide else
                f'<td>{cash(peak, sign=False) if peak else DASH}</td>') +
@@ -979,7 +1018,10 @@ def render_client(body, days=7.0, now=None, logo='', desk_name='Nexus',
     rows.reverse()
     table = ('<table class="returns"><thead><tr>'
              f'<th class="l">{"Month" if monthly else "Day"}</th>' +
-             ('' if hide else '<th>Net P&amp;L</th>') +
+             ('' if hide else '<th>Gross P&amp;L<br><small>before fees'
+                              '</small></th><th>Net P&amp;L<br><small>after '
+                              'fees</small></th>') +
+             '<th>Gross return<br><small>before fees</small></th>'
              '<th>Return<br><small>on capital</small></th>' +
              ('' if hide else '<th>Capital<br><small>deployed</small></th>') +
              '<th>Capital<br><small>utilised</small></th>' +
@@ -988,7 +1030,7 @@ def render_client(body, days=7.0, now=None, logo='', desk_name='Nexus',
              '<th>Cumulative return</th>' +
              ('' if hide else '<th>Cumulative P&amp;L</th>') +
              '</tr></thead><tbody>' +
-             (''.join(rows) or '<tr><td colspan="9">No result in this '
+             (''.join(rows) or '<tr><td colspan="11">No result in this '
                                'period.</td></tr>') + '</tbody></table>')
     modes = ''.join(
         f'<a class="{"on" if m == pnl else ""}" href="{_e(link(m))}">'
@@ -1028,7 +1070,9 @@ def render_client(body, days=7.0, now=None, logo='', desk_name='Nexus',
 <section class="panel"><h2>Returns by {unit}</h2>{table}</section>
 <footer class="notes"><b>Return</b> is the net result after trading
 costs, divided by the capital at the start of the period.
-<b>Cumulative return</b> adds each {unit}'s return. <b>Capital
+<b>Gross P&amp;L</b> is what the trades made before trading costs (fees);
+<b>Net P&amp;L</b> after them. <b>Cumulative return</b> adds each {unit}'s
+return. <b>Capital
 deployed</b>: the most margin tied up at any one moment in the {unit}; <b>capital utilised</b> is
 that as a % of the capital managed;
 <b>return on capital deployed</b> is the net over it. <b>Return on

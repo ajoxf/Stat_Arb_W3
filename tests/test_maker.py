@@ -48,8 +48,10 @@ def desk(tmp_path):
     clock = Clock()
     from okxtrader.config import TraderConfig
     config = TraderConfig(pairs={pair.key: pair})
+    # One slice: these tests are of the fill itself; slicing has its
+    # own below.
     config.settings.update({'MARKET_PROTECTION_TICKS': 0,
-                            'FILL_STYLE': 'maker'})
+                            'FILL_STYLE': 'maker', 'MAKER_SLICES': 1})
     executor = PairExecutor(config, {'okx': leg}, clock=clock,
                             sleep=lambda s: None)
     maker = MakerFills(config, {'okx': leg}, executor, clock=clock)
@@ -127,7 +129,29 @@ def test_maker_fills_pay_the_vip_maker_fee(desk):
     assert fees and all(f['execType'] == 'M' for f in fees)
 
 
+def test_it_joins_the_touch_and_stays_first_in_the_queue(desk):
+    """The default maker price is the TOUCH itself - a BUY at the best
+    bid, a SELL at the best ask - post-only, and it follows the touch on
+    any move, so it is always first in line at the price that trades."""
+    md = desk.md()
+    desk.maker.start(desk.pair, SpreadSide.BUY, md, 1)
+    job = desk.maker.jobs[desk.pair.key]
+    a, b = job.legs['a'], job.legs['b']
+    touch = {('a', 'BUY'): md['leg_a_bid'], ('a', 'SELL'): md['leg_a_ask'],
+             ('b', 'BUY'): md['leg_b_bid'], ('b', 'SELL'): md['leg_b_ask']}
+    assert a.price == pytest.approx(touch[('a', a.side)])
+    assert b.price == pytest.approx(touch[('b', b.side)])
+    assert {o['ordType'] for o in _live(desk.sim)} == {'post_only'}
+    # A move far under 1 bp still re-pegs: it must stay at the touch.
+    ticket = a.live
+    desk.sim.index['BTC'] *= 1.00004
+    md = desk.tick() and desk.md() or desk.md()
+    assert a.amends == 1 and a.live == ticket
+
+
 def test_it_re_pegs_by_amend_when_the_touch_moves_over_1bp(desk):
+    """W3's own price (MAKER_PRICE 'W3'): 1 bp behind, amended on 1 bp."""
+    desk.maker.config.settings['MAKER_PRICE'] = 'W3'
     desk.maker.start(desk.pair, SpreadSide.BUY, desk.md(), 1)
     job = desk.maker.jobs[desk.pair.key]
     ticket = job.legs['a'].live
@@ -571,3 +595,88 @@ def test_with_two_trades_on_the_exit_closes_its_own_trade_not_the_first(
     assert set(desk.sim.positions) == set(held_before)
     for key, row in desk.sim.positions.items():
         assert row['pos'] == pytest.approx(held_before[key]['pos'] / 2)
+
+
+# -- SLICED entries ------------------------------------------------------------
+
+
+def _fill_slice(desk):
+    """Fill whatever rests on both legs now, and step."""
+    for key in ('a', 'b'):
+        if desk.maker.jobs[desk.pair.key].legs[key].live is not None:
+            desk.fill(key)
+    desk.tick()
+
+
+def test_a_sliced_entry_rests_one_slice_at_a_time_and_books_one_trade(desk):
+    """Three slices: only a third of each leg ever rests, the next slice
+    rests when both legs of this one are on, and the whole books as ONE
+    position of the size asked for."""
+    desk.maker.config.settings['MAKER_SLICES'] = 3
+    # 3 spreads: leg A 3 lots, leg B 6 - a whole lot per slice and leg.
+    desk.maker.start(desk.pair, SpreadSide.BUY, desk.md(), 3)
+    job = desk.maker.jobs[desk.pair.key]
+    assert len(job.goals['a']) == 3
+    first = {o['instId']: o['sz'] for o in _live(desk.sim)}
+    assert first == {'BTC-USDT-SWAP': pytest.approx(1.0),
+                     'ETH-USDT-SWAP': pytest.approx(2.0)}
+    _fill_slice(desk)
+    assert job.slice == 1 and len(_live(desk.sim)) == 2
+    _fill_slice(desk)
+    assert job.slice == 2
+    _fill_slice(desk)
+    [result] = desk.done
+    assert result.ok and result.position.quantity == 3
+    assert result.position.leg_a.volume == pytest.approx(3.0)
+    assert result.position.leg_b.volume == pytest.approx(6.0)
+
+
+def test_a_slice_not_filled_in_time_books_what_is_on_matched(desk):
+    """Two slices on, the third not filled in MAKER_SLICE_SEC: nothing
+    is left alone - the two slices book as a position two-thirds the
+    size, both legs matched."""
+    desk.maker.config.settings.update({'MAKER_SLICES': 3,
+                                       'MAKER_SLICE_SEC': 10.0})
+    desk.maker.start(desk.pair, SpreadSide.BUY, desk.md(), 3)
+    _fill_slice(desk)
+    _fill_slice(desk)
+    for _ in range(12):
+        desk.tick()
+    [result] = desk.done
+    assert result.ok
+    assert result.position.quantity == pytest.approx(2.0)
+    assert result.position.leg_a.volume == pytest.approx(2.0)
+    assert result.position.leg_b.volume == pytest.approx(4.0)
+    assert _live(desk.sim) == []
+    assert 'slice 3 of 3 not filled' in (result.reason or '')
+
+
+def test_one_leg_of_a_slice_alone_crosses_only_that_slice(desk):
+    """Leg A's slice fills and leg B's does not: B crosses at market for
+    ONE slice - a third, not the whole - and the next slice rests as
+    maker again."""
+    desk.maker.config.settings.update({'MAKER_SLICES': 3,
+                                       'MAKER_LEG_GAP_SEC': 5.0})
+    desk.maker.start(desk.pair, SpreadSide.BUY, desk.md(), 3)
+    job = desk.maker.jobs[desk.pair.key]
+    desk.fill('a')
+    for _ in range(6):
+        desk.tick()
+    takers = [f for f in desk.sim.fills if f['execType'] == 'T']
+    assert sum(float(f['fillSz']) for f in takers) == pytest.approx(2.0)
+    assert job.slice == 1 and len(_live(desk.sim)) == 2
+
+
+def test_a_small_order_is_cut_into_fewer_slices():
+    """A slice is never under a leg's minimum: 1 lot of a 1-lot-minimum
+    leg cannot be cut in three."""
+    from okxtrader.maker import MakerFills, MakerLeg, MakerJob
+    m = MakerFills({'MAKER_SLICES': 3}, {}, None)
+    pair = types.SimpleNamespace(meta_a={'volume_step': 1, 'volume_min': 1},
+                                 meta_b={'volume_step': 1, 'volume_min': 1},
+                                 key='p')
+    job = types.SimpleNamespace(legs={'a': MakerLeg('a', 'x', 'A', 'BUY', 1,
+                                                    1),
+                                      'b': MakerLeg('b', 'x', 'B', 'SELL', 2,
+                                                    1)})
+    assert m._slice_goals(pair, job) == {'a': [1.0], 'b': [2.0]}

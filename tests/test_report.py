@@ -139,8 +139,10 @@ def test_the_client_report_masks_and_hides_the_money():
     for page in (masked, hidden):
         assert '+$' not in page and '$1,000.00' not in page
         assert '+0.25%' in page                     # % on capital stays
-    assert report.MASK in masked and '<th>Net P&amp;L</th>' in masked
-    assert '<th>Net P&amp;L</th>' not in hidden
+    assert report.MASK in masked and '<th>Net P&amp;L<br>' in masked
+    assert '<th>Gross P&amp;L<br>' in masked
+    assert '<th>Net P&amp;L<br>' not in hidden
+    assert '<th>Gross P&amp;L<br>' not in hidden
     shown = report.render_client(body, 7, 1_700_200_000)
     assert '+$2.50' in shown and '$1,000.00' in shown          # control
 

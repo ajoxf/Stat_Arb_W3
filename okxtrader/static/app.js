@@ -7165,7 +7165,9 @@
       ? 'MAKER CLOSE: closing orders resting at the touch · '
       : job.phase === 'recovering'
       ? 'MAKER RECOVERY: one leg on, the other resting · '
-      : 'MAKER FILL: both legs resting at the touch · ') +
+      : 'MAKER FILL' + ((job.slices || 1) > 1
+          ? ' slice ' + job.slice + ' of ' + job.slices : '') +
+        ': both legs resting at the touch · ') +
       legs + ' · ' + Math.round(job.age_sec || 0) + 's';
   }
 
