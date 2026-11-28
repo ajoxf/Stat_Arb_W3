@@ -4924,6 +4924,18 @@
     if (fees.a || fees.b) {
       parts.push('maker/taker A ' + rate('a') + ' B ' + rate('b') + ' bp');
     }
+    // The rate B/E and the TP are priced at: each leg's ACTUAL rate
+    // from its own fills, or the rate the fill aims for until there
+    // are enough of them.
+    var basis = row.fee_basis || {};
+    if (basis.a || basis.b) {
+      var actual = (basis.a || {}).source === 'actual' ||
+        (basis.b || {}).source === 'actual';
+      parts.push('TP priced at A ' + fmt((basis.a || {}).bps, 1) + ' B ' +
+        fmt((basis.b || {}).bps, 1) + ' bp ' + (actual
+          ? '(actual, last 30 days)' : '(' + ((basis.a || {}).source ||
+            'maker') + ' - too few fills yet)'));
+    }
     function lev(x) { return x ? fmt(x, 0) + 'x' : DASH; }
     parts.push('leverage A ' + lev(row.leverage_a) + ' B ' +
                lev(row.leverage_b));

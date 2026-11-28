@@ -264,11 +264,14 @@ def test_commission_is_priced_from_the_vip_tier(desk):
     maker at both ends under the W3 fill, taker under crossing."""
     from okxtrader import config as cfg_module
     from okxtrader.coordinator import Coordinator
-    fake = types.SimpleNamespace(legs={'okx': desk.leg}, maker=desk.maker)
+    fake = types.SimpleNamespace(legs={'okx': desk.leg}, maker=desk.maker,
+                                 _actual_fee_bps=lambda pair, leg, c: None)
     desk.maker.config = {'FILL_STYLE': 'maker'}
     md = desk.md()
     Coordinator._okx_fees(fake, desk.pair, md)
     a = desk.pair.fee_settings['COMMISSION_PER_LOT_A']
+    assert desk.pair.fee_basis['a'] == {'bps': 2.0, 'source': 'maker',
+                                        'fills': 0}
     # Lv1 swaps: maker 2 bp, taker 5 bp; BTC-USDT-SWAP is 0.01 BTC a lot.
     assert a == pytest.approx(2 / 1e4 * 0.01 * md['leg_a_mid'])
     merged = desk.pair.exit_settings(cfg_module.DEFAULT_SETTINGS)
@@ -279,6 +282,44 @@ def test_commission_is_priced_from_the_vip_tier(desk):
     Coordinator._okx_fees(fake, desk.pair, md)
     assert desk.pair.fee_settings['COMMISSION_PER_LOT_A'] == pytest.approx(
         5 / 1e4 * 0.01 * md['leg_a_mid'])
+
+
+def test_the_tp_is_priced_on_the_fees_the_ladder_actually_pays(desk):
+    """With enough of its own fills, a leg's B/E and TP are priced at
+    the rate it ACTUALLY paid - held between maker and taker."""
+    from okxtrader.coordinator import Coordinator
+    md = desk.md()
+    desk.maker.config = {'FILL_STYLE': 'maker'}
+    for paid, used in ((4.2, 4.2), (1.0, 2.0), (9.0, 5.0)):
+        fake = types.SimpleNamespace(
+            legs={'okx': desk.leg}, maker=desk.maker,
+            _actual_fee_bps=lambda pair, leg, c, b=paid: {'bps': b,
+                                                         'fills': 40})
+        Coordinator._okx_fees(fake, desk.pair, md)
+        assert desk.pair.fee_settings['COMMISSION_PER_LOT_A'] == \
+            pytest.approx(used / 1e4 * 0.01 * md['leg_a_mid'])
+        assert desk.pair.fee_basis['a']['source'] == 'actual'
+
+
+def test_the_actual_fee_rate_is_read_from_the_ladders_own_fills():
+    from okxtrader.coordinator import Coordinator
+    now = 2_000_000_000.0
+    # Leg A: two fills of 10 lots at 60,000 (0.01 BTC a lot): $12,000
+    # traded, $5.04 paid: 4.2 bp. Leg B's fills are not counted for A.
+    rows = ([{'leg': 'A', 'volume': 10, 'price': 60000.0, 'fee': -2.52}] * 2
+            + [{'leg': 'B', 'volume': 50, 'price': 2000.0, 'fee': -9.0}])
+    store = types.SimpleNamespace(fills=lambda **k: rows)
+    fake = types.SimpleNamespace(store=store, clock=lambda: now,
+                                 ACTUAL_FEE_DAYS=30, ACTUAL_FEE_MIN_FILLS=2,
+                                 ACTUAL_FEE_EVERY_SEC=300.0)
+    pair = types.SimpleNamespace(key='p')
+    got = Coordinator._actual_fee_bps(fake, pair, 'a', 0.01)
+    assert got['fills'] == 2 and got['bps'] == pytest.approx(4.2)
+    # Too few fills: not believed.
+    fake2 = types.SimpleNamespace(store=store, clock=lambda: now,
+                                  ACTUAL_FEE_DAYS=30, ACTUAL_FEE_MIN_FILLS=8,
+                                  ACTUAL_FEE_EVERY_SEC=300.0)
+    assert Coordinator._actual_fee_bps(fake2, pair, 'a', 0.01) is None
 
 
 # -- maker CLOSES -------------------------------------------------------------

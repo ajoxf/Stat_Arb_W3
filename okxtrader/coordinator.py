@@ -1357,12 +1357,49 @@ class Coordinator:
                                  naked=result.naked)
             return {'ok': False, 'reason': result.reason or 'not filled'}
 
+    #: The window the ACTUAL fee rate is measured over, how many fills
+    #: it needs before it is believed, and how often it is read again.
+    ACTUAL_FEE_DAYS = 30
+    ACTUAL_FEE_MIN_FILLS = 8
+    ACTUAL_FEE_EVERY_SEC = 300.0
+
+    def _actual_fee_bps(self, pair, leg, contract):
+        """What this ladder's leg has really paid OKX, per side, in bp of
+        the notional traded: every fill of ours on it over the last
+        ACTUAL_FEE_DAYS - fees / (contracts x contract size x price).
+        {'bps', 'fills'}, or None with too few fills to say."""
+        cache = self.__dict__.setdefault('_fee_actual', {})
+        key = (pair.key, leg)
+        now = self.clock()
+        held = cache.get(key)
+        if held is not None and now - held[0] < self.ACTUAL_FEE_EVERY_SEC:
+            return held[1]
+        answer = None
+        if self.store is not None and contract:
+            try:
+                rows = self.store.fills(
+                    pair_key=pair.key, ours_only=True,
+                    since_ms=int((now - self.ACTUAL_FEE_DAYS * 86400.0)
+                                 * 1000), limit=20000)
+            except Exception as e:
+                logging.debug('actual fees of %s: %s', pair.key, e)
+                rows = []
+            mine = [r for r in rows if str(r.get('leg') or '').upper()
+                    == leg.upper() and r.get('price') and r.get('volume')]
+            notional = sum(float(r['volume']) * float(contract)
+                           * float(r['price']) for r in mine)
+            paid = sum(-float(r.get('fee') or 0.0) for r in mine)
+            if len(mine) >= self.ACTUAL_FEE_MIN_FILLS and notional > 0:
+                answer = {'bps': paid / notional * 1e4, 'fills': len(mine)}
+        cache[key] = (now, answer)
+        return answer
+
     def _okx_fees(self, pair, md):
         """Price this ladder's commission from the OKX account's own VIP
         fees: per lot per side = rate x contract x price, `mark_fees`
         counting both ends. Maker under the W3 fill (entries and profit
         closes both rest), taker under Mirror's crossing."""
-        fees = {}
+        fees, basis = {}, {}
         for leg in ('a', 'b'):
             runner = self.legs.get(pair.account_a if leg == 'a'
                                    else pair.account_b)
@@ -1381,16 +1418,28 @@ class Coordinator:
             if not rates or not mid or not contract:
                 return
             maker_bps, taker_bps = rates
-            # Both ends at the rate the desk's own fill pays: under the
-            # W3 fill the open AND the profit-taking close rest as maker
-            # (a stop crosses, but B/E and TP price the exit that WORKS).
-            side_bps = maker_bps if self.maker.enabled(pair) else taker_bps
+            # Both ends at the rate this ladder ACTUALLY pays: its own
+            # OKX fills over the last 30 days - a maker fill that ran out
+            # of time crosses at taker, and a TP priced on all-maker
+            # banked a loss on a take-profit (28 Nov: +$101.84 gross,
+            # -$112.45 fees). Held between the account's maker and taker
+            # rates. Until there are enough fills: the rate the desk's
+            # fill aims for - maker under the W3 fill, taker crossing.
+            actual = self._actual_fee_bps(pair, leg, contract)
+            aimed = maker_bps if self.maker.enabled(pair) else taker_bps
+            side_bps = aimed if actual is None else min(
+                max(actual['bps'], maker_bps), taker_bps)
+            basis[leg] = {'bps': round(side_bps, 3),
+                          'source': 'actual' if actual else
+                          ('maker' if aimed == maker_bps else 'taker'),
+                          'fills': (actual or {}).get('fills', 0)}
             per_lot = side_bps / 1e4 * contract * mid
             fees[f'COMMISSION_PER_LOT_{leg.upper()}'] = per_lot
             fees[f'FEE_BPS_{leg.upper()}'] = {'maker': maker_bps,
                                               'taker': taker_bps}
         pair.fee_settings = {k: v for k, v in fees.items()
                              if k.startswith('COMMISSION')}
+        pair.fee_basis = basis
         pair.fee_bps = {k[-1].lower(): v for k, v in fees.items()
                         if k.startswith('FEE_BPS')}
 
@@ -4449,6 +4498,10 @@ class Coordinator:
                 # and the commission per lot they price.
                 'fee_bps': getattr(pair, 'fee_bps', None),
                 'fee_commission': getattr(pair, 'fee_settings', None),
+                # The rate each leg's B/E and TP are priced at, and
+                # where it came from: 'actual' (its own fills) or the
+                # rate the fill aims for.
+                'fee_basis': getattr(pair, 'fee_basis', None),
                 # The VIP tier those fees are, and the leverage OKX has
                 # set on each leg - for the ladder's footer.
                 'fee_level': (self.account_info(pair.account_a)
